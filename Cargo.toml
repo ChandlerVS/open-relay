@@ -35,14 +35,20 @@ sea-orm = { version = "=2.0.0-rc.38", default-features = false, features = [
 # `utoipa` itself is framework-agnostic and lives in core for DTO derives.
 # `utoipa-axum` (router glue) + `utoipa-swagger-ui` w/ `axum` feature stay
 # server-only — they're the Axum-coupled pieces of the stack.
-utoipa = { version = "5" }
+utoipa = { version = "5", features = ["chrono"] }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Auth
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
-oauth2 = "5"
+oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
 argon2 = "0.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+cookie = "0.18"
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.9"
 
 # Serde / errors
 serde = { version = "1", features = ["derive"] }

@@ -100,6 +100,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [fetchSession],
   );
 
+  const signInWithToken = useCallback(
+    async (nextToken: string) => {
+      setToken(nextToken);
+      setCurrentToken(nextToken);
+      setTokenState(nextToken);
+      setStatus("loading");
+      await fetchSession();
+    },
+    [fetchSession],
+  );
+
   const signOut = useCallback(() => {
     clearToken();
     setCurrentToken(null);
@@ -111,8 +122,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, token, status, permissions, roles, signIn, signOut }),
-    [user, token, status, permissions, roles, signIn, signOut],
+    () => ({
+      user,
+      token,
+      status,
+      permissions,
+      roles,
+      signIn,
+      signInWithToken,
+      signOut,
+    }),
+    [user, token, status, permissions, roles, signIn, signInWithToken, signOut],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -28,6 +28,18 @@ pub enum CoreError {
 
     #[error("database error")]
     Db(#[from] sea_orm::DbErr),
+
+    #[error("oauth discovery failed: {0}")]
+    OAuthDiscoveryFailed(String),
+
+    #[error("oauth exchange failed: {0}")]
+    OAuthExchangeFailed(String),
+
+    #[error("oauth state mismatch")]
+    OAuthStateMismatch,
+
+    #[error("oauth not configured")]
+    OAuthNotConfigured,
 }
 
 pub type CoreResult<T> = Result<T, CoreError>;

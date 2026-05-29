@@ -15,7 +15,9 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(unique)]
     pub email: String,
-    pub password_hash: String,
+    /// Argon2 PHC hash of the user's local password.
+    /// `None` for users who can only sign in via OAuth (no local password set).
+    pub password_hash: Option<String>,
     pub display_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

@@ -25,7 +25,10 @@ pub async fn login(
     let user = service::find_by_email(&state.db, req.email.trim())
         .await?
         .ok_or(AppError::Unauthorized)?;
-    if !service::verify_password(&user.password_hash, &req.password) {
+    let Some(hash) = user.password_hash.as_deref() else {
+        return Err(AppError::Unauthorized);
+    };
+    if !service::verify_password(hash, &req.password) {
         return Err(AppError::Unauthorized);
     }
     let token = auth::issue_for_user(&state.auth_keys, &user)?;

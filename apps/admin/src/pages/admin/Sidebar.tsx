@@ -1,5 +1,13 @@
 import { NavLink } from "react-router-dom";
-import { FileText, Inbox, LayoutDashboard, Plug, Shield, Users } from "lucide-react";
+import {
+  FileText,
+  Inbox,
+  KeyRound,
+  LayoutDashboard,
+  Plug,
+  Shield,
+  Users,
+} from "lucide-react";
 import { cn } from "@open-relay/ui";
 import type { Permission } from "../../lib/auth/AuthContext";
 import { usePermissions } from "../../lib/auth/usePermissions";
@@ -20,6 +28,12 @@ const ITEMS: NavItem[] = [
   { to: "/submissions", label: "Submissions", icon: Inbox, disabled: true },
   { to: "/users", label: "Users", icon: Users, perm: "users:read" },
   { to: "/roles", label: "Roles", icon: Shield, perm: "roles:read" },
+  {
+    to: "/settings/auth",
+    label: "Authentication",
+    icon: KeyRound,
+    perm: "auth_config:write",
+  },
 ];
 
 export function Sidebar() {

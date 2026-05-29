@@ -71,6 +71,344 @@
         ]
       }
     },
+    "/auth/oauth/admin-config": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "admin_get_config",
+        "responses": {
+          "200": {
+            "description": "Active OAuth config (no client_secret)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthConfigDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "No active config"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "admin_upsert_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertOAuthConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OAuth config saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthConfigDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "admin_delete_config",
+        "responses": {
+          "204": {
+            "description": "OAuth config removed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "No active config"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/oauth/callback": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "callback",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error_description",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to admin SPA with token (sign-in) or status (link)"
+          },
+          "400": {
+            "description": "Missing/invalid state or code"
+          },
+          "404": {
+            "description": "OAuth not configured"
+          },
+          "502": {
+            "description": "Token exchange failed"
+          }
+        }
+      }
+    },
+    "/auth/oauth/config": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "public_config",
+        "responses": {
+          "200": {
+            "description": "Public OAuth status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthConfigPublicDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/oauth/discover": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "admin_discover",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Discovery doc parsed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryPrefill"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "502": {
+            "description": "Discovery endpoint failed"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/oauth/identities": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "list_my_identities",
+        "responses": {
+          "200": {
+            "description": "Current user's linked identities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExternalIdentityDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/oauth/identities/{id}": {
+      "delete": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "delete_my_identity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Identity id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Identity unlinked"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Would lock the user out"
+          },
+          "404": {
+            "description": "Identity not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/oauth/link/start": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "link_start",
+        "responses": {
+          "200": {
+            "description": "Authorize URL + state cookie set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "OAuth not configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/oauth/start": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "operationId": "start",
+        "responses": {
+          "302": {
+            "description": "Redirect to provider authorize endpoint"
+          },
+          "404": {
+            "description": "OAuth not configured"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -775,6 +1113,89 @@
           }
         }
       },
+      "DiscoveryPrefill": {
+        "type": "object",
+        "required": [
+          "issuer",
+          "authorize_url",
+          "token_url"
+        ],
+        "properties": {
+          "authorize_url": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "jwks_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes_supported": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "token_url": {
+            "type": "string"
+          },
+          "userinfo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DiscoveryRequest": {
+        "type": "object",
+        "required": [
+          "discovery_url"
+        ],
+        "properties": {
+          "discovery_url": {
+            "type": "string"
+          }
+        }
+      },
+      "ExternalIdentityDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "provider_config_id",
+          "provider_display_name",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email_at_link": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "provider_config_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "provider_display_name": {
+            "type": "string"
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -798,6 +1219,17 @@
           },
           "user": {
             "$ref": "#/components/schemas/UserDto"
+          }
+        }
+      },
+      "LinkStartResponse": {
+        "type": "object",
+        "required": [
+          "authorize_url"
+        ],
+        "properties": {
+          "authorize_url": {
+            "type": "string"
           }
         }
       },
@@ -909,6 +1341,101 @@
           }
         }
       },
+      "OAuthConfigDto": {
+        "type": "object",
+        "description": "Admin-facing config — same shape minus `client_secret`. The admin UI\nshows `[unchanged]` for the secret field and only sends a value when the\nadmin types one.",
+        "required": [
+          "id",
+          "display_name",
+          "client_id",
+          "authorize_url",
+          "token_url",
+          "scopes",
+          "email_claim",
+          "subject_claim",
+          "has_client_secret"
+        ],
+        "properties": {
+          "authorize_url": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "default_role_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "discovery_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email_claim": {
+            "type": "string"
+          },
+          "has_client_secret": {
+            "type": "boolean",
+            "description": "True if a non-empty client_secret is on record."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jwks_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "type": "string"
+          },
+          "subject_claim": {
+            "type": "string"
+          },
+          "token_url": {
+            "type": "string"
+          },
+          "userinfo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OAuthConfigPublicDto": {
+        "type": "object",
+        "description": "Public-facing config: rendered on the unauthenticated `/login` page so the\nadmin can choose to show a \"Sign in with X\" button without giving away\nclient secrets or endpoints.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "Permission": {
         "type": "string",
         "enum": [
@@ -918,7 +1445,8 @@
           "roles:read",
           "roles:write",
           "roles:delete",
-          "roles:assign"
+          "roles:assign",
+          "auth_config:write"
         ]
       },
       "PermissionInfo": {
@@ -1066,6 +1594,83 @@
           }
         }
       },
+      "UpsertOAuthConfig": {
+        "type": "object",
+        "description": "Upsert input. `client_secret: None` means \"keep the existing value\";\n`Some(non_empty)` replaces. The service rejects creating a new config\nwithout a client_secret.",
+        "required": [
+          "display_name",
+          "client_id",
+          "authorize_url",
+          "token_url",
+          "scopes"
+        ],
+        "properties": {
+          "authorize_url": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default_role_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "discovery_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email_claim": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jwks_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "type": "string"
+          },
+          "subject_claim": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token_url": {
+            "type": "string"
+          },
+          "userinfo_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UserDto": {
         "type": "object",
         "description": "Outbound representation of a user — what callers see in API responses.\n\n`roles` is populated by `service::populate_roles` (or by the RBAC service\ndirectly for single-user lookups). `From<user::Model>` produces an empty\nroles vec; the responsibility to enrich falls to the caller so this type\nstays cheap to construct in places (login, setup) where the frontend will\nrefetch its session shape via `/auth/me` anyway.",
@@ -1154,6 +1759,10 @@
     {
       "name": "auth",
       "description": "Local + SSO authentication."
+    },
+    {
+      "name": "oauth",
+      "description": "Admin-configured OAuth provider + account linking."
     },
     {
       "name": "setup",

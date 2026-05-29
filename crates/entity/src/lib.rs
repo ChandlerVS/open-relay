@@ -26,6 +26,8 @@
 //! `entity::*` glob — no central registration required.
 
 // Resource modules — add as they are implemented:
+pub mod external_identity;
+pub mod oauth_provider_config;
 pub mod role;
 pub mod role_permission;
 pub mod user;

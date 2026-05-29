@@ -13,7 +13,9 @@ use sea_orm::{
 };
 
 use super::{ChangePassword, ListQuery, NewUser, UpdateUser, UserDto, UserList, UserSelectOption};
+use crate::auth::provider::VerifiedIdentity;
 use crate::error::{CoreError, CoreResult};
+use crate::external_identity::service as external_identity_service;
 use crate::rbac::service as rbac_service;
 
 const MIN_PASSWORD_LEN: usize = 12;
@@ -122,7 +124,7 @@ pub async fn create_user<C: ConnectionTrait>(
         .filter(|n| !n.is_empty());
     let model = entity::user::ActiveModel {
         email: ActiveValue::Set(email),
-        password_hash: ActiveValue::Set(password_hash),
+        password_hash: ActiveValue::Set(Some(password_hash)),
         display_name: ActiveValue::Set(display_name),
         ..Default::default()
     };
@@ -250,7 +252,7 @@ pub async fn change_password<C: ConnectionTrait>(
         .ok_or_else(|| CoreError::NotFound("user not found".into()))?;
     let hash = hash_password(&input.password)?;
     let mut active: entity::user::ActiveModel = existing.into();
-    active.password_hash = ActiveValue::Set(hash);
+    active.password_hash = ActiveValue::Set(Some(hash));
     active.update(conn).await?;
     Ok(())
 }
@@ -290,6 +292,7 @@ pub async fn delete_user<C: ConnectionTrait>(
         .filter(entity::user_role::Column::UserId.eq(target_id))
         .exec(conn)
         .await?;
+    external_identity_service::delete_for_user(conn, target_id).await?;
     let res = entity::user::Entity::delete_by_id(target_id)
         .exec(conn)
         .await?;
@@ -297,6 +300,80 @@ pub async fn delete_user<C: ConnectionTrait>(
         return Err(CoreError::NotFound("user not found".into()));
     }
     Ok(())
+}
+
+/// Resolve an OAuth identity to a local user, creating one if necessary.
+///
+/// Branches:
+/// 1. An existing `external_identity` row for `(provider_config_id, subject)`
+///    → load and return that user.
+/// 2. No identity row, but `verified.email` matches an existing user → link
+///    the identity to that user (first-time sign-in for a known account).
+/// 3. Otherwise → insert a new user with `password_hash = None`, link the
+///    identity, and assign `default_role_id` if one was configured.
+///
+/// MUST be called inside a transaction.
+pub async fn find_or_create_via_oauth<C: ConnectionTrait>(
+    conn: &C,
+    provider_config_id: i32,
+    verified: &VerifiedIdentity,
+    default_role_id: Option<i32>,
+    superadmin_role_id: i32,
+) -> CoreResult<entity::user::Model> {
+    if let Some(existing) =
+        external_identity_service::find_by_provider_subject(conn, provider_config_id, &verified.subject)
+            .await?
+    {
+        return find_by_id(conn, existing.user_id)
+            .await?
+            .ok_or_else(|| CoreError::Internal(anyhow!("orphaned external_identity row")));
+    }
+
+    let email_normalized = verified
+        .email
+        .as_deref()
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty());
+
+    if let Some(email) = &email_normalized {
+        if let Some(user) = find_by_email(conn, email).await? {
+            external_identity_service::link_to_user(
+                conn,
+                user.id,
+                provider_config_id,
+                &verified.subject,
+                Some(email),
+            )
+            .await?;
+            return Ok(user);
+        }
+    }
+
+    let email = email_normalized.clone().ok_or_else(|| {
+        CoreError::BadRequest("OAuth provider did not return an email; cannot auto-create user".into())
+    })?;
+    if find_by_email(conn, &email).await?.is_some() {
+        return Err(CoreError::Conflict("email already in use".into()));
+    }
+    let new_user = entity::user::ActiveModel {
+        email: ActiveValue::Set(email.clone()),
+        password_hash: ActiveValue::Set(None),
+        display_name: ActiveValue::Set(None),
+        ..Default::default()
+    };
+    let created = new_user.insert(conn).await?;
+    external_identity_service::link_to_user(
+        conn,
+        created.id,
+        provider_config_id,
+        &verified.subject,
+        Some(&email),
+    )
+    .await?;
+    if let Some(role_id) = default_role_id {
+        rbac_service::assign_roles_to_user(conn, created.id, &[role_id], superadmin_role_id).await?;
+    }
+    Ok(created)
 }
 
 #[cfg(test)]

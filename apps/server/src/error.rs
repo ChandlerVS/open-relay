@@ -30,6 +30,9 @@ pub enum AppError {
 
     #[error("database error")]
     Db(#[from] sea_orm::DbErr),
+
+    #[error("bad gateway: {0}")]
+    BadGateway(String),
 }
 
 impl From<CoreError> for AppError {
@@ -42,6 +45,14 @@ impl From<CoreError> for AppError {
             CoreError::Conflict(m) => AppError::Conflict(m),
             CoreError::Internal(e) => AppError::Internal(e),
             CoreError::Db(e) => AppError::Db(e),
+            CoreError::OAuthDiscoveryFailed(m) => AppError::BadGateway(m),
+            CoreError::OAuthExchangeFailed(m) => AppError::BadGateway(m),
+            CoreError::OAuthStateMismatch => {
+                AppError::BadRequest("oauth state mismatch".into())
+            }
+            CoreError::OAuthNotConfigured => {
+                AppError::NotFound("oauth not configured".into())
+            }
         }
     }
 }
@@ -63,6 +74,7 @@ impl IntoResponse for AppError {
                 tracing::error!(?err, "database error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "database error".into())
             }
+            AppError::BadGateway(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
         };
         (status, Json(json!({ "error": message }))).into_response()
     }

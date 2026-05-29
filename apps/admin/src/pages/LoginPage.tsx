@@ -21,6 +21,7 @@ import {
 import { api } from "../lib/api/client";
 import { extractApiErrorMessage } from "../lib/api/errors";
 import { useAuth } from "../lib/auth/useAuth";
+import { useOAuthPublicConfig } from "../lib/oauth/useOAuth";
 
 const schema = z.object({
   email: z.string().email("Enter a valid email address."),
@@ -37,6 +38,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { signIn } = useAuth();
+  const oauth = useOAuthPublicConfig();
   const [formError, setFormError] = useState<string | null>(null);
 
   const {
@@ -97,10 +99,32 @@ export function LoginPage() {
               <Input type="password" autoComplete="current-password" {...register("password")} />
             </FormField>
           </CardContent>
-          <CardFooter>
+          <CardFooter className="flex flex-col gap-3">
             <Button type="submit" disabled={mutation.isPending} className="w-full">
               {mutation.isPending ? "Signing in…" : "Sign in"}
             </Button>
+            {oauth.data?.enabled && oauth.data.display_name && (
+              <>
+                <div className="relative w-full">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase tracking-wider">
+                    <span className="bg-card px-2 text-muted-foreground">or</span>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    window.location.href = `${api.baseUrl}/auth/oauth/start`;
+                  }}
+                >
+                  Sign in with {oauth.data.display_name}
+                </Button>
+              </>
+            )}
           </CardFooter>
         </form>
       </Card>

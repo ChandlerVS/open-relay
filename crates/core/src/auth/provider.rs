@@ -25,11 +25,14 @@ pub trait Provider: Send + Sync + 'static {
     -> Result<String, ProviderError>;
 
     /// Exchange the authorization code (returned to our callback) for a
-    /// verified email/subject this Provider asserts.
+    /// verified email/subject this Provider asserts. `pkce_verifier` carries
+    /// the PKCE code verifier when the authorize step used PKCE — which all
+    /// modern OIDC flows do.
     async fn exchange(
         &self,
         code: &str,
         redirect_uri: &str,
+        pkce_verifier: Option<&str>,
     ) -> Result<VerifiedIdentity, ProviderError>;
 }
 

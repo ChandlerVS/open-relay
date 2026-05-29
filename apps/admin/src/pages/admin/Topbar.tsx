@@ -41,6 +41,10 @@ export function Topbar() {
               <div className="text-foreground font-normal truncate normal-case">{user?.email}</div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => navigate("/profile")}>
+              <UserIcon className="h-4 w-4" />
+              <span>Profile</span>
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={onSignOut}>
               <LogOut className="h-4 w-4" />
               <span>Sign out</span>

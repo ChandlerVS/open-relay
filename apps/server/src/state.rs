@@ -19,6 +19,9 @@ pub struct AppState {
     /// pick up the wrong role if a non-superadmin role happens to be named
     /// "Superadmin" in the DB.
     pub superadmin_role_id: i32,
+    pub public_api_url: String,
+    pub admin_url: String,
+    pub cookie_secure: bool,
 }
 
 impl AppState {
@@ -36,6 +39,9 @@ impl AppState {
             providers,
             backends,
             superadmin_role_id,
+            public_api_url: config.public_api_url.trim_end_matches('/').to_string(),
+            admin_url: config.admin_url.trim_end_matches('/').to_string(),
+            cookie_secure: config.cookie_secure,
         })
     }
 }

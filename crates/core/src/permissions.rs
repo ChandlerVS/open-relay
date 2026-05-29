@@ -33,6 +33,8 @@ pub enum Permission {
     RolesDelete,
     #[serde(rename = "roles:assign")]
     RolesAssign,
+    #[serde(rename = "auth_config:write")]
+    AuthConfigWrite,
 }
 
 impl Permission {
@@ -49,6 +51,7 @@ impl Permission {
             Self::RolesWrite => "roles:write",
             Self::RolesDelete => "roles:delete",
             Self::RolesAssign => "roles:assign",
+            Self::AuthConfigWrite => "auth_config:write",
         }
     }
 
@@ -61,6 +64,7 @@ impl Permission {
             "roles:write" => Some(Self::RolesWrite),
             "roles:delete" => Some(Self::RolesDelete),
             "roles:assign" => Some(Self::RolesAssign),
+            "auth_config:write" => Some(Self::AuthConfigWrite),
             _ => None,
         }
     }

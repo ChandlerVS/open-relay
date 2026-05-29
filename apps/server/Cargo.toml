@@ -43,3 +43,4 @@ dotenvy = { workspace = true }
 
 # Misc
 async-trait = { workspace = true }
+cookie = { workspace = true }

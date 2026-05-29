@@ -37,6 +37,13 @@ export function RootGate() {
   // cached /setup/status response still says otherwise (it's polled lazily).
   const initialized = isAuth || setup.data.initialized;
 
+  // The OAuth callback page handles its own auth handoff (it reads a token
+  // out of the URL fragment, calls signInWithToken, then redirects). It must
+  // load even when the user is anonymous.
+  if (path === "/oauth/callback") {
+    return <Outlet />;
+  }
+
   if (isAuth && (path === "/login" || path === "/setup")) {
     return <Navigate to="/" replace />;
   }

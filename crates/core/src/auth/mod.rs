@@ -20,6 +20,9 @@ pub const JWT_TTL_SECONDS: i64 = 24 * 60 * 60;
 pub struct AuthKeys {
     pub encoding: EncodingKey,
     pub decoding: DecodingKey,
+    /// Raw secret bytes, kept so HMAC-based helpers (e.g. the OAuth state
+    /// cookie signer) can derive sub-keys without taking on a second secret.
+    secret: Vec<u8>,
 }
 
 impl AuthKeys {
@@ -27,7 +30,12 @@ impl AuthKeys {
         Self {
             encoding: EncodingKey::from_secret(secret),
             decoding: DecodingKey::from_secret(secret),
+            secret: secret.to_vec(),
         }
+    }
+
+    pub fn hmac_secret(&self) -> &[u8] {
+        &self.secret
     }
 }
 
