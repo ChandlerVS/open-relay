@@ -80,9 +80,9 @@ The TS client is regenerated from this spec; after adding/changing routes, resta
 
 ### Auth is local JWT + pluggable Provider trait
 
-- `apps/server/src/auth/local.rs` — `POST /auth/login`, currently returns `NotImplemented` because the `user` entity doesn't exist.
-- `apps/server/src/auth/provider.rs` — `Provider` trait + `ProviderRegistry` for OAuth/SSO. The `oauth2` crate is in deps; no concrete providers ship in the skeleton.
-- `AuthUser` Axum extractor verifies a `Bearer <jwt>` header against `AppState::auth_keys`.
+- `crates/core/src/auth/` — `AuthKeys`, `Claims`, JWT issue/verify, and the `Provider` trait + `ProviderRegistry` for OAuth/SSO. Framework-agnostic. The `oauth2` crate is in workspace deps; no concrete providers ship in the skeleton.
+- `apps/server/src/auth/local.rs` — `POST /auth/login`, calls into `open_relay_core::users::service` + `open_relay_core::auth::issue_for_user`.
+- `apps/server/src/auth/mod.rs` — Axum-only bits: `AuthUser` extractor that calls `core::auth::verify_jwt` against `AppState::auth_keys`.
 
 ### Embed SDK isolates via Shadow DOM
 
@@ -100,5 +100,6 @@ All TS packages extend `tsconfig.base.json` (strict, `noUncheckedIndexedAccess`,
 
 - Editor config: 2-space indent everywhere except Rust (4) and Makefiles (tabs); LF line endings; final newline required.
 - Cargo deps live in workspace `[workspace.dependencies]` — crates reference them with `{ workspace = true }`.
-- Server errors funnel through `AppError` in `apps/server/src/error.rs`. New error variants get an `IntoResponse` mapping there. `AppResult<T>` is the standard handler return type.
-- Anything HTTP-shaped belongs in `apps/server`. Anything reusable/domain-shaped belongs in `crates/core`.
+- Core services return `CoreError` (`crates/core/src/error.rs`) — framework-agnostic, no HTTP. Server errors funnel through `AppError` (`apps/server/src/error.rs`) which `From<CoreError>` lifts into HTTP responses via `IntoResponse`. `AppResult<T>` is the standard handler return type; new HTTP-only variants get an `IntoResponse` mapping in `AppError`.
+- Wire-contract DTOs (`NewUser`, `UserDto`, `LoginRequest`/`LoginResponse`, `InitializeResponse`, `SetupStatus`, …) live in `crates/core` alongside the services that produce/consume them. `serde` and `utoipa::ToSchema` are pure metadata — they don't pull a framework in. Handlers just `Json<core::…::Foo>` them.
+- Anything Axum-coupled (extractors, `OpenApiRouter` wiring, `IntoResponse`, the `utoipa-axum` / `utoipa-swagger-ui` glue) belongs in `apps/server`. Anything reusable/domain-shaped — persistence, validation, JWT issuance, the `Backend` and `Provider` traits, request/response shapes — belongs in `crates/core`. A non-HTTP caller (CLI seed command, worker) should be able to call core directly without touching the server crate.

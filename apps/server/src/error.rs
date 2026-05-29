@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use open_relay_core::error::CoreError;
 use serde_json::json;
 use thiserror::Error;
 
@@ -23,6 +24,18 @@ pub enum AppError {
 
     #[error("database error")]
     Db(#[from] sea_orm::DbErr),
+}
+
+impl From<CoreError> for AppError {
+    fn from(err: CoreError) -> Self {
+        match err {
+            CoreError::Unauthorized => AppError::Unauthorized,
+            CoreError::BadRequest(m) => AppError::BadRequest(m),
+            CoreError::Conflict(m) => AppError::Conflict(m),
+            CoreError::Internal(e) => AppError::Internal(e),
+            CoreError::Db(e) => AppError::Db(e),
+        }
+    }
 }
 
 impl IntoResponse for AppError {

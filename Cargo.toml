@@ -32,7 +32,10 @@ sea-orm = { version = "=2.0.0-rc.38", default-features = false, features = [
 ] }
 
 # OpenAPI
-utoipa = { version = "5", features = ["axum_extras"] }
+# `utoipa` itself is framework-agnostic and lives in core for DTO derives.
+# `utoipa-axum` (router glue) + `utoipa-swagger-ui` w/ `axum` feature stay
+# server-only — they're the Axum-coupled pieces of the stack.
+utoipa = { version = "5" }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 

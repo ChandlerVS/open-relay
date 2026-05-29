@@ -1,27 +1,12 @@
 use axum::Json;
 use axum::extract::State;
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use open_relay_core::auth::{self, LoginRequest, LoginResponse};
+use open_relay_core::users::service;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::auth;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-use crate::users::dto::UserDto;
-use crate::users::service;
-
-#[derive(Deserialize, ToSchema)]
-pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct LoginResponse {
-    pub token: String,
-    pub user: UserDto,
-}
 
 #[utoipa::path(
     post,

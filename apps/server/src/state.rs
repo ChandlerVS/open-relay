@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use open_relay_core::auth::AuthKeys;
+use open_relay_core::auth::provider::ProviderRegistry;
 use open_relay_core::backend::registry::BackendRegistry;
 use sea_orm::DatabaseConnection;
 
-use crate::auth::AuthKeys;
-use crate::auth::provider::ProviderRegistry;
 use crate::config::Config;
 
 #[derive(Clone)]

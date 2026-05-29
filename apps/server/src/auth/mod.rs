@@ -1,59 +1,19 @@
-//! Authentication: local JWT issuance + a `Provider` trait for SSO/OAuth.
+//! Axum-side authentication wiring.
 //!
-//! The local flow is wired through `local::router()`; OAuth providers register
-//! against [`provider::ProviderRegistry`] at startup. No concrete providers
-//! ship in the skeleton — the trait is the extension point.
+//! Pure auth primitives — `AuthKeys`, `Claims`, JWT issuance, the `Provider`
+//! trait — live in `open_relay_core::auth`. This module adds the bits that
+//! only make sense in an HTTP server: the `AuthUser` extractor and the auth
+//! sub-router.
 
 pub mod local;
-pub mod provider;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use serde::{Deserialize, Serialize};
+use open_relay_core::auth::{Claims, verify_jwt};
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::error::AppError;
 use crate::state::AppState;
-
-/// JWT lifetime, in seconds. 24 hours.
-pub const JWT_TTL_SECONDS: i64 = 24 * 60 * 60;
-
-#[derive(Debug, Clone)]
-pub struct AuthKeys {
-    pub encoding: EncodingKey,
-    pub decoding: DecodingKey,
-}
-
-impl AuthKeys {
-    pub fn from_secret(secret: &[u8]) -> Self {
-        Self {
-            encoding: EncodingKey::from_secret(secret),
-            decoding: DecodingKey::from_secret(secret),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Claims {
-    pub sub: String,
-    pub exp: usize,
-}
-
-pub fn issue_jwt(keys: &AuthKeys, claims: &Claims) -> Result<String, AppError> {
-    encode(&Header::default(), claims, &keys.encoding)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))
-}
-
-/// Issue a JWT for a user with the standard TTL.
-pub fn issue_for_user(keys: &AuthKeys, user: &entity::user::Model) -> Result<String, AppError> {
-    let exp = (chrono::Utc::now().timestamp() + JWT_TTL_SECONDS) as usize;
-    let claims = Claims {
-        sub: user.id.to_string(),
-        exp,
-    };
-    issue_jwt(keys, &claims)
-}
 
 /// Axum extractor — present a `Bearer <jwt>` header signed by our key.
 pub struct AuthUser(pub Claims);
@@ -73,9 +33,8 @@ impl FromRequestParts<AppState> for AuthUser {
         let token = header
             .strip_prefix("Bearer ")
             .ok_or(AppError::Unauthorized)?;
-        let data = decode::<Claims>(token, &state.auth_keys.decoding, &Validation::default())
-            .map_err(|_| AppError::Unauthorized)?;
-        Ok(AuthUser(data.claims))
+        let claims = verify_jwt(&state.auth_keys, token).map_err(AppError::from)?;
+        Ok(AuthUser(claims))
     }
 }
 

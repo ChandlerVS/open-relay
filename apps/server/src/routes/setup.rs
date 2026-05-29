@@ -9,30 +9,17 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use sea_orm::{
-    EntityTrait, PaginatorTrait, QuerySelect, TransactionTrait,
-};
-use serde::Serialize;
-use utoipa::ToSchema;
+use open_relay_core::auth;
+use open_relay_core::error::CoreError;
+use open_relay_core::setup::{InitializeResponse, SetupStatus};
+use open_relay_core::users::NewUser;
+use open_relay_core::users::service;
+use sea_orm::{EntityTrait, PaginatorTrait, QuerySelect, TransactionTrait};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::auth;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-use crate::users::dto::{NewUser, UserDto};
-use crate::users::service;
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct InitializeResponse {
-    pub token: String,
-    pub user: UserDto,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct SetupStatus {
-    pub initialized: bool,
-}
 
 #[utoipa::path(
     post,
@@ -51,14 +38,14 @@ pub async fn initialize(
 ) -> AppResult<impl IntoResponse> {
     let user = state
         .db
-        .transaction::<_, entity::user::Model, AppError>(|tx| {
+        .transaction::<_, entity::user::Model, CoreError>(|tx| {
             Box::pin(async move {
                 let existing = entity::user::Entity::find()
                     .lock_exclusive()
                     .one(tx)
                     .await?;
                 if existing.is_some() {
-                    return Err(AppError::Conflict("already initialized".into()));
+                    return Err(CoreError::Conflict("already initialized".into()));
                 }
                 service::create_user(tx, input).await
             })
@@ -99,10 +86,10 @@ pub fn router() -> OpenApiRouter<AppState> {
 
 /// SeaORM wraps user transaction errors in `TransactionError::Transaction(e)`
 /// and connection errors in `TransactionError::Connection(db_err)`. Collapse
-/// back to `AppError`.
-fn unwrap_tx_error(err: sea_orm::TransactionError<AppError>) -> AppError {
+/// to `AppError` via the core → app mapping.
+fn unwrap_tx_error(err: sea_orm::TransactionError<CoreError>) -> AppError {
     match err {
         sea_orm::TransactionError::Connection(db) => AppError::Db(db),
-        sea_orm::TransactionError::Transaction(app) => app,
+        sea_orm::TransactionError::Transaction(core) => core.into(),
     }
 }

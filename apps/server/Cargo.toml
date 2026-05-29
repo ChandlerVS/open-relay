@@ -27,11 +27,6 @@ utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 
-# Auth
-jsonwebtoken = { workspace = true }
-oauth2 = { workspace = true }
-argon2 = { workspace = true }
-
 # Serde / errors
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -48,5 +43,3 @@ dotenvy = { workspace = true }
 
 # Misc
 async-trait = { workspace = true }
-chrono = { workspace = true }
-uuid = { workspace = true }

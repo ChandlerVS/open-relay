@@ -2,8 +2,7 @@
 //!
 //! `Provider` is the trait every external identity source implements; the
 //! registry holds the live set keyed by provider name (e.g. "google", "okta").
-//! No concrete providers are implemented in the skeleton — the `oauth2` crate
-//! is in deps and ready to be wired by a specific provider module.
+//! Framework-agnostic — HTTP wiring belongs to the server crate.
 
 use std::collections::HashMap;
 use std::sync::Arc;

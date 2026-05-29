@@ -4,23 +4,23 @@
 //! a `DatabaseConnection` or a `DatabaseTransaction`.
 
 use anyhow::anyhow;
+use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
-use crate::error::{AppError, AppResult};
-use crate::users::dto::NewUser;
+use super::NewUser;
+use crate::error::{CoreError, CoreResult};
 
 const MIN_PASSWORD_LEN: usize = 12;
 const MAX_DISPLAY_NAME_LEN: usize = 255;
 
-pub fn hash_password(plain: &str) -> AppResult<String> {
+pub fn hash_password(plain: &str) -> CoreResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(plain.as_bytes(), &salt)
         .map(|h| h.to_string())
-        .map_err(|e| AppError::Internal(anyhow!("argon2 hash failed: {e}")))
+        .map_err(|e| CoreError::Internal(anyhow!("argon2 hash failed: {e}")))
 }
 
 pub fn verify_password(hash: &str, plain: &str) -> bool {
@@ -32,20 +32,20 @@ pub fn verify_password(hash: &str, plain: &str) -> bool {
         .is_ok()
 }
 
-pub fn validate_new_user(input: &NewUser) -> AppResult<()> {
+pub fn validate_new_user(input: &NewUser) -> CoreResult<()> {
     let email = input.email.trim();
     if !looks_like_email(email) {
-        return Err(AppError::BadRequest("invalid email".into()));
+        return Err(CoreError::BadRequest("invalid email".into()));
     }
     if input.password.len() < MIN_PASSWORD_LEN {
-        return Err(AppError::BadRequest(format!(
+        return Err(CoreError::BadRequest(format!(
             "password must be at least {MIN_PASSWORD_LEN} characters"
         )));
     }
     if let Some(name) = &input.display_name {
         let trimmed = name.trim();
         if trimmed.is_empty() || trimmed.len() > MAX_DISPLAY_NAME_LEN {
-            return Err(AppError::BadRequest(format!(
+            return Err(CoreError::BadRequest(format!(
                 "display_name must be 1..={MAX_DISPLAY_NAME_LEN} characters"
             )));
         }
@@ -70,7 +70,7 @@ fn looks_like_email(s: &str) -> bool {
 pub async fn find_by_email<C: ConnectionTrait>(
     conn: &C,
     email: &str,
-) -> AppResult<Option<entity::user::Model>> {
+) -> CoreResult<Option<entity::user::Model>> {
     Ok(entity::user::Entity::find()
         .filter(entity::user::Column::Email.eq(email))
         .one(conn)
@@ -80,7 +80,7 @@ pub async fn find_by_email<C: ConnectionTrait>(
 pub async fn create_user<C: ConnectionTrait>(
     conn: &C,
     input: NewUser,
-) -> AppResult<entity::user::Model> {
+) -> CoreResult<entity::user::Model> {
     validate_new_user(&input)?;
     let password_hash = hash_password(&input.password)?;
     let display_name = input

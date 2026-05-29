@@ -9,7 +9,6 @@ mod jobs;
 mod router;
 mod routes;
 mod state;
-mod users;
 
 use crate::config::Config;
 use crate::state::AppState;
