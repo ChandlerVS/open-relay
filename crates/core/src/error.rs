@@ -14,6 +14,9 @@ pub enum CoreError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("not found: {0}")]
+    NotFound(String),
+
     #[error("conflict: {0}")]
     Conflict(String),
 

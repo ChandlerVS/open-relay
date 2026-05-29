@@ -14,7 +14,7 @@ const ITEMS: NavItem[] = [
   { to: "/forms", label: "Forms", icon: FileText, disabled: true },
   { to: "/backends", label: "Backends", icon: Plug, disabled: true },
   { to: "/submissions", label: "Submissions", icon: Inbox, disabled: true },
-  { to: "/users", label: "Users", icon: Users, disabled: true },
+  { to: "/users", label: "Users", icon: Users },
 ];
 
 export function Sidebar() {

@@ -28,4 +28,29 @@ export {
 } from "./components/dropdown-menu";
 export { Skeleton } from "./components/skeleton";
 export { Separator } from "./components/separator";
+export {
+  Dialog,
+  DialogTrigger,
+  DialogPortal,
+  DialogClose,
+  DialogOverlay,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "./components/dialog";
+export type { DialogContentProps } from "./components/dialog";
+export {
+  Table,
+  TableHeader,
+  TableBody,
+  TableFooter,
+  TableRow,
+  TableHead,
+  TableCell,
+  TableCaption,
+} from "./components/table";
+export { ConfirmDialog } from "./components/confirm-dialog";
+export type { ConfirmDialogProps } from "./components/confirm-dialog";
 export { cn } from "./lib/cn";

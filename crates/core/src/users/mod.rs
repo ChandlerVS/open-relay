@@ -34,3 +34,42 @@ impl From<entity::user::Model> for UserDto {
         }
     }
 }
+
+/// Partial update. `None` means "leave the field alone". For `display_name`,
+/// an explicit empty string is treated as "clear".
+#[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
+pub struct UpdateUser {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ChangePassword {
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct UserList {
+    pub items: Vec<UserDto>,
+    pub total: u64,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Lightweight option used to populate dropdowns elsewhere in the admin.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct UserSelectOption {
+    pub id: i32,
+    pub label: String,
+}

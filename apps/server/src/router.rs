@@ -18,6 +18,7 @@ use crate::state::AppState;
         (name = "health", description = "Liveness / readiness."),
         (name = "auth", description = "Local + SSO authentication."),
         (name = "setup", description = "First-time bootstrap."),
+        (name = "users", description = "User management."),
     ),
 )]
 struct ApiDoc;
@@ -27,6 +28,7 @@ pub fn build(state: AppState) -> Router {
         .nest("/healthz", routes::health::router())
         .nest("/auth", crate::auth::router())
         .nest("/setup", routes::setup::router())
+        .nest("/users", routes::users::router())
         .split_for_parts();
 
     router
