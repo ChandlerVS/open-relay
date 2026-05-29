@@ -1,6 +1,52 @@
 [package]
-name = "open-relay"
-version = "0.1.0"
-edition = "2024"
+name = "open-relay-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "open-relay-server"
+path = "src/main.rs"
 
 [dependencies]
+# Internal
+entity = { workspace = true }
+open-relay-core = { workspace = true }
+
+# Async / web
+axum = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Data
+sea-orm = { workspace = true }
+
+# OpenAPI
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
+
+# Auth
+jsonwebtoken = { workspace = true }
+oauth2 = { workspace = true }
+argon2 = { workspace = true }
+
+# Serde / errors
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Observability
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Config
+figment = { workspace = true }
+dotenvy = { workspace = true }
+
+# Misc
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

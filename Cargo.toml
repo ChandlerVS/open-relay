@@ -1,3 +1,61 @@
 [workspace]
 resolver = "3"
-members = ["apps/server"]
+members = ["apps/server", "crates/entity", "crates/core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/openrelay/open-relay"
+
+[workspace.dependencies]
+# Internal
+entity = { path = "crates/entity" }
+open-relay-core = { path = "crates/core" }
+
+# Async / web
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Data
+sea-orm = { version = "=2.0.0-rc.38", default-features = false, features = [
+    "macros",
+    "with-json",
+    "with-chrono",
+    "with-uuid",
+    "runtime-tokio-rustls",
+    "sqlx-mysql",
+    "schema-sync",
+    "entity-registry",
+] }
+
+# OpenAPI
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+# Auth
+jsonwebtoken = "10"
+oauth2 = "5"
+argon2 = "0.5"
+
+# Serde / errors
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Config
+figment = { version = "0.10", features = ["env", "toml"] }
+dotenvy = "0.15"
+
+# Misc
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
