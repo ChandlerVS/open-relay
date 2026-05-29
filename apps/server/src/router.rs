@@ -19,6 +19,7 @@ use crate::state::AppState;
         (name = "auth", description = "Local + SSO authentication."),
         (name = "setup", description = "First-time bootstrap."),
         (name = "users", description = "User management."),
+        (name = "roles", description = "Roles + permission catalogue."),
     ),
 )]
 struct ApiDoc;
@@ -29,6 +30,8 @@ pub fn build(state: AppState) -> Router {
         .nest("/auth", crate::auth::router())
         .nest("/setup", routes::setup::router())
         .nest("/users", routes::users::router())
+        .nest("/roles", routes::roles::router())
+        .nest("/permissions", routes::roles::permissions_router())
         .split_for_parts();
 
     router

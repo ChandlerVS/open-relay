@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, MoreHorizontal, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, MoreHorizontal, Plus, Shield } from "lucide-react";
 import {
   Alert,
   AlertDescription,
@@ -20,6 +20,8 @@ import {
   TableRow,
 } from "@open-relay/ui";
 import { useAuth } from "../../../lib/auth/useAuth";
+import { RequirePermission } from "../../../lib/auth/RequirePermission";
+import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useUsersList, type UserDto } from "../../../lib/users/useUsers";
 import { useDeleteUser } from "../../../lib/users/useUserMutations";
 import { UserFormDialog } from "./UserFormDialog";
@@ -29,6 +31,7 @@ const PAGE_SIZE = 25;
 
 export function UsersPage() {
   const { user: currentUser } = useAuth();
+  const { has } = usePermissions();
   const [offset, setOffset] = useState(0);
   const { data, isLoading, isError, error, refetch } = useUsersList({
     limit: PAGE_SIZE,
@@ -41,6 +44,9 @@ export function UsersPage() {
   const [deleting, setDeleting] = useState<UserDto | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deleteMutation = useDeleteUser();
+
+  const canWrite = has("users:write");
+  const canDelete = has("users:delete");
 
   const rangeText = useMemo(() => {
     if (!data) return null;
@@ -59,13 +65,15 @@ export function UsersPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
           <p className="text-sm text-muted-foreground">
-            Manage admin accounts. RBAC arrives later; for now every account is a full admin.
+            Manage admin accounts and their role assignments.
           </p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          New user
-        </Button>
+        <RequirePermission perm="users:write">
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            New user
+          </Button>
+        </RequirePermission>
       </div>
 
       {isError && (
@@ -90,6 +98,7 @@ export function UsersPage() {
             <TableRow>
               <TableHead>Display name</TableHead>
               <TableHead>Email</TableHead>
+              <TableHead>Roles</TableHead>
               <TableHead className="w-10 text-right pr-3">
                 <span className="sr-only">Actions</span>
               </TableHead>
@@ -105,6 +114,9 @@ export function UsersPage() {
                   <TableCell>
                     <Skeleton className="h-4 w-48" />
                   </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-24" />
+                  </TableCell>
                   <TableCell />
                 </TableRow>
               ))
@@ -119,23 +131,48 @@ export function UsersPage() {
                     )}
                   </TableCell>
                   <TableCell>{u.email}</TableCell>
+                  <TableCell>
+                    {(u.roles ?? []).length === 0 ? (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {(u.roles ?? []).map((r) => (
+                          <span
+                            key={r.id}
+                            className={
+                              r.is_system
+                                ? "inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary"
+                                : "rounded bg-secondary px-1.5 py-0.5 text-[11px] text-secondary-foreground"
+                            }
+                          >
+                            {r.is_system && <Shield className="h-3 w-3" />}
+                            {r.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right pr-2">
-                    <RowMenu
-                      user={u}
-                      isCurrent={currentUser?.id === u.id}
-                      onEdit={() => setEditing(u)}
-                      onChangePassword={() => setPwUser(u)}
-                      onDelete={() => {
-                        setDeleteError(null);
-                        setDeleting(u);
-                      }}
-                    />
+                    {(canWrite || canDelete) && (
+                      <RowMenu
+                        user={u}
+                        isCurrent={currentUser?.id === u.id}
+                        canWrite={canWrite}
+                        canDelete={canDelete}
+                        onEdit={() => setEditing(u)}
+                        onChangePassword={() => setPwUser(u)}
+                        onDelete={() => {
+                          setDeleteError(null);
+                          setDeleting(u);
+                        }}
+                      />
+                    )}
                   </TableCell>
                 </TableRow>
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={3} className="text-center py-10 text-sm text-muted-foreground">
+                <TableCell colSpan={4} className="text-center py-10 text-sm text-muted-foreground">
                   No users to show.
                 </TableCell>
               </TableRow>
@@ -225,12 +262,22 @@ export function UsersPage() {
 interface RowMenuProps {
   user: UserDto;
   isCurrent: boolean;
+  canWrite: boolean;
+  canDelete: boolean;
   onEdit: () => void;
   onChangePassword: () => void;
   onDelete: () => void;
 }
 
-function RowMenu({ isCurrent, onEdit, onChangePassword, onDelete }: RowMenuProps) {
+function RowMenu({
+  isCurrent,
+  canWrite,
+  canDelete,
+  onEdit,
+  onChangePassword,
+  onDelete,
+}: RowMenuProps) {
+  const showDeleteSection = canDelete && !isCurrent;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -239,18 +286,20 @@ function RowMenu({ isCurrent, onEdit, onChangePassword, onDelete }: RowMenuProps
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onChangePassword}>Change password</DropdownMenuItem>
-        {!isCurrent && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={onDelete}
-              className="text-destructive focus:text-destructive"
-            >
-              Delete
-            </DropdownMenuItem>
-          </>
+        {canWrite && <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>}
+        {canWrite && (
+          <DropdownMenuItem onSelect={onChangePassword}>
+            Change password
+          </DropdownMenuItem>
+        )}
+        {canWrite && showDeleteSection && <DropdownMenuSeparator />}
+        {showDeleteSection && (
+          <DropdownMenuItem
+            onSelect={onDelete}
+            className="text-destructive focus:text-destructive"
+          >
+            Delete
+          </DropdownMenuItem>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

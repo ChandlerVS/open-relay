@@ -1,12 +1,16 @@
 import { NavLink } from "react-router-dom";
-import { FileText, Inbox, LayoutDashboard, Plug, Users } from "lucide-react";
+import { FileText, Inbox, LayoutDashboard, Plug, Shield, Users } from "lucide-react";
 import { cn } from "@open-relay/ui";
+import type { Permission } from "../../lib/auth/AuthContext";
+import { usePermissions } from "../../lib/auth/usePermissions";
 
 interface NavItem {
   to: string;
   label: string;
   icon: typeof FileText;
   disabled?: boolean;
+  /** If set, the item only renders when the user holds this permission. */
+  perm?: Permission;
 }
 
 const ITEMS: NavItem[] = [
@@ -14,17 +18,20 @@ const ITEMS: NavItem[] = [
   { to: "/forms", label: "Forms", icon: FileText, disabled: true },
   { to: "/backends", label: "Backends", icon: Plug, disabled: true },
   { to: "/submissions", label: "Submissions", icon: Inbox, disabled: true },
-  { to: "/users", label: "Users", icon: Users },
+  { to: "/users", label: "Users", icon: Users, perm: "users:read" },
+  { to: "/roles", label: "Roles", icon: Shield, perm: "roles:read" },
 ];
 
 export function Sidebar() {
+  const { has } = usePermissions();
+  const visible = ITEMS.filter((item) => !item.perm || has(item.perm));
   return (
     <aside className="hidden md:flex md:w-60 shrink-0 flex-col border-r border-border bg-background">
       <div className="h-14 flex items-center px-4 border-b border-border">
         <span className="font-semibold tracking-tight">OpenRelay</span>
       </div>
       <nav className="flex-1 p-2 space-y-1">
-        {ITEMS.map(({ to, label, icon: Icon, disabled }) =>
+        {visible.map(({ to, label, icon: Icon, disabled }) =>
           disabled ? (
             <span
               key={to}

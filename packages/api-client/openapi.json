@@ -51,11 +51,11 @@
         "operationId": "me",
         "responses": {
           "200": {
-            "description": "Current user",
+            "description": "Current session",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UserDto"
+                  "$ref": "#/components/schemas/MeResponse"
                 }
               }
             }
@@ -89,6 +89,293 @@
             }
           }
         }
+      }
+    },
+    "/permissions": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "operationId": "list_permissions",
+        "responses": {
+          "200": {
+            "description": "Permission catalogue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PermissionInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/roles": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "operationId": "list_roles",
+        "responses": {
+          "200": {
+            "description": "Role list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoleDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "roles"
+        ],
+        "operationId": "create_role",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Role created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "409": {
+            "description": "Role name already in use"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/roles/select-list": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "operationId": "roles_select_list",
+        "responses": {
+          "200": {
+            "description": "Dropdown-friendly role list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoleSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/roles/{id}": {
+      "get": {
+        "tags": [
+          "roles"
+        ],
+        "operationId": "get_role",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Role id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Role detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Role not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "roles"
+        ],
+        "operationId": "delete_role",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Role id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Role deleted"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission or system role"
+          },
+          "404": {
+            "description": "Role not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "roles"
+        ],
+        "operationId": "update_role",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Role id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Role updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission or system role"
+          },
+          "404": {
+            "description": "Role not found"
+          },
+          "409": {
+            "description": "Role name already in use"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/setup/initialize": {
@@ -188,6 +475,9 @@
           },
           "401": {
             "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
           }
         },
         "security": [
@@ -228,6 +518,9 @@
           "401": {
             "description": "Missing or invalid token"
           },
+          "403": {
+            "description": "Insufficient permission"
+          },
           "409": {
             "description": "Email already in use"
           }
@@ -261,6 +554,9 @@
           },
           "401": {
             "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
           }
         },
         "security": [
@@ -302,6 +598,9 @@
           "401": {
             "description": "Missing or invalid token"
           },
+          "403": {
+            "description": "Insufficient permission"
+          },
           "404": {
             "description": "User not found"
           }
@@ -336,11 +635,11 @@
           "401": {
             "description": "Missing or invalid token"
           },
+          "403": {
+            "description": "Insufficient permission, self-delete, or last-superadmin"
+          },
           "404": {
             "description": "User not found"
-          },
-          "409": {
-            "description": "Cannot delete the currently authenticated user"
           }
         },
         "security": [
@@ -393,6 +692,9 @@
           "401": {
             "description": "Missing or invalid token"
           },
+          "403": {
+            "description": "Insufficient permission or last-superadmin demotion"
+          },
           "404": {
             "description": "User not found"
           },
@@ -444,6 +746,9 @@
           },
           "401": {
             "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
           },
           "404": {
             "description": "User not found"
@@ -526,9 +831,58 @@
           }
         }
       },
+      "MeResponse": {
+        "type": "object",
+        "description": "Session-shape response for `/auth/me`. Flat permission set is what the\nfrontend's `usePermissions` hook consumes; `roles` provides the role\nbadges in the UI. Refresh on window focus so an admin's permission\nchanges propagate without forcing a re-login.",
+        "required": [
+          "user",
+          "permissions",
+          "roles"
+        ],
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleSummary"
+            }
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserDto"
+          }
+        }
+      },
+      "NewRole": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            }
+          }
+        }
+      },
       "NewUser": {
         "type": "object",
-        "description": "Input shape for creating a user.",
+        "description": "Input shape for creating a user. `role_ids` is optional and defaults to\nan empty set — the route handler reads it and calls into the RBAC service\nin the same transaction after the user row is inserted.",
         "required": [
           "email",
           "password"
@@ -545,6 +899,103 @@
           },
           "password": {
             "type": "string"
+          },
+          "role_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        }
+      },
+      "Permission": {
+        "type": "string",
+        "enum": [
+          "users:read",
+          "users:write",
+          "users:delete",
+          "roles:read",
+          "roles:write",
+          "roles:delete",
+          "roles:assign"
+        ]
+      },
+      "PermissionInfo": {
+        "type": "object",
+        "required": [
+          "key",
+          "resource",
+          "action",
+          "label"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "key": {
+            "$ref": "#/components/schemas/Permission"
+          },
+          "label": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          }
+        }
+      },
+      "RoleDto": {
+        "type": "object",
+        "description": "Full role detail — name, description, grants. Returned by `GET /roles/{id}`\nand used by the role editor in the admin SPA.",
+        "required": [
+          "id",
+          "name",
+          "is_system",
+          "permissions"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "is_system": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            }
+          }
+        }
+      },
+      "RoleSummary": {
+        "type": "object",
+        "description": "Lightweight role reference — enough to render a badge, populate a\ndropdown, or describe the current user's roles in `/auth/me`. Cheap to\nembed in `UserDto` since no permission join is required.",
+        "required": [
+          "id",
+          "name",
+          "is_system"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "is_system": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -559,9 +1010,37 @@
           }
         }
       },
+      "UpdateRole": {
+        "type": "object",
+        "description": "Partial update. `None` means \"leave alone\". `description: Some(\"\")`\nclears (matches the convention used by `users::UpdateUser`).",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "description": "`None` = leave assignments alone. `Some(vec)` = replace the role's\npermission set with this list."
+          }
+        }
+      },
       "UpdateUser": {
         "type": "object",
-        "description": "Partial update. `None` means \"leave the field alone\". For `display_name`,\nan explicit empty string is treated as \"clear\".",
+        "description": "Partial update. `None` means \"leave the field alone\". For `display_name`,\nan explicit empty string is treated as \"clear\".\n\n`role_ids` semantics are asymmetric vs `display_name`: `None` leaves\nassignments alone, `Some(vec![])` clears all roles, `Some(non-empty)`\nreplaces the set. The role-assignment guard (last-superadmin) lives in\n`crate::rbac::service::assign_roles_to_user`.",
         "properties": {
           "display_name": {
             "type": [
@@ -574,12 +1053,22 @@
               "string",
               "null"
             ]
+          },
+          "role_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         }
       },
       "UserDto": {
         "type": "object",
-        "description": "Outbound representation of a user — what callers see in API responses.",
+        "description": "Outbound representation of a user — what callers see in API responses.\n\n`roles` is populated by `service::populate_roles` (or by the RBAC service\ndirectly for single-user lookups). `From<user::Model>` produces an empty\nroles vec; the responsibility to enrich falls to the caller so this type\nstays cheap to construct in places (login, setup) where the frontend will\nrefetch its session shape via `/auth/me` anyway.",
         "required": [
           "id",
           "email"
@@ -597,6 +1086,12 @@
           "id": {
             "type": "integer",
             "format": "int32"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleSummary"
+            }
           }
         }
       },
@@ -667,6 +1162,10 @@
     {
       "name": "users",
       "description": "User management."
+    },
+    {
+      "name": "roles",
+      "description": "Roles + permission catalogue."
     }
   ]
 }

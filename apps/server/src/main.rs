@@ -40,7 +40,12 @@ async fn main() -> anyhow::Result<()> {
         .context("syncing entity schema to MySQL")?;
     tracing::info!("entity schema sync complete");
 
-    let state = AppState::new(db.clone(), &config)?;
+    let superadmin_role_id = open_relay_core::rbac::service::ensure_superadmin(&db)
+        .await
+        .context("seeding superadmin role")?;
+    tracing::info!(superadmin_role_id, "rbac superadmin role synchronized");
+
+    let state = AppState::new(db.clone(), &config, superadmin_role_id)?;
 
     // Spawn delivery worker (no-op until submission_delivery exists).
     jobs::spawn(db.clone(), state.backends.clone());

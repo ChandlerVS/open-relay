@@ -7,6 +7,7 @@
 
 pub mod local;
 pub mod me;
+pub mod permissions;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;

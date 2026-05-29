@@ -12,8 +12,9 @@ use sea_orm::{
     QueryFilter, QueryOrder, QuerySelect,
 };
 
-use super::{ChangePassword, ListQuery, NewUser, UpdateUser, UserList, UserSelectOption};
+use super::{ChangePassword, ListQuery, NewUser, UpdateUser, UserDto, UserList, UserSelectOption};
 use crate::error::{CoreError, CoreResult};
+use crate::rbac::service as rbac_service;
 
 const MIN_PASSWORD_LEN: usize = 12;
 const MAX_DISPLAY_NAME_LEN: usize = 255;
@@ -131,7 +132,7 @@ pub async fn create_user<C: ConnectionTrait>(
 pub async fn list_users<C: ConnectionTrait>(conn: &C, q: &ListQuery) -> CoreResult<UserList> {
     let limit = q.limit.unwrap_or(DEFAULT_LIST_LIMIT).clamp(1, MAX_LIST_LIMIT);
     let offset = q.offset.unwrap_or(0);
-    let items = entity::user::Entity::find()
+    let mut items: Vec<UserDto> = entity::user::Entity::find()
         .order_by_asc(entity::user::Column::Id)
         .limit(limit as u64)
         .offset(offset as u64)
@@ -140,6 +141,7 @@ pub async fn list_users<C: ConnectionTrait>(conn: &C, q: &ListQuery) -> CoreResu
         .into_iter()
         .map(Into::into)
         .collect();
+    populate_roles(conn, &mut items).await?;
     let total = entity::user::Entity::find().count(conn).await?;
     Ok(UserList {
         items,
@@ -147,6 +149,35 @@ pub async fn list_users<C: ConnectionTrait>(conn: &C, q: &ListQuery) -> CoreResu
         limit,
         offset,
     })
+}
+
+/// Enrich a slice of `UserDto`s with their role assignments. Single batched
+/// fetch; safe to call with an empty slice.
+pub async fn populate_roles<C: ConnectionTrait>(
+    conn: &C,
+    items: &mut [UserDto],
+) -> CoreResult<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i32> = items.iter().map(|u| u.id).collect();
+    let mut by_user = rbac_service::roles_for_users(conn, &ids).await?;
+    for item in items {
+        item.roles = by_user.remove(&item.id).unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// Single-user enrichment helper used by `/auth/me` and the user-detail
+/// endpoint.
+pub async fn dto_with_roles<C: ConnectionTrait>(
+    conn: &C,
+    user: entity::user::Model,
+) -> CoreResult<UserDto> {
+    let roles = rbac_service::roles_for_user(conn, user.id).await?;
+    let mut dto: UserDto = user.into();
+    dto.roles = roles;
+    Ok(dto)
 }
 
 pub async fn select_list<C: ConnectionTrait>(conn: &C) -> CoreResult<Vec<UserSelectOption>> {
@@ -224,8 +255,44 @@ pub async fn change_password<C: ConnectionTrait>(
     Ok(())
 }
 
-pub async fn delete_user<C: ConnectionTrait>(conn: &C, id: i32) -> CoreResult<()> {
-    let res = entity::user::Entity::delete_by_id(id).exec(conn).await?;
+/// Delete a user, enforcing both the self-delete guard and the
+/// last-superadmin guard in core (rather than the HTTP layer) so non-HTTP
+/// callers can't bypass them. Cleans up dependent `user_role` rows first
+/// since FK cascades are managed in application code.
+///
+/// MUST be called inside a transaction — the last-superadmin check takes
+/// an exclusive lock on the superadmin role row that only holds within a
+/// tx.
+pub async fn delete_user<C: ConnectionTrait>(
+    conn: &C,
+    actor_id: i32,
+    target_id: i32,
+    superadmin_role_id: i32,
+) -> CoreResult<()> {
+    if actor_id == target_id {
+        return Err(CoreError::Forbidden(
+            "cannot delete the currently authenticated user".into(),
+        ));
+    }
+    if find_by_id(conn, target_id).await?.is_none() {
+        return Err(CoreError::NotFound("user not found".into()));
+    }
+    let target_is_superadmin = entity::user_role::Entity::find()
+        .filter(entity::user_role::Column::UserId.eq(target_id))
+        .filter(entity::user_role::Column::RoleId.eq(superadmin_role_id))
+        .one(conn)
+        .await?
+        .is_some();
+    if target_is_superadmin {
+        rbac_service::guard_last_superadmin(conn, target_id, superadmin_role_id).await?;
+    }
+    entity::user_role::Entity::delete_many()
+        .filter(entity::user_role::Column::UserId.eq(target_id))
+        .exec(conn)
+        .await?;
+    let res = entity::user::Entity::delete_by_id(target_id)
+        .exec(conn)
+        .await?;
     if res.rows_affected == 0 {
         return Err(CoreError::NotFound("user not found".into()));
     }
@@ -259,6 +326,7 @@ mod tests {
             email: "a@b.co".into(),
             password: "short".into(),
             display_name: None,
+            role_ids: Vec::new(),
         };
         assert!(validate_new_user(&input).is_err());
     }

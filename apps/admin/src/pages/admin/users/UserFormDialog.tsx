@@ -21,6 +21,8 @@ import {
   useUpdateUser,
 } from "../../../lib/users/useUserMutations";
 import type { UserDto } from "../../../lib/users/useUsers";
+import { usePermissions } from "../../../lib/auth/usePermissions";
+import { RoleMultiSelect } from "../../../components/roles/RoleMultiSelect";
 
 const baseFields = {
   email: z.string().email("Enter a valid email address."),
@@ -36,13 +38,17 @@ const createSchema = z
     ...baseFields,
     password: z.string().min(12, "Minimum 12 characters."),
     confirm: z.string(),
+    role_ids: z.array(z.number()).default([]),
   })
   .refine((d) => d.password === d.confirm, {
     path: ["confirm"],
     message: "Passwords don't match.",
   });
 
-const editSchema = z.object(baseFields);
+const editSchema = z.object({
+  ...baseFields,
+  role_ids: z.array(z.number()).default([]),
+});
 
 type CreateValues = z.infer<typeof createSchema>;
 type EditValues = z.infer<typeof editSchema>;
@@ -105,17 +111,26 @@ function CreateForm({
 }) {
   const [formError, setFormError] = useState<string | null>(null);
   const create = useCreateUser();
+  const { has } = usePermissions();
+  const canAssign = has("roles:assign");
   const {
     register,
     handleSubmit,
     formState: { errors },
     reset,
-  } = useForm<CreateValues>({ resolver: zodResolver(createSchema) });
+    watch,
+    setValue,
+  } = useForm<CreateValues>({
+    resolver: zodResolver(createSchema),
+    defaultValues: { role_ids: [] },
+  });
 
   useEffect(() => {
-    reset();
+    reset({ role_ids: [] });
     setFormError(null);
   }, [reset]);
+
+  const roleIds = watch("role_ids") ?? [];
 
   return (
     <form
@@ -127,6 +142,9 @@ function CreateForm({
             email: values.email.trim(),
             password: values.password,
             display_name: displayName ? displayName : null,
+            // Omit role_ids entirely when the user can't assign — keeps the
+            // server's `roles:assign` gate from rejecting an inert vec![].
+            ...(canAssign ? { role_ids: values.role_ids } : {}),
           },
           {
             onSuccess: (u) => onSaved(u),
@@ -169,6 +187,17 @@ function CreateForm({
       <FormField id="user-confirm" label="Confirm password" error={errors.confirm?.message}>
         <Input type="password" autoComplete="new-password" {...register("confirm")} />
       </FormField>
+      {canAssign && (
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Roles</div>
+          <RoleMultiSelect
+            value={roleIds}
+            onChange={(next) =>
+              setValue("role_ids", next, { shouldDirty: true })
+            }
+          />
+        </div>
+      )}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel} disabled={create.isPending}>
           Cancel
@@ -192,17 +221,24 @@ function EditForm({
 }) {
   const [formError, setFormError] = useState<string | null>(null);
   const update = useUpdateUser();
+  const { has } = usePermissions();
+  const canAssign = has("roles:assign");
+  const existingRoleIds = (user.roles ?? []).map((r) => r.id);
   const {
     register,
     handleSubmit,
     formState: { errors },
+    watch,
+    setValue,
   } = useForm<EditValues>({
     resolver: zodResolver(editSchema),
     defaultValues: {
       email: user.email,
       display_name: user.display_name ?? "",
+      role_ids: existingRoleIds,
     },
   });
+  const roleIds = watch("role_ids") ?? [];
 
   return (
     <form
@@ -210,7 +246,11 @@ function EditForm({
         setFormError(null);
         const email = values.email.trim();
         const displayName = (values.display_name ?? "").trim();
-        // PATCH semantics: send empty string for display_name to mean "clear".
+        const next = values.role_ids ?? [];
+        const rolesChanged =
+          canAssign &&
+          (next.length !== existingRoleIds.length ||
+            next.some((id) => !existingRoleIds.includes(id)));
         update.mutate(
           {
             id: user.id,
@@ -218,6 +258,7 @@ function EditForm({
               email: email !== user.email ? email : undefined,
               display_name:
                 displayName !== (user.display_name ?? "") ? displayName : undefined,
+              role_ids: rolesChanged ? next : undefined,
             },
           },
           {
@@ -245,6 +286,17 @@ function EditForm({
       <FormField id="user-email" label="Email" error={errors.email?.message}>
         <Input type="email" autoComplete="email" {...register("email")} />
       </FormField>
+      {canAssign && (
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Roles</div>
+          <RoleMultiSelect
+            value={roleIds}
+            onChange={(next) =>
+              setValue("role_ids", next, { shouldDirty: true })
+            }
+          />
+        </div>
+      )}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel} disabled={update.isPending}>
           Cancel

@@ -17,4 +17,5 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 argon2 = { workspace = true }
 jsonwebtoken = { workspace = true }
+strum = { workspace = true }
 utoipa = { workspace = true }

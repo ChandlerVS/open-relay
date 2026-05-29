@@ -52,6 +52,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_permissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_roles"];
+        put?: never;
+        post: operations["create_role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles/select-list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["roles_select_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_role"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_role"];
+        options?: never;
+        head?: never;
+        patch: operations["update_role"];
+        trace?: never;
+    };
     "/setup/initialize": {
         parameters: {
             query?: never;
@@ -170,29 +234,109 @@ export interface components {
             token: string;
             user: components["schemas"]["UserDto"];
         };
-        /** @description Input shape for creating a user. */
+        /**
+         * @description Session-shape response for `/auth/me`. Flat permission set is what the
+         *     frontend's `usePermissions` hook consumes; `roles` provides the role
+         *     badges in the UI. Refresh on window focus so an admin's permission
+         *     changes propagate without forcing a re-login.
+         */
+        MeResponse: {
+            permissions: components["schemas"]["Permission"][];
+            roles: components["schemas"]["RoleSummary"][];
+            user: components["schemas"]["UserDto"];
+        };
+        NewRole: {
+            description?: string | null;
+            name: string;
+            permissions?: components["schemas"]["Permission"][];
+        };
+        /**
+         * @description Input shape for creating a user. `role_ids` is optional and defaults to
+         *     an empty set — the route handler reads it and calls into the RBAC service
+         *     in the same transaction after the user row is inserted.
+         */
         NewUser: {
             display_name?: string | null;
             email: string;
             password: string;
+            role_ids?: number[];
+        };
+        /** @enum {string} */
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign";
+        PermissionInfo: {
+            action: string;
+            key: components["schemas"]["Permission"];
+            label: string;
+            resource: string;
+        };
+        /**
+         * @description Full role detail — name, description, grants. Returned by `GET /roles/{id}`
+         *     and used by the role editor in the admin SPA.
+         */
+        RoleDto: {
+            description?: string | null;
+            /** Format: int32 */
+            id: number;
+            is_system: boolean;
+            name: string;
+            permissions: components["schemas"]["Permission"][];
+        };
+        /**
+         * @description Lightweight role reference — enough to render a badge, populate a
+         *     dropdown, or describe the current user's roles in `/auth/me`. Cheap to
+         *     embed in `UserDto` since no permission join is required.
+         */
+        RoleSummary: {
+            /** Format: int32 */
+            id: number;
+            is_system: boolean;
+            name: string;
         };
         SetupStatus: {
             initialized: boolean;
         };
         /**
+         * @description Partial update. `None` means "leave alone". `description: Some("")`
+         *     clears (matches the convention used by `users::UpdateUser`).
+         */
+        UpdateRole: {
+            description?: string | null;
+            name?: string | null;
+            /**
+             * @description `None` = leave assignments alone. `Some(vec)` = replace the role's
+             *     permission set with this list.
+             */
+            permissions?: components["schemas"]["Permission"][] | null;
+        };
+        /**
          * @description Partial update. `None` means "leave the field alone". For `display_name`,
          *     an explicit empty string is treated as "clear".
+         *
+         *     `role_ids` semantics are asymmetric vs `display_name`: `None` leaves
+         *     assignments alone, `Some(vec![])` clears all roles, `Some(non-empty)`
+         *     replaces the set. The role-assignment guard (last-superadmin) lives in
+         *     `crate::rbac::service::assign_roles_to_user`.
          */
         UpdateUser: {
             display_name?: string | null;
             email?: string | null;
+            role_ids?: number[] | null;
         };
-        /** @description Outbound representation of a user — what callers see in API responses. */
+        /**
+         * @description Outbound representation of a user — what callers see in API responses.
+         *
+         *     `roles` is populated by `service::populate_roles` (or by the RBAC service
+         *     directly for single-user lookups). `From<user::Model>` produces an empty
+         *     roles vec; the responsibility to enrich falls to the caller so this type
+         *     stays cheap to construct in places (login, setup) where the frontend will
+         *     refetch its session shape via `/auth/me` anyway.
+         */
         UserDto: {
             display_name?: string | null;
             email: string;
             /** Format: int32 */
             id: number;
+            roles?: components["schemas"]["RoleSummary"][];
         };
         UserList: {
             items: components["schemas"]["UserDto"][];
@@ -258,13 +402,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Current user */
+            /** @description Current session */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserDto"];
+                    "application/json": components["schemas"]["MeResponse"];
                 };
             };
             /** @description Missing or invalid token */
@@ -293,6 +437,301 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Health"];
                 };
+            };
+        };
+    };
+    list_permissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Permission catalogue */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionInfo"][];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_roles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Role list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDto"][];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRole"];
+            };
+        };
+        responses: {
+            /** @description Role created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role name already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    roles_select_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dropdown-friendly role list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleSummary"][];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Role id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Role detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDto"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Role id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Role deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission or system role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Role id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRole"];
+            };
+        };
+        responses: {
+            /** @description Role updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission or system role */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Role name already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -382,6 +821,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     create_user: {
@@ -415,6 +861,13 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -454,6 +907,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     get_user: {
@@ -479,6 +939,13 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -519,15 +986,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description User not found */
-            404: {
+            /** @description Insufficient permission, self-delete, or last-superadmin */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Cannot delete the currently authenticated user */
-            409: {
+            /** @description User not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -569,6 +1036,13 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission or last-superadmin demotion */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -622,6 +1096,13 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

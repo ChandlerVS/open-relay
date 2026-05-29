@@ -13,10 +13,20 @@ pub struct AppState {
     pub auth_keys: Arc<AuthKeys>,
     pub providers: Arc<ProviderRegistry>,
     pub backends: BackendRegistry,
+    /// Id of the auto-managed `Superadmin` role. Cached at boot via
+    /// `rbac::service::ensure_superadmin` so handlers don't need to look it
+    /// up — and so the lockout guards (which reference it) can't accidentally
+    /// pick up the wrong role if a non-superadmin role happens to be named
+    /// "Superadmin" in the DB.
+    pub superadmin_role_id: i32,
 }
 
 impl AppState {
-    pub fn new(db: DatabaseConnection, config: &Config) -> anyhow::Result<Self> {
+    pub fn new(
+        db: DatabaseConnection,
+        config: &Config,
+        superadmin_role_id: i32,
+    ) -> anyhow::Result<Self> {
         let auth_keys = Arc::new(AuthKeys::from_secret(config.jwt_secret.as_bytes()));
         let providers = Arc::new(ProviderRegistry::new());
         let backends = BackendRegistry::new();
@@ -25,6 +35,7 @@ impl AppState {
             auth_keys,
             providers,
             backends,
+            superadmin_role_id,
         })
     }
 }

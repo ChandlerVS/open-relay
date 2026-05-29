@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::error::CoreError;
+use crate::permissions::Permission;
+use crate::rbac::RoleSummary;
 use crate::users::UserDto;
 
 /// JWT lifetime, in seconds. 24 hours.
@@ -67,4 +69,15 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub token: String,
     pub user: UserDto,
+}
+
+/// Session-shape response for `/auth/me`. Flat permission set is what the
+/// frontend's `usePermissions` hook consumes; `roles` provides the role
+/// badges in the UI. Refresh on window focus so an admin's permission
+/// changes propagate without forcing a re-login.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MeResponse {
+    pub user: UserDto,
+    pub permissions: Vec<Permission>,
+    pub roles: Vec<RoleSummary>,
 }

@@ -11,6 +11,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use open_relay_core::auth;
 use open_relay_core::error::CoreError;
+use open_relay_core::rbac::service as rbac_service;
 use open_relay_core::setup::{InitializeResponse, SetupStatus};
 use open_relay_core::users::NewUser;
 use open_relay_core::users::service;
@@ -36,6 +37,7 @@ pub async fn initialize(
     State(state): State<AppState>,
     Json(input): Json<NewUser>,
 ) -> AppResult<impl IntoResponse> {
+    let superadmin_role_id = state.superadmin_role_id;
     let user = state
         .db
         .transaction::<_, entity::user::Model, CoreError>(|tx| {
@@ -47,7 +49,21 @@ pub async fn initialize(
                 if existing.is_some() {
                     return Err(CoreError::Conflict("already initialized".into()));
                 }
-                service::create_user(tx, input).await
+                // role_ids on `NewUser` are ignored at bootstrap — the very
+                // first user is always granted the superadmin role.
+                let new = NewUser {
+                    role_ids: Vec::new(),
+                    ..input
+                };
+                let created = service::create_user(tx, new).await?;
+                rbac_service::assign_roles_to_user(
+                    tx,
+                    created.id,
+                    &[superadmin_role_id],
+                    superadmin_role_id,
+                )
+                .await?;
+                Ok(created)
             })
         })
         .await

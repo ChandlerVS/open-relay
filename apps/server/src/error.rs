@@ -16,6 +16,9 @@ pub enum AppError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
     #[error("not found: {0}")]
     NotFound(String),
 
@@ -34,6 +37,7 @@ impl From<CoreError> for AppError {
         match err {
             CoreError::Unauthorized => AppError::Unauthorized,
             CoreError::BadRequest(m) => AppError::BadRequest(m),
+            CoreError::Forbidden(m) => AppError::Forbidden(m),
             CoreError::NotFound(m) => AppError::NotFound(m),
             CoreError::Conflict(m) => AppError::Conflict(m),
             CoreError::Internal(e) => AppError::Internal(e),
@@ -48,6 +52,7 @@ impl IntoResponse for AppError {
             AppError::NotImplemented(_) => (StatusCode::NOT_IMPLEMENTED, self.to_string()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
             AppError::Internal(err) => {

@@ -14,5 +14,7 @@ pub mod auth;
 pub mod backend;
 pub mod error;
 pub mod jobs;
+pub mod permissions;
+pub mod rbac;
 pub mod setup;
 pub mod users;

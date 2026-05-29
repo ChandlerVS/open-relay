@@ -5,6 +5,7 @@ import { SetupPage } from "../pages/SetupPage";
 import { AdminShell } from "../pages/admin/AdminShell";
 import { DashboardPage } from "../pages/admin/DashboardPage";
 import { UsersPage } from "../pages/admin/users/UsersPage";
+import { RolesPage } from "../pages/admin/roles/RolesPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 
 export const router = createBrowserRouter([
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <DashboardPage /> },
           { path: "users", element: <UsersPage /> },
+          { path: "roles", element: <RolesPage /> },
         ],
       },
     ],
