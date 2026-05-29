@@ -164,6 +164,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/forms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_forms"];
+        put?: never;
+        post: operations["create_form"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forms/select-list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["form_select_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/forms/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_form"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_form"];
+        options?: never;
+        head?: never;
+        patch: operations["update_form"];
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -188,6 +236,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["list_permissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/forms/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_public_form"];
         put?: never;
         post?: never;
         delete?: never;
@@ -347,6 +411,56 @@ export interface components {
         ChangePassword: {
             password: string;
         };
+        CustomField: components["schemas"]["CustomFieldType"] & {
+            help_text?: string | null;
+            /**
+             * @description snake_case identifier, unique within the form. Used as the
+             *     submission key.
+             */
+            key: string;
+            label: string;
+            placeholder?: string | null;
+            /**
+             * Format: int32
+             * @description Render order, ascending. Service code re-sorts on write so callers
+             *     can submit in any order.
+             */
+            position?: number;
+            required?: boolean;
+        };
+        /**
+         * @description HTML input types we expose for custom fields.
+         *
+         *     `Select` carries its options on the variant so the renderer can't see a
+         *     select-typed field without options. `Checkbox` is a single boolean
+         *     checkbox (multi-select uses `Select`).
+         */
+        CustomFieldType: {
+            /** @enum {string} */
+            type: "text";
+        } | {
+            /** @enum {string} */
+            type: "email";
+        } | {
+            /** @enum {string} */
+            type: "number";
+        } | {
+            /** @enum {string} */
+            type: "tel";
+        } | {
+            /** @enum {string} */
+            type: "url";
+        } | {
+            /** @enum {string} */
+            type: "textarea";
+        } | {
+            options?: string[];
+            /** @enum {string} */
+            type: "select";
+        } | {
+            /** @enum {string} */
+            type: "checkbox";
+        };
         DiscoveryPrefill: {
             authorize_url: string;
             issuer: string;
@@ -367,6 +481,38 @@ export interface components {
             /** Format: int32 */
             provider_config_id: number;
             provider_display_name: string;
+        };
+        /**
+         * @description Outbound representation of a form. `owner_id` is exposed to admins; the
+         *     public-facing endpoint uses [`PublicFormDto`] instead.
+         */
+        FormDto: {
+            /** Format: date-time */
+            created_at: string;
+            custom_fields: components["schemas"]["CustomField"][];
+            /** Format: int32 */
+            id: number;
+            name: string;
+            /** Format: int32 */
+            owner_id: number;
+            slug: string;
+            standard_fields: components["schemas"]["StandardFieldsConfig"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        FormList: {
+            items: components["schemas"]["FormDto"][];
+            /** Format: int32 */
+            limit: number;
+            /** Format: int32 */
+            offset: number;
+            /** Format: int64 */
+            total: number;
+        };
+        FormSelectOption: {
+            /** Format: int32 */
+            id: number;
+            label: string;
         };
         Health: {
             status: string;
@@ -396,6 +542,17 @@ export interface components {
             permissions: components["schemas"]["Permission"][];
             roles: components["schemas"]["RoleSummary"][];
             user: components["schemas"]["UserDto"];
+        };
+        /**
+         * @description Input shape for creating a form. `slug` defaults to a slugified `name`
+         *     if `None`/empty. `standard_fields` defaults to [`StandardFieldsConfig::default`]
+         *     if absent. `custom_fields` defaults to empty.
+         */
+        NewForm: {
+            custom_fields?: components["schemas"]["CustomField"][];
+            name: string;
+            slug?: string | null;
+            standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
         };
         NewRole: {
             description?: string | null;
@@ -447,12 +604,24 @@ export interface components {
             enabled: boolean;
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "auth_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "auth_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
             label: string;
             resource: string;
+        };
+        /**
+         * @description Public, unauthenticated view of a form — the shape consumed by the embed
+         *     SDK / form renderer. Strips `owner_id` and audit timestamps.
+         */
+        PublicFormDto: {
+            custom_fields: components["schemas"]["CustomField"][];
+            /** Format: int32 */
+            id: number;
+            name: string;
+            slug: string;
+            standard_fields: components["schemas"]["StandardFieldsConfig"];
         };
         /**
          * @description Full role detail — name, description, grants. Returned by `GET /roles/{id}`
@@ -479,6 +648,46 @@ export interface components {
         };
         SetupStatus: {
             initialized: boolean;
+        };
+        /**
+         * @description Per-field toggle for a standard field. `label` overrides the renderer's
+         *     default copy when `Some` and non-empty.
+         */
+        StandardFieldConfig: {
+            enabled: boolean;
+            label?: string | null;
+            required: boolean;
+        };
+        /**
+         * @description Configuration for the fixed set of standard fields. Each field's key in
+         *     the JSON must be one of [`STANDARD_FIELD_KEYS`]; unknown keys are
+         *     rejected at validation time.
+         */
+        StandardFieldsConfig: {
+            address_line_1: components["schemas"]["StandardFieldConfig"];
+            address_line_2: components["schemas"]["StandardFieldConfig"];
+            city: components["schemas"]["StandardFieldConfig"];
+            company: components["schemas"]["StandardFieldConfig"];
+            country: components["schemas"]["StandardFieldConfig"];
+            email: components["schemas"]["StandardFieldConfig"];
+            first_name: components["schemas"]["StandardFieldConfig"];
+            job_title: components["schemas"]["StandardFieldConfig"];
+            last_name: components["schemas"]["StandardFieldConfig"];
+            message: components["schemas"]["StandardFieldConfig"];
+            phone: components["schemas"]["StandardFieldConfig"];
+            postal_code: components["schemas"]["StandardFieldConfig"];
+            state: components["schemas"]["StandardFieldConfig"];
+            website: components["schemas"]["StandardFieldConfig"];
+        };
+        /**
+         * @description Partial update. `None` means "leave the field alone". Custom-field
+         *     updates replace the entire list (`Some(vec![])` clears all customs).
+         */
+        UpdateForm: {
+            custom_fields?: components["schemas"]["CustomField"][] | null;
+            name?: string | null;
+            slug?: string | null;
+            standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
         };
         /**
          * @description Partial update. `None` means "leave alone". `description: Some("")`
@@ -988,6 +1197,277 @@ export interface operations {
             };
         };
     };
+    list_forms: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated forms */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FormList"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_form: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewForm"];
+            };
+        };
+        responses: {
+            /** @description Form created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FormDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Slug already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    form_select_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dropdown-friendly form list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FormSelectOption"][];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_form: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Form id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Form */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FormDto"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Form not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_form: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Form id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Form deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Form not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_form: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Form id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateForm"];
+            };
+        };
+        responses: {
+            /** @description Form updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FormDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Form not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Slug already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_health: {
         parameters: {
             query?: never;
@@ -1028,6 +1508,36 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_public_form: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Form id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Public form schema */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicFormDto"];
+                };
+            };
+            /** @description Form not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

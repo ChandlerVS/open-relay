@@ -1,0 +1,48 @@
+//! Form entity — a configurable form schema embedded by an external host page.
+//!
+//! See `crates/entity/src/lib.rs` for the entity-first pattern this follows.
+//! Schema is synced into MySQL at server boot; do not edit by hand from the DB.
+//!
+//! `standard_fields` and `custom_fields` are JSON columns whose typed shapes
+//! (`StandardFieldsConfig`, `Vec<CustomField>`) live in
+//! `open_relay_core::forms` — keeping the typed wire/domain layer out of the
+//! entity crate so it stays a thin SeaORM surface.
+
+use chrono::{DateTime, Utc};
+use sea_orm::entity::prelude::*;
+use sea_orm::{ActiveValue, ConnectionTrait};
+
+#[sea_orm::model]
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[sea_orm(table_name = "form")]
+pub struct Model {
+    #[sea_orm(primary_key)]
+    pub id: i32,
+    /// FK to `user.id`. The creator at the time of insert. FK cleanup runs in
+    /// application code (see `open_relay_core::users::service::delete_user`).
+    pub owner_id: i32,
+    pub name: String,
+    #[sea_orm(unique)]
+    pub slug: String,
+    #[sea_orm(column_type = "Json")]
+    pub standard_fields: Json,
+    #[sea_orm(column_type = "Json")]
+    pub custom_fields: Json,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[async_trait::async_trait]
+impl ActiveModelBehavior for ActiveModel {
+    async fn before_save<C>(mut self, _db: &C, insert: bool) -> Result<Self, DbErr>
+    where
+        C: ConnectionTrait,
+    {
+        let now = Utc::now();
+        if insert {
+            self.created_at = ActiveValue::Set(now);
+        }
+        self.updated_at = ActiveValue::Set(now);
+        Ok(self)
+    }
+}

@@ -23,7 +23,7 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/forms", label: "Forms", icon: FileText, disabled: true },
+  { to: "/forms", label: "Forms", icon: FileText, perm: "forms:read" },
   { to: "/backends", label: "Backends", icon: Plug, disabled: true },
   { to: "/submissions", label: "Submissions", icon: Inbox, disabled: true },
   { to: "/users", label: "Users", icon: Users, perm: "users:read" },

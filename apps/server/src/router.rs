@@ -24,6 +24,8 @@ use crate::state::AppState;
         (name = "setup", description = "First-time bootstrap."),
         (name = "users", description = "User management."),
         (name = "roles", description = "Roles + permission catalogue."),
+        (name = "forms", description = "Form schemas embedded by host pages."),
+        (name = "public", description = "Unauthenticated endpoints consumed by embedded forms."),
     ),
 )]
 struct ApiDoc;
@@ -36,6 +38,8 @@ pub fn build(state: AppState) -> Router {
         .nest("/users", routes::users::router())
         .nest("/roles", routes::roles::router())
         .nest("/permissions", routes::roles::permissions_router())
+        .nest("/forms", routes::forms::router())
+        .nest("/public/forms", routes::public_forms::router())
         .split_for_parts();
 
     // CORS that supports credentials (needed for the OAuth state cookie to be

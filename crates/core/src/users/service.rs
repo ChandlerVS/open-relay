@@ -16,6 +16,7 @@ use super::{ChangePassword, ListQuery, NewUser, UpdateUser, UserDto, UserList, U
 use crate::auth::provider::VerifiedIdentity;
 use crate::error::{CoreError, CoreResult};
 use crate::external_identity::service as external_identity_service;
+use crate::forms::service as forms_service;
 use crate::rbac::service as rbac_service;
 
 const MIN_PASSWORD_LEN: usize = 12;
@@ -292,6 +293,7 @@ pub async fn delete_user<C: ConnectionTrait>(
         .filter(entity::user_role::Column::UserId.eq(target_id))
         .exec(conn)
         .await?;
+    forms_service::delete_for_owner(conn, target_id).await?;
     external_identity_service::delete_for_user(conn, target_id).await?;
     let res = entity::user::Entity::delete_by_id(target_id)
         .exec(conn)

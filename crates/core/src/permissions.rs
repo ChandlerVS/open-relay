@@ -33,6 +33,12 @@ pub enum Permission {
     RolesDelete,
     #[serde(rename = "roles:assign")]
     RolesAssign,
+    #[serde(rename = "forms:read")]
+    FormsRead,
+    #[serde(rename = "forms:write")]
+    FormsWrite,
+    #[serde(rename = "forms:delete")]
+    FormsDelete,
     #[serde(rename = "auth_config:write")]
     AuthConfigWrite,
 }
@@ -51,6 +57,9 @@ impl Permission {
             Self::RolesWrite => "roles:write",
             Self::RolesDelete => "roles:delete",
             Self::RolesAssign => "roles:assign",
+            Self::FormsRead => "forms:read",
+            Self::FormsWrite => "forms:write",
+            Self::FormsDelete => "forms:delete",
             Self::AuthConfigWrite => "auth_config:write",
         }
     }
@@ -64,6 +73,9 @@ impl Permission {
             "roles:write" => Some(Self::RolesWrite),
             "roles:delete" => Some(Self::RolesDelete),
             "roles:assign" => Some(Self::RolesAssign),
+            "forms:read" => Some(Self::FormsRead),
+            "forms:write" => Some(Self::FormsWrite),
+            "forms:delete" => Some(Self::FormsDelete),
             "auth_config:write" => Some(Self::AuthConfigWrite),
             _ => None,
         }
@@ -79,11 +91,11 @@ impl Permission {
 
     /// Human-readable label for the action, used by the role editor UI.
     pub fn label(&self) -> &'static str {
-        match self.action() {
-            "read" => "View",
-            "write" => "Create & edit",
-            "delete" => "Delete",
-            "assign" => "Assign to users",
+        match (self.resource(), self.action()) {
+            (_, "read") => "View",
+            (_, "write") => "Create & edit",
+            (_, "delete") => "Delete",
+            ("roles", "assign") => "Assign to users",
             _ => self.slug(),
         }
     }

@@ -14,6 +14,7 @@ pub mod auth;
 pub mod backend;
 pub mod error;
 pub mod external_identity;
+pub mod forms;
 pub mod jobs;
 pub mod oauth;
 pub mod oauth_config;
