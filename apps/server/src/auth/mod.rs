@@ -16,6 +16,9 @@ use utoipa_axum::router::OpenApiRouter;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// JWT lifetime, in seconds. 24 hours.
+pub const JWT_TTL_SECONDS: i64 = 24 * 60 * 60;
+
 #[derive(Debug, Clone)]
 pub struct AuthKeys {
     pub encoding: EncodingKey,
@@ -40,6 +43,16 @@ pub struct Claims {
 pub fn issue_jwt(keys: &AuthKeys, claims: &Claims) -> Result<String, AppError> {
     encode(&Header::default(), claims, &keys.encoding)
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))
+}
+
+/// Issue a JWT for a user with the standard TTL.
+pub fn issue_for_user(keys: &AuthKeys, user: &entity::user::Model) -> Result<String, AppError> {
+    let exp = (chrono::Utc::now().timestamp() + JWT_TTL_SECONDS) as usize;
+    let claims = Claims {
+        sub: user.id.to_string(),
+        exp,
+    };
+    issue_jwt(keys, &claims)
 }
 
 /// Axum extractor — present a `Bearer <jwt>` header signed by our key.

@@ -15,6 +15,9 @@ pub enum AppError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
 
@@ -28,6 +31,7 @@ impl IntoResponse for AppError {
             AppError::NotImplemented(_) => (StatusCode::NOT_IMPLEMENTED, self.to_string()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
             AppError::Internal(err) => {
                 tracing::error!(?err, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())

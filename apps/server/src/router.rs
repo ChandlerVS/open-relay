@@ -17,6 +17,7 @@ use crate::state::AppState;
     tags(
         (name = "health", description = "Liveness / readiness."),
         (name = "auth", description = "Local + SSO authentication."),
+        (name = "setup", description = "First-time bootstrap."),
     ),
 )]
 struct ApiDoc;
@@ -25,6 +26,7 @@ pub fn build(state: AppState) -> Router {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest("/healthz", routes::health::router())
         .nest("/auth", crate::auth::router())
+        .nest("/setup", routes::setup::router())
         .split_for_parts();
 
     router

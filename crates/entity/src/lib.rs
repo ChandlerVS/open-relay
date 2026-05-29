@@ -26,7 +26,7 @@
 //! `entity::*` glob — no central registration required.
 
 // Resource modules — add as they are implemented:
-// pub mod user;
+pub mod user;
 // pub mod form;
 // pub mod backend;
 // pub mod submission;
