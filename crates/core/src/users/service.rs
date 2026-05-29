@@ -77,6 +77,13 @@ pub async fn find_by_email<C: ConnectionTrait>(
         .await?)
 }
 
+pub async fn find_by_id<C: ConnectionTrait>(
+    conn: &C,
+    id: i32,
+) -> CoreResult<Option<entity::user::Model>> {
+    Ok(entity::user::Entity::find_by_id(id).one(conn).await?)
+}
+
 pub async fn create_user<C: ConnectionTrait>(
     conn: &C,
     input: NewUser,

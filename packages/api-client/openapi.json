@@ -37,10 +37,38 @@
               }
             }
           },
-          "501": {
-            "description": "User entity not yet implemented"
+          "401": {
+            "description": "Invalid credentials"
           }
         }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/healthz": {
@@ -62,6 +90,62 @@
           }
         }
       }
+    },
+    "/setup/initialize": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "operationId": "initialize",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Initial admin user created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitializeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "409": {
+            "description": "Already initialized"
+          }
+        }
+      }
+    },
+    "/setup/status": {
+      "get": {
+        "tags": [
+          "setup"
+        ],
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "Setup state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -74,6 +158,21 @@
         "properties": {
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "InitializeResponse": {
+        "type": "object",
+        "required": [
+          "token",
+          "user"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserDto"
           }
         }
       },
@@ -95,11 +194,71 @@
       "LoginResponse": {
         "type": "object",
         "required": [
-          "token"
+          "token",
+          "user"
         ],
         "properties": {
           "token": {
             "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserDto"
+          }
+        }
+      },
+      "NewUser": {
+        "type": "object",
+        "description": "Input shape for creating a user.",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupStatus": {
+        "type": "object",
+        "required": [
+          "initialized"
+        ],
+        "properties": {
+          "initialized": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UserDto": {
+        "type": "object",
+        "description": "Outbound representation of a user — what callers see in API responses.",
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       }
@@ -113,6 +272,10 @@
     {
       "name": "auth",
       "description": "Local + SSO authentication."
+    },
+    {
+      "name": "setup",
+      "description": "First-time bootstrap."
     }
   ]
 }

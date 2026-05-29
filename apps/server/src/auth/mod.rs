@@ -6,6 +6,7 @@
 //! sub-router.
 
 pub mod local;
+pub mod me;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -39,5 +40,7 @@ impl FromRequestParts<AppState> for AuthUser {
 }
 
 pub fn router() -> OpenApiRouter<AppState> {
-    local::router()
+    OpenApiRouter::new()
+        .merge(local::router())
+        .merge(me::router())
 }
