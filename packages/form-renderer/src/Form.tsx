@@ -2,9 +2,43 @@ import { useEffect, useMemo, useState } from "react";
 import { STANDARD_FIELDS } from "./standardFields";
 import type { CustomField, PublicFormDto } from "./schema";
 
+export type FormTheme = "light" | "dark" | "auto";
+
 export interface FormProps {
   formId: string;
   apiUrl: string;
+  /**
+   * Color theme. "auto" (the default) follows the host's `prefers-color-scheme`
+   * and tracks OS changes live; pass "light"/"dark" to force one.
+   */
+  theme?: FormTheme;
+  /** Fired after a submission is accepted, with the new submission id. */
+  onSubmitted?: (result: { id: number }) => void;
+  /** Fired when submission fails, with a human-readable message. */
+  onError?: (message: string) => void;
+}
+
+function prefersDark(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
+}
+
+// Resolves "auto" against the OS preference, tracking live changes. An explicit
+// "light"/"dark" wins and skips the media listener.
+function useResolvedTheme(theme: FormTheme): "light" | "dark" {
+  const [systemDark, setSystemDark] = useState(prefersDark);
+  useEffect(() => {
+    if (theme !== "auto" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => setSystemDark(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [theme]);
+  if (theme === "auto") return systemDark ? "dark" : "light";
+  return theme;
 }
 
 type Status =
@@ -15,7 +49,14 @@ type Status =
   | "error"
   | "submitted";
 
-export function Form({ formId, apiUrl }: FormProps) {
+export function Form({
+  formId,
+  apiUrl,
+  theme = "auto",
+  onSubmitted,
+  onError,
+}: FormProps) {
+  const resolvedTheme = useResolvedTheme(theme);
   const [schema, setSchema] = useState<PublicFormDto | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -60,21 +101,33 @@ export function Form({ formId, apiUrl }: FormProps) {
 
   if (status === "loading") {
     return (
-      <div data-open-relay-form={formId} className="or-form or-form--loading">
+      <div
+        data-open-relay-form={formId}
+        data-theme={resolvedTheme}
+        className="or-form or-form--loading"
+      >
         Loading form…
       </div>
     );
   }
   if (status === "error" || !schema) {
     return (
-      <div data-open-relay-form={formId} className="or-form or-form--error">
+      <div
+        data-open-relay-form={formId}
+        data-theme={resolvedTheme}
+        className="or-form or-form--error"
+      >
         Couldn't load this form{error ? ` (${error})` : ""}.
       </div>
     );
   }
   if (status === "submitted") {
     return (
-      <div data-open-relay-form={formId} className="or-form or-form--submitted">
+      <div
+        data-open-relay-form={formId}
+        data-theme={resolvedTheme}
+        className="or-form or-form--submitted"
+      >
         Thanks — we've received your submission.
       </div>
     );
@@ -106,16 +159,26 @@ export function Form({ formId, apiUrl }: FormProps) {
         }
         throw new Error(message);
       }
+      let accepted: { id: number } | null = null;
+      try {
+        accepted = (await res.json()) as { id: number };
+      } catch {
+        // ignore: success without a parseable body
+      }
       setStatus("submitted");
+      if (accepted) onSubmitted?.(accepted);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
       setStatus("submit_error");
+      onError?.(message);
     }
   };
 
   return (
     <form
       data-open-relay-form={formId}
+      data-theme={resolvedTheme}
       className="or-form"
       onSubmit={(e) => {
         e.preventDefault();

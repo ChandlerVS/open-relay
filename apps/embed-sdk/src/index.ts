@@ -1,23 +1,33 @@
+import type { FormTheme } from "@open-relay/form-renderer";
 import { mount } from "./mount";
 
 // Host pages embed via:
 //   <script src=".../open-relay.js"
 //           data-form-id="abc123"
-//           data-api-url="https://api.openrelay.io"></script>
+//           data-api-url="https://api.openrelay.io"
+//           data-theme="dark"></script>
 //
 // We read attributes off the currently-executing <script>, then insert a
 // sibling <div> right after it and mount the form inside a Shadow DOM so the
 // host's CSS can't bleed in.
+//
+// data-theme is optional: "light" or "dark" to match the host site; omit (or
+// any other value) to follow the visitor's `prefers-color-scheme`.
+
+function readTheme(raw: string | null): FormTheme {
+  return raw === "light" || raw === "dark" ? raw : "auto";
+}
 
 const script = document.currentScript as HTMLScriptElement | null;
 if (script) {
   const formId = script.getAttribute("data-form-id");
   const apiUrl = script.getAttribute("data-api-url") ?? window.location.origin;
+  const theme = readTheme(script.getAttribute("data-theme"));
   if (formId) {
     const host = document.createElement("div");
     host.setAttribute("data-open-relay-host", formId);
     script.parentNode?.insertBefore(host, script.nextSibling);
-    mount(host, { formId, apiUrl });
+    mount(host, { formId, apiUrl, theme });
   } else {
     console.warn("[open-relay] missing data-form-id on <script> tag");
   }

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, MoreHorizontal, Plus } from "lucide-react";
 import {
   Alert,
@@ -33,6 +34,7 @@ function countEnabledStandard(form: FormDto): number {
 
 export function FormsPage() {
   const { has } = usePermissions();
+  const navigate = useNavigate();
   const [offset, setOffset] = useState(0);
   const { data, isLoading, isError, error, refetch } = useFormsList({
     limit: PAGE_SIZE,
@@ -141,17 +143,16 @@ export function FormsPage() {
                     {new Date(f.updated_at).toLocaleDateString()}
                   </TableCell>
                   <TableCell className="text-right pr-2">
-                    {(canWrite || canDelete) && (
-                      <RowMenu
-                        canWrite={canWrite}
-                        canDelete={canDelete}
-                        onEdit={() => setEditing(f)}
-                        onDelete={() => {
-                          setDeleteError(null);
-                          setDeleting(f);
-                        }}
-                      />
-                    )}
+                    <RowMenu
+                      canWrite={canWrite}
+                      canDelete={canDelete}
+                      onPreview={() => navigate(`/forms/${f.id}/preview`)}
+                      onEdit={() => setEditing(f)}
+                      onDelete={() => {
+                        setDeleteError(null);
+                        setDeleting(f);
+                      }}
+                    />
                   </TableCell>
                 </TableRow>
               ))
@@ -245,11 +246,18 @@ export function FormsPage() {
 interface RowMenuProps {
   canWrite: boolean;
   canDelete: boolean;
+  onPreview: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }
 
-function RowMenu({ canWrite, canDelete, onEdit, onDelete }: RowMenuProps) {
+function RowMenu({
+  canWrite,
+  canDelete,
+  onPreview,
+  onEdit,
+  onDelete,
+}: RowMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -258,6 +266,8 @@ function RowMenu({ canWrite, canDelete, onEdit, onDelete }: RowMenuProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={onPreview}>Preview / Test</DropdownMenuItem>
+        {(canWrite || canDelete) && <DropdownMenuSeparator />}
         {canWrite && <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>}
         {canWrite && canDelete && <DropdownMenuSeparator />}
         {canDelete && (

@@ -1,26 +1,49 @@
 :host {
   all: initial;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: #111;
 }
 
 .or-form {
+  /* Light theme (default). Dark values are overridden below via data-theme. */
+  --or-fg: #111;
+  --or-muted: #6b7280;
+  --or-input-bg: #fff;
+  --or-input-border: #d1d5db;
+  --or-border: #e5e7eb;
+  --or-error: #b91c1c;
+  --or-submit-bg: #111827;
+  --or-submit-bg-hover: #1f2937;
+  --or-submit-fg: #fff;
+
   padding: 1rem;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--or-border);
   border-radius: 0.5rem;
   max-width: 32rem;
   box-sizing: border-box;
+  color: var(--or-fg);
+}
+
+.or-form[data-theme="dark"] {
+  --or-fg: #e5e7eb;
+  --or-muted: #9ca3af;
+  --or-input-bg: #111827;
+  --or-input-border: #374151;
+  --or-border: #374151;
+  --or-error: #f87171;
+  --or-submit-bg: #f3f4f6;
+  --or-submit-bg-hover: #e5e7eb;
+  --or-submit-fg: #111827;
 }
 
 .or-form--loading,
 .or-form--error,
 .or-form--submitted {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--or-muted);
 }
 
 .or-form--error {
-  color: #b91c1c;
+  color: var(--or-error);
 }
 
 .or-form__title {
@@ -47,13 +70,13 @@
 }
 
 .or-field__required {
-  color: #b91c1c;
+  color: var(--or-error);
 }
 
 .or-field__help {
   margin: 0;
   font-size: 0.75rem;
-  color: #6b7280;
+  color: var(--or-muted);
 }
 
 .or-field input,
@@ -61,9 +84,9 @@
 .or-field select {
   font: inherit;
   padding: 0.5rem 0.625rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--or-input-border);
   border-radius: 0.375rem;
-  background: #fff;
+  background: var(--or-input-bg);
   color: inherit;
 }
 
@@ -74,11 +97,16 @@
   font-weight: 400;
 }
 
+.or-form__error {
+  color: var(--or-error);
+  font-size: 0.875rem;
+}
+
 .or-form__submit {
   margin-top: 1rem;
   padding: 0.5rem 1rem;
-  background: #111827;
-  color: #fff;
+  background: var(--or-submit-bg);
+  color: var(--or-submit-fg);
   border: none;
   border-radius: 0.375rem;
   font: inherit;
@@ -87,5 +115,5 @@
 }
 
 .or-form__submit:hover {
-  background: #1f2937;
+  background: var(--or-submit-bg-hover);
 }

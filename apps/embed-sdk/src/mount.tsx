@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Form, type FormProps } from "@open-relay/form-renderer";
-import styles from "./styles.css?inline";
+import styles from "@open-relay/form-renderer/styles.css?inline";
 
 export function mount(host: HTMLElement, props: FormProps) {
   const shadow = host.attachShadow({ mode: "open" });
