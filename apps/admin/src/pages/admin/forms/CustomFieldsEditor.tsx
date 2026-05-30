@@ -157,7 +157,7 @@ export function CustomFieldsEditor({ value, onChange, errors }: CustomFieldsEdit
               <FormField
                 id={`${id}-key`}
                 label="Key"
-                hint="snake_case, unique within the form"
+                hint="Unique within the form. Match your backend's field key/id."
               >
                 <Input
                   value={field.key}

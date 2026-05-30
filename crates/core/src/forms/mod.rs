@@ -171,8 +171,10 @@ pub fn default_backends() -> Vec<BackendBinding> {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CustomField {
-    /// snake_case identifier, unique within the form. Used as the
-    /// submission key.
+    /// Identifier, unique within the form. Used verbatim as the submission key
+    /// and as the lookup key a backend maps onto its destination field, so it
+    /// accepts any format the destination needs (e.g. a GoHighLevel custom-field
+    /// unique key or field id) — only whitespace/control chars are rejected.
     pub key: String,
     pub label: String,
     #[serde(flatten)]

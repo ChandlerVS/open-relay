@@ -105,8 +105,14 @@ function validate(input: {
       customErrors[i] = "Key is required.";
       continue;
     }
-    if (!/^[a-z][a-z0-9_]*$/.test(f.key)) {
-      customErrors[i] = "Key must be snake_case (a-z, 0-9, _).";
+    // Keys are format-agnostic so they can match a backend's field key/id
+    // (e.g. GoHighLevel) exactly — only whitespace and length are constrained.
+    if (/\s/.test(f.key)) {
+      customErrors[i] = "Key cannot contain whitespace.";
+      continue;
+    }
+    if (f.key.length > 64) {
+      customErrors[i] = "Key must be 64 characters or fewer.";
       continue;
     }
     if (standardKeys.has(f.key)) {
@@ -241,6 +247,7 @@ function CreateForm({
         <StandardFieldsList value={standardFields} onChange={setStandardFields} />
       </Section>
       <Section title="Custom fields" hint="Anything not in the standard set.">
+        {hasGoHighLevel(backends) && <GoHighLevelKeyNotice />}
         <CustomFieldsEditor
           value={customFields}
           onChange={setCustomFields}
@@ -337,6 +344,7 @@ function EditForm({
         <StandardFieldsList value={standardFields} onChange={setStandardFields} />
       </Section>
       <Section title="Custom fields" hint="Anything not in the standard set.">
+        {hasGoHighLevel(backends) && <GoHighLevelKeyNotice />}
         <CustomFieldsEditor
           value={customFields}
           onChange={setCustomFields}
@@ -481,6 +489,28 @@ function DeliveryDestinations({
         )}
       </div>
     </div>
+  );
+}
+
+const GOHIGHLEVEL_KIND = "gohighlevel";
+
+function hasGoHighLevel(backends: BackendBinding[]): boolean {
+  return backends.some((b) => b.kind === GOHIGHLEVEL_KIND);
+}
+
+function GoHighLevelKeyNotice() {
+  return (
+    <Alert>
+      <AlertTitle>Matching GoHighLevel custom fields</AlertTitle>
+      <AlertDescription>
+        GoHighLevel only stores a custom value when its key matches a custom
+        field that already exists in your location — unknown keys are silently
+        dropped. Set each custom field's <strong>Key</strong> to the exact
+        GoHighLevel field <em>unique key</em> (e.g.{" "}
+        <code>contact.how_did_you_hear</code>) or field id. Standard fields map
+        automatically.
+      </AlertDescription>
+    </Alert>
   );
 }
 

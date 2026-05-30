@@ -99,26 +99,26 @@ pub fn slugify(input: &str) -> String {
     out
 }
 
+/// Custom field keys are intentionally format-agnostic. The key is used
+/// verbatim both as the submission JSON key and as the lookup key when a
+/// backend maps it onto a destination field — e.g. a GoHighLevel custom-field
+/// "unique key" (`contact.how_did_you_hear`) or a raw field id (`aBc123`).
+/// Forcing snake_case here would make those backends impossible to target, so
+/// we accept any key the destination needs and only reject the two things that
+/// would actually break the wire shape: emptiness/oversize, and whitespace or
+/// control characters (which can't appear in a well-formed JSON object key the
+/// admin can reason about).
 fn validate_custom_field_key(key: &str) -> CoreResult<()> {
-    if key.is_empty() || key.len() > MAX_KEY_LEN {
+    let count = key.chars().count();
+    if count == 0 || count > MAX_KEY_LEN {
         return Err(CoreError::BadRequest(format!(
             "custom field key must be 1..={MAX_KEY_LEN} characters"
         )));
     }
-    let bytes = key.as_bytes();
-    if !matches!(bytes[0], b'a'..=b'z') {
+    if key.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(CoreError::BadRequest(
-            "custom field key must start with a lowercase letter".into(),
+            "custom field key must not contain whitespace or control characters".into(),
         ));
-    }
-    for &b in bytes {
-        let ok = matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_');
-        if !ok {
-            return Err(CoreError::BadRequest(
-                "custom field key must contain only lowercase letters, digits, and underscores"
-                    .into(),
-            ));
-        }
     }
     Ok(())
 }
@@ -561,6 +561,40 @@ mod tests {
             key: "color".into(),
             label: "Color".into(),
             kind: CustomFieldType::Select { options: vec![] },
+            required: false,
+            placeholder: None,
+            help_text: None,
+            position: 0,
+        }];
+        assert!(validate_custom_fields(&fields).is_err());
+    }
+
+    #[test]
+    fn custom_field_key_accepts_backend_specific_formats() {
+        // GoHighLevel unique keys and raw field ids must round-trip unchanged.
+        for key in ["contact.how_did_you_hear", "aBc123XyZ", "lead-source"] {
+            let fields = vec![CustomField {
+                key: key.into(),
+                label: "Mapped field".into(),
+                kind: CustomFieldType::Text,
+                required: false,
+                placeholder: None,
+                help_text: None,
+                position: 0,
+            }];
+            assert!(
+                validate_custom_fields(&fields).is_ok(),
+                "expected key '{key}' to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_field_key_rejects_whitespace() {
+        let fields = vec![CustomField {
+            key: "has space".into(),
+            label: "Bad".into(),
+            kind: CustomFieldType::Text,
             required: false,
             placeholder: None,
             help_text: None,
