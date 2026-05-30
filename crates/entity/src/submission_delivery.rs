@@ -27,7 +27,16 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(indexed)]
     pub submission_id: i32,
+    /// Backend kind discriminator (e.g. `"open-relay"`, `"gohighlevel"`).
+    /// Combined with `backend_instance_id`, picks the destination at
+    /// delivery time. The legacy column name is retained for compatibility
+    /// with rows written before configurable instances landed.
     pub backend_name: String,
+    /// FK into `backend_instance`. `None` for static/built-in kinds (only
+    /// `"open-relay"` today). Required for configurable kinds — the worker
+    /// loads the row, runs its `config` JSON through the matching factory,
+    /// and dispatches to the built instance.
+    pub backend_instance_id: Option<i32>,
     /// One of: `pending`, `in_progress`, `succeeded`, `permanent_failure`, `exhausted`.
     pub status: String,
     pub attempts: i32,

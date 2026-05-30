@@ -164,6 +164,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/backends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_backends"];
+        put?: never;
+        post: operations["create_backend"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backends/kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_backend_kinds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/backends/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_backend"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_backend"];
+        options?: never;
+        head?: never;
+        patch: operations["update_backend"];
+        trace?: never;
+    };
     "/forms": {
         parameters: {
             query?: never;
@@ -458,13 +506,69 @@ export interface components {
     schemas: {
         /**
          * @description One backend destination on a form. Each entry queues one delivery row per
-         *     submission. `name` matches a `Backend::name()` registered in
-         *     `crate::backend::BackendRegistry`. Per-backend configuration (API keys,
-         *     list ids, etc.) is intentionally absent for now — the only backend so
-         *     far is OpenRelay itself, which is configuration-free.
+         *     submission.
+         *
+         *     `kind` matches a backend kind registered in `BackendRegistry` — either a
+         *     static singleton like `"open-relay"` (in which case `instance_id` is
+         *     `None`) or a configurable kind like `"gohighlevel"` whose credentials
+         *     live in `backend_instance` (in which case `instance_id` is `Some`).
+         *
+         *     The legacy serde key `"name"` is accepted as an alias for `kind` so JSON
+         *     written before configurable instances landed still parses.
          */
         BackendBinding: {
+            /** Format: int32 */
+            instance_id?: number | null;
+            kind: string;
+        };
+        /**
+         * @description Admin-facing instance shape. The `config` JSON round-trips verbatim —
+         *     the client owns kind-specific schemas. Secret fields are kept in `config`
+         *     rather than promoted to typed columns so future kinds can ship without
+         *     new migrations.
+         */
+        BackendInstanceDto: {
+            config: unknown;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            id: number;
+            kind: string;
             name: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description Lightweight reference used by 409 responses to tell the admin which
+         *     forms are blocking a delete.
+         */
+        BackendInstanceFormRef: {
+            /** Format: int32 */
+            id: number;
+            name: string;
+            slug: string;
+        };
+        BackendInstanceInUse: {
+            forms: components["schemas"]["BackendInstanceFormRef"][];
+        };
+        BackendInstanceList: {
+            items: components["schemas"]["BackendInstanceDto"][];
+            /** Format: int64 */
+            total: number;
+        };
+        /**
+         * @description Catalog entry returned by [`BackendRegistry::kinds`] — drives the
+         *     admin's "add backend" picker.
+         */
+        BackendKindInfo: {
+            /**
+             * @description `true` when this kind is backed by a `BackendFactory` and so each
+             *     instance needs its own row in `backend_instance`. `false` for
+             *     static singletons (e.g. `open-relay`) that the admin simply attaches
+             *     to a form without filling in any credentials.
+             */
+            configurable: boolean;
+            kind: string;
         };
         ChangePassword: {
             password: string;
@@ -602,6 +706,11 @@ export interface components {
             roles: components["schemas"]["RoleSummary"][];
             user: components["schemas"]["UserDto"];
         };
+        NewBackendInstance: {
+            config: unknown;
+            kind: string;
+            name: string;
+        };
         /**
          * @description Input shape for creating a form. `slug` defaults to a slugified `name`
          *     if `None`/empty. `standard_fields` defaults to [`StandardFieldsConfig::default`]
@@ -682,7 +791,7 @@ export interface components {
             enabled: boolean;
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:delete" | "auth_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "auth_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
@@ -824,6 +933,11 @@ export interface components {
             offset: number;
             /** Format: int64 */
             total: number;
+        };
+        /** @description Partial update. `None` means "leave the field alone". */
+        UpdateBackendInstance: {
+            config?: unknown;
+            name?: string | null;
         };
         /**
          * @description Partial update. `None` means "leave the field alone". Custom-field
@@ -1336,6 +1450,269 @@ export interface operations {
                 content?: never;
             };
             /** @description OAuth not configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_backends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backend instances */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendInstanceList"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_backend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewBackendInstance"];
+            };
+        };
+        responses: {
+            /** @description Backend instance created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendInstanceDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_backend_kinds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backend kind catalogue */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendKindInfo"][];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_backend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backend instance id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backend instance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendInstanceDto"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Backend instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_backend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backend instance id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backend instance deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Backend instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Still referenced by forms */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendInstanceInUse"];
+                };
+            };
+        };
+    };
+    update_backend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backend instance id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateBackendInstance"];
+            };
+        };
+        responses: {
+            /** @description Backend instance updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendInstanceDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Backend instance not found */
             404: {
                 headers: {
                     [name: string]: unknown;

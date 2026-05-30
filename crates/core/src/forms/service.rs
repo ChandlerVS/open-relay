@@ -181,11 +181,12 @@ pub fn validate_custom_fields(fields: &[CustomField]) -> CoreResult<()> {
     Ok(())
 }
 
-/// Reject empty bindings, duplicate names, or names not present in the
-/// runtime backend registry. The registry is the source of truth — a form
-/// can't be saved bound to a backend the server doesn't actually know how
-/// to deliver to.
-pub fn validate_backends(
+/// Reject empty bindings, duplicates, kinds the registry doesn't know about,
+/// or instance ids that don't resolve to a `backend_instance` row of the
+/// matching kind. Configurable kinds *must* carry an `instance_id`; static
+/// kinds *must not*.
+pub async fn validate_backends<C: ConnectionTrait>(
+    conn: &C,
     bindings: &[BackendBinding],
     registry: &BackendRegistry,
 ) -> CoreResult<()> {
@@ -194,19 +195,53 @@ pub fn validate_backends(
             "form must have at least one backend".into(),
         ));
     }
-    let mut seen: HashSet<&str> = HashSet::with_capacity(bindings.len());
+    let mut seen: HashSet<(String, Option<i32>)> = HashSet::with_capacity(bindings.len());
     for b in bindings {
-        let name = b.name.trim();
-        if name.is_empty() {
-            return Err(CoreError::BadRequest("backend name is empty".into()));
+        let kind = b.kind.trim();
+        if kind.is_empty() {
+            return Err(CoreError::BadRequest("backend kind is empty".into()));
         }
-        if !seen.insert(name) {
+        let key = (kind.to_string(), b.instance_id);
+        if !seen.insert(key) {
             return Err(CoreError::BadRequest(format!(
-                "duplicate backend binding: {name}"
+                "duplicate backend binding: {kind}{}",
+                b.instance_id
+                    .map(|id| format!(":{id}"))
+                    .unwrap_or_default()
             )));
         }
-        if registry.get(name).is_none() {
-            return Err(CoreError::BadRequest(format!("unknown backend: {name}")));
+        if !registry.knows(kind) {
+            return Err(CoreError::BadRequest(format!("unknown backend: {kind}")));
+        }
+        let configurable = registry.is_configurable(kind);
+        match (configurable, b.instance_id) {
+            (true, None) => {
+                return Err(CoreError::BadRequest(format!(
+                    "backend '{kind}' requires an instance_id"
+                )));
+            }
+            (false, Some(_)) => {
+                return Err(CoreError::BadRequest(format!(
+                    "backend '{kind}' is not configurable; drop instance_id"
+                )));
+            }
+            (true, Some(instance_id)) => {
+                let inst = entity::backend_instance::Entity::find_by_id(instance_id)
+                    .one(conn)
+                    .await?;
+                let Some(inst) = inst else {
+                    return Err(CoreError::BadRequest(format!(
+                        "backend instance {instance_id} not found"
+                    )));
+                };
+                if inst.kind != kind {
+                    return Err(CoreError::BadRequest(format!(
+                        "backend instance {instance_id} is kind '{}', expected '{kind}'",
+                        inst.kind
+                    )));
+                }
+            }
+            (false, None) => {}
         }
     }
     Ok(())
@@ -333,7 +368,7 @@ pub async fn create_form<C: ConnectionTrait>(
     validate_custom_fields(&custom_fields)?;
 
     let backends = input.backends.unwrap_or_else(default_backends);
-    validate_backends(&backends, registry)?;
+    validate_backends(conn, &backends, registry).await?;
 
     let model = entity::form::ActiveModel {
         owner_id: ActiveValue::Set(owner_id),
@@ -423,7 +458,7 @@ pub async fn update_form<C: ConnectionTrait>(
     }
 
     if let Some(b) = input.backends {
-        validate_backends(&b, registry)?;
+        validate_backends(conn, &b, registry).await?;
         active.backends = ActiveValue::Set(Some(json_or_internal(&b)?));
     }
 

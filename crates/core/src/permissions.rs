@@ -43,6 +43,12 @@ pub enum Permission {
     SubmissionsRead,
     #[serde(rename = "submissions:delete")]
     SubmissionsDelete,
+    #[serde(rename = "backends:read")]
+    BackendsRead,
+    #[serde(rename = "backends:write")]
+    BackendsWrite,
+    #[serde(rename = "backends:delete")]
+    BackendsDelete,
     #[serde(rename = "auth_config:write")]
     AuthConfigWrite,
 }
@@ -66,6 +72,9 @@ impl Permission {
             Self::FormsDelete => "forms:delete",
             Self::SubmissionsRead => "submissions:read",
             Self::SubmissionsDelete => "submissions:delete",
+            Self::BackendsRead => "backends:read",
+            Self::BackendsWrite => "backends:write",
+            Self::BackendsDelete => "backends:delete",
             Self::AuthConfigWrite => "auth_config:write",
         }
     }
@@ -84,6 +93,9 @@ impl Permission {
             "forms:delete" => Some(Self::FormsDelete),
             "submissions:read" => Some(Self::SubmissionsRead),
             "submissions:delete" => Some(Self::SubmissionsDelete),
+            "backends:read" => Some(Self::BackendsRead),
+            "backends:write" => Some(Self::BackendsWrite),
+            "backends:delete" => Some(Self::BackendsDelete),
             "auth_config:write" => Some(Self::AuthConfigWrite),
             _ => None,
         }

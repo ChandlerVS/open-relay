@@ -20,12 +20,24 @@ import {
 } from "../../../lib/forms/useFormMutations";
 import type { FormDto } from "../../../lib/forms/useForms";
 import { STANDARD_FIELDS } from "../../../lib/forms/standardFields";
+import { useBackendsList } from "../../../lib/backends/useBackends";
 import { StandardFieldsList } from "./StandardFieldsList";
 import { CustomFieldsEditor } from "./CustomFieldsEditor";
 
 type StandardFieldsConfig = components["schemas"]["StandardFieldsConfig"];
 type StandardFieldConfig = components["schemas"]["StandardFieldConfig"];
 type CustomField = components["schemas"]["CustomField"];
+type BackendBinding = components["schemas"]["BackendBinding"];
+
+const OPEN_RELAY_KIND = "open-relay";
+const openRelayBinding = (): BackendBinding => ({
+  kind: OPEN_RELAY_KIND,
+  instance_id: null,
+});
+
+function bindingKey(b: BackendBinding): string {
+  return `${b.kind}:${b.instance_id ?? ""}`;
+}
 
 export interface FormFormDialogProps {
   open: boolean;
@@ -62,6 +74,7 @@ function validate(input: {
   name: string;
   slug: string;
   customFields: CustomField[];
+  backends: BackendBinding[];
 }): ValidationResult {
   if (!input.name.trim()) return { ok: false, message: "Name is required." };
   if (input.slug) {
@@ -118,6 +131,12 @@ function validate(input: {
       ok: false,
       message: "Fix the highlighted custom fields.",
       customFieldErrors: customErrors,
+    };
+  }
+  if (input.backends.length === 0) {
+    return {
+      ok: false,
+      message: "Pick at least one delivery destination.",
     };
   }
   return { ok: true };
@@ -179,6 +198,7 @@ function CreateForm({
     defaultStandardFields(),
   );
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [backends, setBackends] = useState<BackendBinding[]>([openRelayBinding()]);
   const [formError, setFormError] = useState<string | null>(null);
   const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
@@ -186,7 +206,7 @@ function CreateForm({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        const v = validate({ name, slug, customFields });
+        const v = validate({ name, slug, customFields, backends });
         setCustomErrors(v.customFieldErrors ?? {});
         if (!v.ok) {
           setFormError(v.message ?? "Form has errors.");
@@ -199,6 +219,7 @@ function CreateForm({
             slug: slug.trim() ? slug.trim() : null,
             standard_fields: standardFields,
             custom_fields: customFields,
+            backends,
           },
           {
             onSuccess: (f) => onSaved(f),
@@ -225,6 +246,12 @@ function CreateForm({
           onChange={setCustomFields}
           errors={customErrors}
         />
+      </Section>
+      <Section
+        title="Delivery destinations"
+        hint="Every submission fans out to each selected backend."
+      >
+        <DeliveryDestinations value={backends} onChange={setBackends} />
       </Section>
       <DialogFooter>
         <Button
@@ -259,6 +286,7 @@ function EditForm({
     form.standard_fields,
   );
   const [customFields, setCustomFields] = useState<CustomField[]>(form.custom_fields);
+  const [backends, setBackends] = useState<BackendBinding[]>(form.backends);
   const [formError, setFormError] = useState<string | null>(null);
   const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
@@ -266,13 +294,18 @@ function EditForm({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        const v = validate({ name, slug, customFields });
+        const v = validate({ name, slug, customFields, backends });
         setCustomErrors(v.customFieldErrors ?? {});
         if (!v.ok) {
           setFormError(v.message ?? "Form has errors.");
           return;
         }
         setFormError(null);
+        const existingKeys = new Set(form.backends.map(bindingKey));
+        const nextKeys = new Set(backends.map(bindingKey));
+        const backendsChanged =
+          existingKeys.size !== nextKeys.size ||
+          [...existingKeys].some((k) => !nextKeys.has(k));
         update.mutate(
           {
             id: form.id,
@@ -281,6 +314,7 @@ function EditForm({
               slug: slug.trim() !== form.slug ? slug.trim() : undefined,
               standard_fields: standardFields,
               custom_fields: customFields,
+              backends: backendsChanged ? backends : undefined,
             },
           },
           {
@@ -308,6 +342,12 @@ function EditForm({
           onChange={setCustomFields}
           errors={customErrors}
         />
+      </Section>
+      <Section
+        title="Delivery destinations"
+        hint="Every submission fans out to each selected backend."
+      >
+        <DeliveryDestinations value={backends} onChange={setBackends} />
       </Section>
       <DialogFooter>
         <Button
@@ -359,6 +399,98 @@ function BasicsSection({
       </FormField>
     </div>
   );
+}
+
+function DeliveryDestinations({
+  value,
+  onChange,
+}: {
+  value: BackendBinding[];
+  onChange: (next: BackendBinding[]) => void;
+}) {
+  const { data, isLoading, isError, error, refetch } = useBackendsList();
+  const selectedKeys = new Set(value.map(bindingKey));
+
+  const toggle = (next: BackendBinding) => {
+    const key = bindingKey(next);
+    if (selectedKeys.has(key)) {
+      onChange(value.filter((b) => bindingKey(b) !== key));
+    } else {
+      onChange([...value, next]);
+    }
+  };
+
+  const openRelay = openRelayBinding();
+  const items: { binding: BackendBinding; label: string; description: string }[] = [
+    {
+      binding: openRelay,
+      label: "OpenRelay",
+      description: "Store the submission in this dashboard.",
+    },
+    ...(data?.items ?? []).map((b) => ({
+      binding: { kind: b.kind, instance_id: b.id } as BackendBinding,
+      label: b.name,
+      description: kindDescription(b.kind),
+    })),
+  ];
+
+  return (
+    <div className="space-y-2">
+      {isError && (
+        <Alert variant="destructive">
+          <AlertTitle>Couldn't load backends</AlertTitle>
+          <AlertDescription>
+            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
+            <button
+              type="button"
+              className="underline font-medium"
+              onClick={() => refetch()}
+            >
+              Try again
+            </button>
+          </AlertDescription>
+        </Alert>
+      )}
+      <div className="border border-border rounded-md divide-y divide-border">
+        {items.map(({ binding, label, description }) => {
+          const key = bindingKey(binding);
+          const checked = selectedKeys.has(key);
+          return (
+            <label
+              key={key}
+              className="flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-accent/40"
+            >
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4"
+                checked={checked}
+                onChange={() => toggle(binding)}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">{label}</div>
+                <div className="text-xs text-muted-foreground">{description}</div>
+              </div>
+            </label>
+          );
+        })}
+        {!isLoading && (data?.items?.length ?? 0) === 0 && (
+          <div className="px-3 py-2 text-xs text-muted-foreground">
+            No configured backends yet. Add one in the Backends section to
+            relay submissions to a CRM.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function kindDescription(kind: string): string {
+  switch (kind) {
+    case "gohighlevel":
+      return "GoHighLevel — upserts a contact.";
+    default:
+      return kind;
+  }
 }
 
 function Section({

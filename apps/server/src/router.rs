@@ -25,6 +25,7 @@ use crate::state::AppState;
         (name = "users", description = "User management."),
         (name = "roles", description = "Roles + permission catalogue."),
         (name = "forms", description = "Form schemas embedded by host pages."),
+        (name = "backends", description = "Configured delivery backends (e.g. GoHighLevel)."),
         (name = "submissions", description = "Form submissions and their per-backend delivery state."),
         (name = "public", description = "Unauthenticated endpoints consumed by embedded forms."),
     ),
@@ -40,6 +41,7 @@ pub fn build(state: AppState) -> Router {
         .nest("/roles", routes::roles::router())
         .nest("/permissions", routes::roles::permissions_router())
         .nest("/forms", routes::forms::router())
+        .nest("/backends", routes::backends::router())
         .nest("/submissions", routes::submissions::router())
         .nest("/public/forms", routes::public_forms::router())
         .split_for_parts();

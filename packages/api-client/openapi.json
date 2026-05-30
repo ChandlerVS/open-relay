@@ -409,6 +409,263 @@
         }
       }
     },
+    "/backends": {
+      "get": {
+        "tags": [
+          "backends"
+        ],
+        "operationId": "list_backends",
+        "responses": {
+          "200": {
+            "description": "Backend instances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackendInstanceList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "backends"
+        ],
+        "operationId": "create_backend",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewBackendInstance"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Backend instance created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackendInstanceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/backends/kinds": {
+      "get": {
+        "tags": [
+          "backends"
+        ],
+        "operationId": "list_backend_kinds",
+        "responses": {
+          "200": {
+            "description": "Backend kind catalogue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackendKindInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/backends/{id}": {
+      "get": {
+        "tags": [
+          "backends"
+        ],
+        "operationId": "get_backend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Backend instance id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backend instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackendInstanceDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Backend instance not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "backends"
+        ],
+        "operationId": "delete_backend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Backend instance id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Backend instance deleted"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Backend instance not found"
+          },
+          "409": {
+            "description": "Still referenced by forms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackendInstanceInUse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "backends"
+        ],
+        "operationId": "update_backend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Backend instance id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBackendInstance"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Backend instance updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackendInstanceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Backend instance not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/forms": {
       "get": {
         "tags": [
@@ -1607,12 +1864,124 @@
     "schemas": {
       "BackendBinding": {
         "type": "object",
-        "description": "One backend destination on a form. Each entry queues one delivery row per\nsubmission. `name` matches a `Backend::name()` registered in\n`crate::backend::BackendRegistry`. Per-backend configuration (API keys,\nlist ids, etc.) is intentionally absent for now — the only backend so\nfar is OpenRelay itself, which is configuration-free.",
+        "description": "One backend destination on a form. Each entry queues one delivery row per\nsubmission.\n\n`kind` matches a backend kind registered in `BackendRegistry` — either a\nstatic singleton like `\"open-relay\"` (in which case `instance_id` is\n`None`) or a configurable kind like `\"gohighlevel\"` whose credentials\nlive in `backend_instance` (in which case `instance_id` is `Some`).\n\nThe legacy serde key `\"name\"` is accepted as an alias for `kind` so JSON\nwritten before configurable instances landed still parses.",
         "required": [
-          "name"
+          "kind"
         ],
         "properties": {
+          "instance_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "BackendInstanceDto": {
+        "type": "object",
+        "description": "Admin-facing instance shape. The `config` JSON round-trips verbatim —\nthe client owns kind-specific schemas. Secret fields are kept in `config`\nrather than promoted to typed columns so future kinds can ship without\nnew migrations.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "config",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {},
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string"
+          },
           "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BackendInstanceFormRef": {
+        "type": "object",
+        "description": "Lightweight reference used by 409 responses to tell the admin which\nforms are blocking a delete.",
+        "required": [
+          "id",
+          "name",
+          "slug"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "BackendInstanceInUse": {
+        "type": "object",
+        "required": [
+          "forms"
+        ],
+        "properties": {
+          "forms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackendInstanceFormRef"
+            }
+          }
+        }
+      },
+      "BackendInstanceList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackendInstanceDto"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "BackendKindInfo": {
+        "type": "object",
+        "description": "Catalog entry returned by [`BackendRegistry::kinds`] — drives the\nadmin's \"add backend\" picker.",
+        "required": [
+          "kind",
+          "configurable"
+        ],
+        "properties": {
+          "configurable": {
+            "type": "boolean",
+            "description": "`true` when this kind is backed by a `BackendFactory` and so each\ninstance needs its own row in `backend_instance`. `false` for\nstatic singletons (e.g. `open-relay`) that the admin simply attaches\nto a form without filling in any credentials."
+          },
+          "kind": {
             "type": "string"
           }
         }
@@ -2072,6 +2441,23 @@
           }
         }
       },
+      "NewBackendInstance": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "config"
+        ],
+        "properties": {
+          "config": {},
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "NewForm": {
         "type": "object",
         "description": "Input shape for creating a form. `slug` defaults to a slugified `name`\nif `None`/empty. `standard_fields` defaults to [`StandardFieldsConfig::default`]\nif absent. `custom_fields` defaults to empty.",
@@ -2286,6 +2672,9 @@
           "forms:delete",
           "submissions:read",
           "submissions:delete",
+          "backends:read",
+          "backends:write",
+          "backends:delete",
           "auth_config:write"
         ]
       },
@@ -2718,6 +3107,19 @@
           }
         }
       },
+      "UpdateBackendInstance": {
+        "type": "object",
+        "description": "Partial update. `None` means \"leave the field alone\".",
+        "properties": {
+          "config": {},
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdateForm": {
         "type": "object",
         "description": "Partial update. `None` means \"leave the field alone\". Custom-field\nupdates replace the entire list (`Some(vec![])` clears all customs).",
@@ -3005,6 +3407,10 @@
     {
       "name": "forms",
       "description": "Form schemas embedded by host pages."
+    },
+    {
+      "name": "backends",
+      "description": "Configured delivery backends (e.g. GoHighLevel)."
     },
     {
       "name": "submissions",

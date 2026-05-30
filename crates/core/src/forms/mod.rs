@@ -137,19 +137,28 @@ pub enum CustomFieldType {
 }
 
 /// One backend destination on a form. Each entry queues one delivery row per
-/// submission. `name` matches a `Backend::name()` registered in
-/// `crate::backend::BackendRegistry`. Per-backend configuration (API keys,
-/// list ids, etc.) is intentionally absent for now — the only backend so
-/// far is OpenRelay itself, which is configuration-free.
+/// submission.
+///
+/// `kind` matches a backend kind registered in `BackendRegistry` — either a
+/// static singleton like `"open-relay"` (in which case `instance_id` is
+/// `None`) or a configurable kind like `"gohighlevel"` whose credentials
+/// live in `backend_instance` (in which case `instance_id` is `Some`).
+///
+/// The legacy serde key `"name"` is accepted as an alias for `kind` so JSON
+/// written before configurable instances landed still parses.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
 pub struct BackendBinding {
-    pub name: String,
+    #[serde(alias = "name")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<i32>,
 }
 
 impl BackendBinding {
     pub fn open_relay() -> Self {
         Self {
-            name: "open-relay".into(),
+            kind: "open-relay".into(),
+            instance_id: None,
         }
     }
 }

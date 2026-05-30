@@ -8,6 +8,7 @@ import { DashboardPage } from "../pages/admin/DashboardPage";
 import { UsersPage } from "../pages/admin/users/UsersPage";
 import { RolesPage } from "../pages/admin/roles/RolesPage";
 import { FormsPage } from "../pages/admin/forms/FormsPage";
+import { BackendsPage } from "../pages/admin/backends/BackendsPage";
 import { SubmissionsPage } from "../pages/admin/submissions/SubmissionsPage";
 import { AuthSettingsPage } from "../pages/admin/settings/AuthSettingsPage";
 import { ProfilePage } from "../pages/admin/profile/ProfilePage";
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <DashboardPage /> },
           { path: "forms", element: <FormsPage /> },
+          { path: "backends", element: <BackendsPage /> },
           { path: "submissions", element: <SubmissionsPage /> },
           { path: "users", element: <UsersPage /> },
           { path: "roles", element: <RolesPage /> },

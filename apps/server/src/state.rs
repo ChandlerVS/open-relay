@@ -3,7 +3,7 @@ use std::sync::Arc;
 use open_relay_core::auth::AuthKeys;
 use open_relay_core::auth::provider::ProviderRegistry;
 use open_relay_core::backend::registry::BackendRegistry;
-use open_relay_core::backend::OpenRelayBackend;
+use open_relay_core::backend::{GoHighLevelFactory, OpenRelayBackend};
 use sea_orm::DatabaseConnection;
 
 use crate::config::Config;
@@ -34,7 +34,8 @@ impl AppState {
         let auth_keys = Arc::new(AuthKeys::from_secret(config.jwt_secret.as_bytes()));
         let providers = Arc::new(ProviderRegistry::new());
         let mut backends = BackendRegistry::new();
-        backends.register(Arc::new(OpenRelayBackend));
+        backends.register_static(Arc::new(OpenRelayBackend));
+        backends.register_factory(Arc::new(GoHighLevelFactory::new()));
         Ok(Self {
             db,
             auth_keys,

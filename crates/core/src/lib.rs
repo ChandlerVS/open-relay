@@ -12,6 +12,7 @@
 
 pub mod auth;
 pub mod backend;
+pub mod backends;
 pub mod error;
 pub mod external_identity;
 pub mod forms;

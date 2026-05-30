@@ -27,7 +27,7 @@ use sea_orm::{
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use crate::backend::{Backend, DeliveryError, DeliveryPayload};
+use crate::backend::{Backend, BackendBuildError, DeliveryError, DeliveryPayload};
 use crate::backend::registry::BackendRegistry;
 use crate::submissions::service::{
     STATUS_EXHAUSTED, STATUS_IN_PROGRESS, STATUS_PENDING, STATUS_PERMANENT_FAILURE,
@@ -52,10 +52,8 @@ pub fn spawn(db: DatabaseConnection, registry: BackendRegistry) -> WorkerHandle 
 }
 
 async fn run(db: DatabaseConnection, registry: BackendRegistry) {
-    info!(
-        backends = ?registry.names().collect::<Vec<_>>(),
-        "submission delivery worker started"
-    );
+    let kinds: Vec<String> = registry.kinds().into_iter().map(|k| k.kind).collect();
+    info!(backends = ?kinds, "submission delivery worker started");
 
     if let Err(e) = reclaim_stale_leases(&db).await {
         warn!(error = ?e, "stale-lease reclaim failed at startup");
@@ -100,6 +98,7 @@ struct Leased {
     id: i32,
     submission_id: i32,
     backend_name: String,
+    backend_instance_id: Option<i32>,
     attempts: i32,
 }
 
@@ -127,7 +126,7 @@ async fn lease_batch(db: &DatabaseConnection) -> anyhow::Result<Vec<Leased>> {
     let backend = tx.get_database_backend();
     let pick = Statement::from_sql_and_values(
         backend,
-        "SELECT id, submission_id, backend_name, attempts
+        "SELECT id, submission_id, backend_name, backend_instance_id, attempts
          FROM submission_delivery
          WHERE status = ? AND next_attempt_at <= ?
          ORDER BY next_attempt_at ASC
@@ -151,6 +150,7 @@ async fn lease_batch(db: &DatabaseConnection) -> anyhow::Result<Vec<Leased>> {
             id: r.try_get::<i32>("", "id")?,
             submission_id: r.try_get::<i32>("", "submission_id")?,
             backend_name: r.try_get::<String>("", "backend_name")?,
+            backend_instance_id: r.try_get::<Option<i32>>("", "backend_instance_id")?,
             attempts: r.try_get::<i32>("", "attempts")?,
         });
     }
@@ -203,16 +203,72 @@ async fn dispatch_one(
         }
     };
 
-    let backend: Arc<dyn Backend> = match registry.get(&row.backend_name) {
-        Some(b) => b,
-        None => {
-            warn!(
-                delivery_id = row.id,
-                backend = %row.backend_name,
-                "backend not registered — marking permanent_failure"
-            );
-            mark_permanent(db, row.id, "backend not registered").await?;
-            return Ok(());
+    let backend: Arc<dyn Backend> = match row.backend_instance_id {
+        None => match registry.get_static(&row.backend_name) {
+            Some(b) => b,
+            None => {
+                warn!(
+                    delivery_id = row.id,
+                    backend = %row.backend_name,
+                    "static backend not registered — marking permanent_failure"
+                );
+                mark_permanent(db, row.id, "backend not registered").await?;
+                return Ok(());
+            }
+        },
+        Some(instance_id) => {
+            let inst = entity::backend_instance::Entity::find_by_id(instance_id)
+                .one(db)
+                .await?;
+            let inst = match inst {
+                Some(i) => i,
+                None => {
+                    warn!(
+                        delivery_id = row.id,
+                        backend = %row.backend_name,
+                        instance_id,
+                        "backend instance row missing — marking permanent_failure"
+                    );
+                    mark_permanent(db, row.id, "backend instance row missing").await?;
+                    return Ok(());
+                }
+            };
+            if inst.kind != row.backend_name {
+                warn!(
+                    delivery_id = row.id,
+                    expected = %row.backend_name,
+                    actual = %inst.kind,
+                    "backend instance kind mismatch — marking permanent_failure"
+                );
+                mark_permanent(db, row.id, "backend instance kind mismatch").await?;
+                return Ok(());
+            }
+            let factory = match registry.get_factory(&inst.kind) {
+                Some(f) => f,
+                None => {
+                    warn!(
+                        delivery_id = row.id,
+                        backend = %inst.kind,
+                        "backend factory not registered — marking permanent_failure"
+                    );
+                    mark_permanent(db, row.id, "backend factory not registered").await?;
+                    return Ok(());
+                }
+            };
+            match factory.build(&inst.config) {
+                Ok(b) => b,
+                Err(BackendBuildError::Invalid(msg)) => {
+                    warn!(
+                        delivery_id = row.id,
+                        backend = %inst.kind,
+                        instance_id,
+                        error = %msg,
+                        "backend config invalid — marking permanent_failure"
+                    );
+                    mark_permanent(db, row.id, &format!("invalid backend config: {msg}")).await?;
+                    return Ok(());
+                }
+            }
         }
     };
 

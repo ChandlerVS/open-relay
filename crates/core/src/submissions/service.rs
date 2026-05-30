@@ -310,7 +310,8 @@ async fn insert_deliveries<C: ConnectionTrait>(
     for b in backends {
         let model = entity::submission_delivery::ActiveModel {
             submission_id: ActiveValue::Set(submission_id),
-            backend_name: ActiveValue::Set(b.name.clone()),
+            backend_name: ActiveValue::Set(b.kind.clone()),
+            backend_instance_id: ActiveValue::Set(b.instance_id),
             status: ActiveValue::Set(STATUS_PENDING.to_string()),
             attempts: ActiveValue::Set(0),
             next_attempt_at: ActiveValue::Set(now),

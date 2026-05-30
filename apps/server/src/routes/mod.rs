@@ -1,3 +1,4 @@
+pub mod backends;
 pub mod forms;
 pub mod health;
 pub mod public_forms;
