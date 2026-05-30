@@ -770,6 +770,54 @@
         }
       }
     },
+    "/public/forms/{id}/submissions": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "create_submission_for_form",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Form id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSubmissionPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Submission accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmissionAcceptedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "404": {
+            "description": "Form not found"
+          }
+        }
+      }
+    },
     "/roles": {
       "get": {
         "tags": [
@@ -1080,6 +1128,151 @@
             }
           }
         }
+      }
+    },
+    "/submissions": {
+      "get": {
+        "tags": [
+          "submissions"
+        ],
+        "operationId": "list_submissions",
+        "parameters": [
+          {
+            "name": "form_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated submissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmissionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/submissions/{id}": {
+      "get": {
+        "tags": [
+          "submissions"
+        ],
+        "operationId": "get_submission",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Submission id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Submission with delivery rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmissionDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Submission not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "submissions"
+        ],
+        "operationId": "delete_submission",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Submission id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Submission deleted"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Submission not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/users": {
@@ -1412,6 +1605,18 @@
   },
   "components": {
     "schemas": {
+      "BackendBinding": {
+        "type": "object",
+        "description": "One backend destination on a form. Each entry queues one delivery row per\nsubmission. `name` matches a `Backend::name()` registered in\n`crate::backend::BackendRegistry`. Per-backend configuration (API keys,\nlist ids, etc.) is intentionally absent for now — the only backend so\nfar is OpenRelay itself, which is configuration-free.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "ChangePassword": {
         "type": "object",
         "required": [
@@ -1682,10 +1887,17 @@
           "slug",
           "standard_fields",
           "custom_fields",
+          "backends",
           "created_at",
           "updated_at"
         ],
         "properties": {
+          "backends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackendBinding"
+            }
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -1867,6 +2079,16 @@
           "name"
         ],
         "properties": {
+          "backends": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackendBinding"
+            },
+            "description": "Backends to deliver submissions to. Defaults to `[open-relay]` if\nomitted. An empty vec is rejected — a form must have at least one\nbackend or submissions go nowhere."
+          },
           "custom_fields": {
             "type": "array",
             "items": {
@@ -1915,6 +2137,14 @@
               "$ref": "#/components/schemas/Permission"
             }
           }
+        }
+      },
+      "NewSubmissionPayload": {
+        "type": "object",
+        "description": "Public-facing POST body. Keys are either standard field keys (matching\n[`crate::forms::STANDARD_FIELD_KEYS`]) or custom field keys on the form.\nUnknown keys, and standard keys for fields that are disabled on the form,\nare dropped silently.\n\nValues are kept as raw JSON so the same body can carry strings, booleans\n(checkboxes), and numbers. Standard fields are always coerced to strings;\ncustom fields are stored as-typed.",
+        "additionalProperties": {},
+        "propertyNames": {
+          "type": "string"
         }
       },
       "NewUser": {
@@ -2054,6 +2284,8 @@
           "forms:read",
           "forms:write",
           "forms:delete",
+          "submissions:read",
+          "submissions:delete",
           "auth_config:write"
         ]
       },
@@ -2088,9 +2320,16 @@
           "name",
           "slug",
           "standard_fields",
-          "custom_fields"
+          "custom_fields",
+          "backends"
         ],
         "properties": {
+          "backends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackendBinding"
+            }
+          },
           "custom_fields": {
             "type": "array",
             "items": {
@@ -2264,10 +2503,234 @@
           }
         }
       },
+      "SubmissionAcceptedDto": {
+        "type": "object",
+        "description": "Returned to the embed SDK on a successful POST. Deliberately minimal —\nthe public caller already has the data it sent us; echoing it back wastes\nbytes and leaks side effects (e.g. trim normalisation) the SDK doesn't\nneed to see.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "SubmissionDeliveryDto": {
+        "type": "object",
+        "description": "Admin-facing view of a delivery row.",
+        "required": [
+          "id",
+          "backend_name",
+          "status",
+          "attempts",
+          "next_attempt_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "backend_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_attempt_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SubmissionDto": {
+        "type": "object",
+        "description": "Admin-facing view of a submission. All 14 standard columns are returned\nindividually; everything else is in `custom_data`. `deliveries` is loaded\non detail and list endpoints — there are at most a small fixed number per\nsubmission, so the N+1 is bounded by `forms × backends`.",
+        "required": [
+          "id",
+          "form_id",
+          "custom_data",
+          "created_at",
+          "deliveries"
+        ],
+        "properties": {
+          "address_line_1": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "address_line_2": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "company": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "custom_data": {},
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubmissionDeliveryDto"
+            }
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "form_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "job_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postal_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SubmissionList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubmissionDto"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "UpdateForm": {
         "type": "object",
         "description": "Partial update. `None` means \"leave the field alone\". Custom-field\nupdates replace the entire list (`Some(vec![])` clears all customs).",
         "properties": {
+          "backends": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/BackendBinding"
+            }
+          },
           "custom_fields": {
             "type": [
               "array",
@@ -2542,6 +3005,10 @@
     {
       "name": "forms",
       "description": "Form schemas embedded by host pages."
+    },
+    {
+      "name": "submissions",
+      "description": "Form submissions and their per-backend delivery state."
     },
     {
       "name": "public",

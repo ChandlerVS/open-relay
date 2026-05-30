@@ -25,7 +25,12 @@ const ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/forms", label: "Forms", icon: FileText, perm: "forms:read" },
   { to: "/backends", label: "Backends", icon: Plug, disabled: true },
-  { to: "/submissions", label: "Submissions", icon: Inbox, disabled: true },
+  {
+    to: "/submissions",
+    label: "Submissions",
+    icon: Inbox,
+    perm: "submissions:read",
+  },
   { to: "/users", label: "Users", icon: Users, perm: "users:read" },
   { to: "/roles", label: "Roles", icon: Shield, perm: "roles:read" },
   {

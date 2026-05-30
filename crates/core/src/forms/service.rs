@@ -12,9 +12,11 @@ use sea_orm::{
 };
 
 use super::{
-    CustomField, CustomFieldType, FormDto, FormList, FormSelectOption, ListQuery, NewForm,
-    PublicFormDto, STANDARD_FIELD_KEYS, StandardFieldsConfig, UpdateForm,
+    BackendBinding, CustomField, CustomFieldType, FormDto, FormList, FormSelectOption, ListQuery,
+    NewForm, PublicFormDto, STANDARD_FIELD_KEYS, StandardFieldsConfig, UpdateForm,
+    default_backends,
 };
+use crate::backend::BackendRegistry;
 use crate::error::{CoreError, CoreResult};
 
 const MAX_NAME_LEN: usize = 200;
@@ -179,6 +181,42 @@ pub fn validate_custom_fields(fields: &[CustomField]) -> CoreResult<()> {
     Ok(())
 }
 
+/// Reject empty bindings, duplicate names, or names not present in the
+/// runtime backend registry. The registry is the source of truth — a form
+/// can't be saved bound to a backend the server doesn't actually know how
+/// to deliver to.
+pub fn validate_backends(
+    bindings: &[BackendBinding],
+    registry: &BackendRegistry,
+) -> CoreResult<()> {
+    if bindings.is_empty() {
+        return Err(CoreError::BadRequest(
+            "form must have at least one backend".into(),
+        ));
+    }
+    let mut seen: HashSet<&str> = HashSet::with_capacity(bindings.len());
+    for b in bindings {
+        let name = b.name.trim();
+        if name.is_empty() {
+            return Err(CoreError::BadRequest("backend name is empty".into()));
+        }
+        if !seen.insert(name) {
+            return Err(CoreError::BadRequest(format!(
+                "duplicate backend binding: {name}"
+            )));
+        }
+        if registry.get(name).is_none() {
+            return Err(CoreError::BadRequest(format!("unknown backend: {name}")));
+        }
+    }
+    Ok(())
+}
+
+fn parse_backends(value: &sea_orm::JsonValue) -> CoreResult<Vec<BackendBinding>> {
+    serde_json::from_value(value.clone())
+        .map_err(|e| CoreError::Internal(anyhow!("failed to parse backends json: {e}")))
+}
+
 fn normalize_custom_fields(mut fields: Vec<CustomField>) -> Vec<CustomField> {
     fields.sort_by_key(|f| f.position);
     for (idx, f) in fields.iter_mut().enumerate() {
@@ -207,11 +245,24 @@ fn json_or_internal<T: serde::Serialize>(t: &T) -> CoreResult<sea_orm::JsonValue
     serde_json::to_value(t).map_err(|e| CoreError::Internal(anyhow!("json serialize failed: {e}")))
 }
 
+/// Pull `backends` off a form row, parsing the JSON column. Rows created
+/// before the `backends` column existed have it as `NULL`; treat that as the
+/// default `[open-relay]`. The boot-time backfill clears the `NULL`s
+/// eventually, but the read path is tolerant in case the worker runs before
+/// the backfill commits.
+pub fn backends_from_model(m: &entity::form::Model) -> CoreResult<Vec<BackendBinding>> {
+    match &m.backends {
+        Some(v) => parse_backends(v),
+        None => Ok(default_backends()),
+    }
+}
+
 /// Convert a `form::Model` row into a full `FormDto`, parsing the JSON
 /// columns into their typed shapes.
 pub fn dto_from_model(m: entity::form::Model) -> CoreResult<FormDto> {
     let standard_fields = parse_standard_fields(&m.standard_fields)?;
     let custom_fields = parse_custom_fields(&m.custom_fields)?;
+    let backends = backends_from_model(&m)?;
     Ok(FormDto {
         id: m.id,
         owner_id: m.owner_id,
@@ -219,6 +270,7 @@ pub fn dto_from_model(m: entity::form::Model) -> CoreResult<FormDto> {
         slug: m.slug,
         standard_fields,
         custom_fields,
+        backends,
         created_at: m.created_at,
         updated_at: m.updated_at,
     })
@@ -227,12 +279,14 @@ pub fn dto_from_model(m: entity::form::Model) -> CoreResult<FormDto> {
 pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto> {
     let standard_fields = parse_standard_fields(&m.standard_fields)?;
     let custom_fields = parse_custom_fields(&m.custom_fields)?;
+    let backends = backends_from_model(&m)?;
     Ok(PublicFormDto {
         id: m.id,
         name: m.name,
         slug: m.slug,
         standard_fields,
         custom_fields,
+        backends,
     })
 }
 
@@ -255,6 +309,7 @@ pub async fn find_by_slug<C: ConnectionTrait>(
 
 pub async fn create_form<C: ConnectionTrait>(
     conn: &C,
+    registry: &BackendRegistry,
     owner_id: i32,
     input: NewForm,
 ) -> CoreResult<entity::form::Model> {
@@ -277,12 +332,16 @@ pub async fn create_form<C: ConnectionTrait>(
     let custom_fields = normalize_custom_fields(input.custom_fields);
     validate_custom_fields(&custom_fields)?;
 
+    let backends = input.backends.unwrap_or_else(default_backends);
+    validate_backends(&backends, registry)?;
+
     let model = entity::form::ActiveModel {
         owner_id: ActiveValue::Set(owner_id),
         name: ActiveValue::Set(name),
         slug: ActiveValue::Set(slug),
         standard_fields: ActiveValue::Set(json_or_internal(&standard_fields)?),
         custom_fields: ActiveValue::Set(json_or_internal(&custom_fields)?),
+        backends: ActiveValue::Set(Some(json_or_internal(&backends)?)),
         ..Default::default()
     };
     Ok(model.insert(conn).await?)
@@ -327,6 +386,7 @@ pub async fn select_list<C: ConnectionTrait>(conn: &C) -> CoreResult<Vec<FormSel
 
 pub async fn update_form<C: ConnectionTrait>(
     conn: &C,
+    registry: &BackendRegistry,
     id: i32,
     input: UpdateForm,
 ) -> CoreResult<entity::form::Model> {
@@ -362,10 +422,16 @@ pub async fn update_form<C: ConnectionTrait>(
         active.custom_fields = ActiveValue::Set(json_or_internal(&cf)?);
     }
 
+    if let Some(b) = input.backends {
+        validate_backends(&b, registry)?;
+        active.backends = ActiveValue::Set(Some(json_or_internal(&b)?));
+    }
+
     Ok(active.update(conn).await?)
 }
 
 pub async fn delete_form<C: ConnectionTrait>(conn: &C, id: i32) -> CoreResult<()> {
+    crate::submissions::service::delete_for_form(conn, id).await?;
     let res = entity::form::Entity::delete_by_id(id).exec(conn).await?;
     if res.rows_affected == 0 {
         return Err(CoreError::NotFound("form not found".into()));
@@ -375,13 +441,30 @@ pub async fn delete_form<C: ConnectionTrait>(conn: &C, id: i32) -> CoreResult<()
 
 /// Cascade hook for user deletion. Removes every form owned by `user_id`.
 /// FK cleanup is in application code (no DB cascade), so this MUST be called
-/// from `users::service::delete_user` inside the same transaction.
+/// from `users::service::delete_user` inside the same transaction. Caller is
+/// responsible for cleaning up submissions tied to those forms first (see
+/// `submissions::service::delete_for_owner`).
 pub async fn delete_for_owner<C: ConnectionTrait>(conn: &C, user_id: i32) -> CoreResult<()> {
     entity::form::Entity::delete_many()
         .filter(entity::form::Column::OwnerId.eq(user_id))
         .exec(conn)
         .await?;
     Ok(())
+}
+
+/// One-shot startup migration: any form row whose `backends` is still NULL
+/// (created before the column existed) gets the default `[open-relay]`
+/// binding. Idempotent — re-running is a no-op once rows are populated.
+pub async fn backfill_default_backends<C: ConnectionTrait>(conn: &C) -> CoreResult<u64> {
+    use sea_orm::{Statement, Value};
+    let default_json = json_or_internal(&default_backends())?;
+    let stmt = Statement::from_sql_and_values(
+        conn.get_database_backend(),
+        "UPDATE form SET backends = ? WHERE backends IS NULL",
+        [Value::Json(Some(Box::new(default_json)))],
+    );
+    let res = conn.execute_raw(stmt).await?;
+    Ok(res.rows_affected())
 }
 
 #[cfg(test)]

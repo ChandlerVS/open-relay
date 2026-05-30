@@ -45,9 +45,18 @@ async fn main() -> anyhow::Result<()> {
         .context("seeding superadmin role")?;
     tracing::info!(superadmin_role_id, "rbac superadmin role synchronized");
 
+    // One-shot: populate `form.backends` on rows created before the column
+    // existed. Idempotent; subsequent boots affect zero rows.
+    let backfilled = open_relay_core::forms::service::backfill_default_backends(&db)
+        .await
+        .context("backfilling default form backends")?;
+    if backfilled > 0 {
+        tracing::info!(backfilled, "applied default backends to legacy form rows");
+    }
+
     let state = AppState::new(db.clone(), &config, superadmin_role_id)?;
 
-    // Spawn delivery worker (no-op until submission_delivery exists).
+    // Spawn delivery worker.
     jobs::spawn(db.clone(), state.backends.clone());
 
     let app = router::build(state.clone());

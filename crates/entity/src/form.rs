@@ -28,6 +28,14 @@ pub struct Model {
     pub standard_fields: Json,
     #[sea_orm(column_type = "Json")]
     pub custom_fields: Json,
+    /// Ordered list of `BackendBinding` entries (see
+    /// `open_relay_core::forms`). Each entry queues one delivery row per
+    /// submission. Nullable for back-compat with rows created before this
+    /// column existed; the boot-time backfill in
+    /// `open_relay_core::forms::service::backfill_default_backends` sets any
+    /// `NULL`s to `[{ "name": "open-relay" }]`.
+    #[sea_orm(column_type = "Json", nullable)]
+    pub backends: Option<Json>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

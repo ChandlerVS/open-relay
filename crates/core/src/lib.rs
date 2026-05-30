@@ -21,4 +21,5 @@ pub mod oauth_config;
 pub mod permissions;
 pub mod rbac;
 pub mod setup;
+pub mod submissions;
 pub mod users;

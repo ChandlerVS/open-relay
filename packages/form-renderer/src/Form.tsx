@@ -7,7 +7,13 @@ export interface FormProps {
   apiUrl: string;
 }
 
-type Status = "loading" | "ready" | "error" | "submitted";
+type Status =
+  | "loading"
+  | "ready"
+  | "submitting"
+  | "submit_error"
+  | "error"
+  | "submitted";
 
 export function Form({ formId, apiUrl }: FormProps) {
   const [schema, setSchema] = useState<PublicFormDto | null>(null);
@@ -77,18 +83,43 @@ export function Form({ formId, apiUrl }: FormProps) {
   const set = (key: string, val: string | boolean) =>
     setValues((v) => ({ ...v, [key]: val }));
 
+  const submit = async () => {
+    setStatus("submitting");
+    setError(null);
+    const base = apiUrl.endsWith("/") ? apiUrl.slice(0, -1) : apiUrl;
+    try {
+      const res = await fetch(
+        `${base}/public/forms/${encodeURIComponent(formId)}/submissions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(values),
+        },
+      );
+      if (!res.ok) {
+        let message = `HTTP ${res.status}`;
+        try {
+          const body = (await res.json()) as { error?: string };
+          if (body.error) message = body.error;
+        } catch {
+          // ignore: server returned non-JSON
+        }
+        throw new Error(message);
+      }
+      setStatus("submitted");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStatus("submit_error");
+    }
+  };
+
   return (
     <form
       data-open-relay-form={formId}
       className="or-form"
       onSubmit={(e) => {
         e.preventDefault();
-        // Submission endpoint lands with the submission resource — until
-        // then, log so the host page can confirm wiring without seeing a
-        // silent failure.
-        // eslint-disable-next-line no-console
-        console.log("[open-relay] submit (no-op until backend lands):", values);
-        setStatus("submitted");
+        void submit();
       }}
     >
       <h2 className="or-form__title">{schema.name}</h2>
@@ -131,8 +162,17 @@ export function Form({ formId, apiUrl }: FormProps) {
           />
         ))}
       </div>
-      <button type="submit" className="or-form__submit">
-        Submit
+      {status === "submit_error" && error && (
+        <div className="or-form__error" role="alert">
+          {error}
+        </div>
+      )}
+      <button
+        type="submit"
+        className="or-form__submit"
+        disabled={status === "submitting"}
+      >
+        {status === "submitting" ? "Submitting…" : "Submit"}
       </button>
     </form>
   );

@@ -4,21 +4,24 @@
 //! Each integration implements [`Backend`] and registers itself in a
 //! [`registry::BackendRegistry`] at startup.
 
+pub mod openrelay;
 pub mod registry;
 
 use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
 
+pub use openrelay::OpenRelayBackend;
+pub use registry::BackendRegistry;
+
 /// A pending submission handed to a backend for delivery.
-///
-/// Field shape will firm up alongside the `submission` entity. For now this
-/// is intentionally minimal so the trait can compile without the entity crate
-/// having that module yet.
 #[derive(Debug, Clone)]
 pub struct DeliveryPayload {
-    pub submission_id: i64,
-    pub form_id: i64,
+    pub submission_id: i32,
+    pub form_id: i32,
+    /// Merged view of the submission: standard field columns + custom_data,
+    /// keyed by field key. Backends should consume `data` rather than rely on
+    /// any particular column layout.
     pub data: Value,
 }
 

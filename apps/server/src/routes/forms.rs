@@ -112,11 +112,12 @@ pub async fn create_form(
 ) -> AppResult<impl IntoResponse> {
     let authz = require_permission(&state, claims, Permission::FormsWrite).await?;
     let owner_id = authz.id;
+    let registry = state.backends.clone();
     let dto = state
         .db
         .transaction::<_, FormDto, CoreError>(|tx| {
             Box::pin(async move {
-                let created = service::create_form(tx, owner_id, input).await?;
+                let created = service::create_form(tx, &registry, owner_id, input).await?;
                 service::dto_from_model(created)
             })
         })
@@ -148,11 +149,12 @@ pub async fn update_form(
     Json(input): Json<UpdateForm>,
 ) -> AppResult<Json<FormDto>> {
     require_permission(&state, claims, Permission::FormsWrite).await?;
+    let registry = state.backends.clone();
     let dto = state
         .db
         .transaction::<_, FormDto, CoreError>(|tx| {
             Box::pin(async move {
-                let updated = service::update_form(tx, id, input).await?;
+                let updated = service::update_form(tx, &registry, id, input).await?;
                 service::dto_from_model(updated)
             })
         })
@@ -180,7 +182,13 @@ pub async fn delete_form(
     Path(id): Path<i32>,
 ) -> AppResult<impl IntoResponse> {
     require_permission(&state, claims, Permission::FormsDelete).await?;
-    service::delete_form(&state.db, id).await?;
+    state
+        .db
+        .transaction::<_, (), CoreError>(|tx| {
+            Box::pin(async move { service::delete_form(tx, id).await })
+        })
+        .await
+        .map_err(unwrap_tx)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

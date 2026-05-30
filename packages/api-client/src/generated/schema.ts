@@ -260,6 +260,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/forms/{id}/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["create_submission_for_form"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/roles": {
         parameters: {
             query?: never;
@@ -340,6 +356,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_submissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/submissions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_submission"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_submission"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users": {
         parameters: {
             query?: never;
@@ -408,6 +456,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description One backend destination on a form. Each entry queues one delivery row per
+         *     submission. `name` matches a `Backend::name()` registered in
+         *     `crate::backend::BackendRegistry`. Per-backend configuration (API keys,
+         *     list ids, etc.) is intentionally absent for now — the only backend so
+         *     far is OpenRelay itself, which is configuration-free.
+         */
+        BackendBinding: {
+            name: string;
+        };
         ChangePassword: {
             password: string;
         };
@@ -487,6 +545,7 @@ export interface components {
          *     public-facing endpoint uses [`PublicFormDto`] instead.
          */
         FormDto: {
+            backends: components["schemas"]["BackendBinding"][];
             /** Format: date-time */
             created_at: string;
             custom_fields: components["schemas"]["CustomField"][];
@@ -549,6 +608,12 @@ export interface components {
          *     if absent. `custom_fields` defaults to empty.
          */
         NewForm: {
+            /**
+             * @description Backends to deliver submissions to. Defaults to `[open-relay]` if
+             *     omitted. An empty vec is rejected — a form must have at least one
+             *     backend or submissions go nowhere.
+             */
+            backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][];
             name: string;
             slug?: string | null;
@@ -558,6 +623,19 @@ export interface components {
             description?: string | null;
             name: string;
             permissions?: components["schemas"]["Permission"][];
+        };
+        /**
+         * @description Public-facing POST body. Keys are either standard field keys (matching
+         *     [`crate::forms::STANDARD_FIELD_KEYS`]) or custom field keys on the form.
+         *     Unknown keys, and standard keys for fields that are disabled on the form,
+         *     are dropped silently.
+         *
+         *     Values are kept as raw JSON so the same body can carry strings, booleans
+         *     (checkboxes), and numbers. Standard fields are always coerced to strings;
+         *     custom fields are stored as-typed.
+         */
+        NewSubmissionPayload: {
+            [key: string]: unknown;
         };
         /**
          * @description Input shape for creating a user. `role_ids` is optional and defaults to
@@ -604,7 +682,7 @@ export interface components {
             enabled: boolean;
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "auth_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:delete" | "auth_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
@@ -616,6 +694,7 @@ export interface components {
          *     SDK / form renderer. Strips `owner_id` and audit timestamps.
          */
         PublicFormDto: {
+            backends: components["schemas"]["BackendBinding"][];
             custom_fields: components["schemas"]["CustomField"][];
             /** Format: int32 */
             id: number;
@@ -680,10 +759,78 @@ export interface components {
             website: components["schemas"]["StandardFieldConfig"];
         };
         /**
+         * @description Returned to the embed SDK on a successful POST. Deliberately minimal —
+         *     the public caller already has the data it sent us; echoing it back wastes
+         *     bytes and leaks side effects (e.g. trim normalisation) the SDK doesn't
+         *     need to see.
+         */
+        SubmissionAcceptedDto: {
+            /** Format: int32 */
+            id: number;
+        };
+        /** @description Admin-facing view of a delivery row. */
+        SubmissionDeliveryDto: {
+            /** Format: int32 */
+            attempts: number;
+            backend_name: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            delivered_at?: string | null;
+            /** Format: int32 */
+            id: number;
+            last_error?: string | null;
+            /** Format: date-time */
+            next_attempt_at: string;
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description Admin-facing view of a submission. All 14 standard columns are returned
+         *     individually; everything else is in `custom_data`. `deliveries` is loaded
+         *     on detail and list endpoints — there are at most a small fixed number per
+         *     submission, so the N+1 is bounded by `forms × backends`.
+         */
+        SubmissionDto: {
+            address_line_1?: string | null;
+            address_line_2?: string | null;
+            city?: string | null;
+            company?: string | null;
+            country?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            custom_data: unknown;
+            deliveries: components["schemas"]["SubmissionDeliveryDto"][];
+            email?: string | null;
+            first_name?: string | null;
+            /** Format: int32 */
+            form_id: number;
+            /** Format: int32 */
+            id: number;
+            job_title?: string | null;
+            last_name?: string | null;
+            message?: string | null;
+            phone?: string | null;
+            postal_code?: string | null;
+            state?: string | null;
+            website?: string | null;
+        };
+        SubmissionList: {
+            items: components["schemas"]["SubmissionDto"][];
+            /** Format: int32 */
+            limit: number;
+            /** Format: int32 */
+            offset: number;
+            /** Format: int64 */
+            total: number;
+        };
+        /**
          * @description Partial update. `None` means "leave the field alone". Custom-field
          *     updates replace the entire list (`Some(vec![])` clears all customs).
          */
         UpdateForm: {
+            backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][] | null;
             name?: string | null;
             slug?: string | null;
@@ -1545,6 +1692,47 @@ export interface operations {
             };
         };
     };
+    create_submission_for_form: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Form id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewSubmissionPayload"];
+            };
+        };
+        responses: {
+            /** @description Submission accepted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionAcceptedDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Form not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     list_roles: {
         parameters: {
             query?: never;
@@ -1868,6 +2056,130 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SetupStatus"];
                 };
+            };
+        };
+    };
+    list_submissions: {
+        parameters: {
+            query?: {
+                form_id?: number;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated submissions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionList"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_submission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Submission id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Submission with delivery rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionDto"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Submission not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_submission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Submission id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Submission deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Submission not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

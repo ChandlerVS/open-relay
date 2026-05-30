@@ -136,6 +136,30 @@ pub enum CustomFieldType {
     Checkbox,
 }
 
+/// One backend destination on a form. Each entry queues one delivery row per
+/// submission. `name` matches a `Backend::name()` registered in
+/// `crate::backend::BackendRegistry`. Per-backend configuration (API keys,
+/// list ids, etc.) is intentionally absent for now — the only backend so
+/// far is OpenRelay itself, which is configuration-free.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+pub struct BackendBinding {
+    pub name: String,
+}
+
+impl BackendBinding {
+    pub fn open_relay() -> Self {
+        Self {
+            name: "open-relay".into(),
+        }
+    }
+}
+
+/// Default `backends` for a newly created form: deliver to OpenRelay's own
+/// store so the dashboard sees submissions immediately.
+pub fn default_backends() -> Vec<BackendBinding> {
+    vec![BackendBinding::open_relay()]
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CustomField {
     /// snake_case identifier, unique within the form. Used as the
@@ -168,6 +192,11 @@ pub struct NewForm {
     pub standard_fields: Option<StandardFieldsConfig>,
     #[serde(default)]
     pub custom_fields: Vec<CustomField>,
+    /// Backends to deliver submissions to. Defaults to `[open-relay]` if
+    /// omitted. An empty vec is rejected — a form must have at least one
+    /// backend or submissions go nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backends: Option<Vec<BackendBinding>>,
 }
 
 /// Outbound representation of a form. `owner_id` is exposed to admins; the
@@ -180,6 +209,7 @@ pub struct FormDto {
     pub slug: String,
     pub standard_fields: StandardFieldsConfig,
     pub custom_fields: Vec<CustomField>,
+    pub backends: Vec<BackendBinding>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -196,6 +226,8 @@ pub struct UpdateForm {
     pub standard_fields: Option<StandardFieldsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_fields: Option<Vec<CustomField>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backends: Option<Vec<BackendBinding>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
@@ -230,4 +262,5 @@ pub struct PublicFormDto {
     pub slug: String,
     pub standard_fields: StandardFieldsConfig,
     pub custom_fields: Vec<CustomField>,
+    pub backends: Vec<BackendBinding>,
 }
