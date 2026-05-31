@@ -4,6 +4,8 @@
 
 OpenRelay.md
 
+SECURITY_REVIEW.md
+
 node_modules/
 **/dist/
 .env
