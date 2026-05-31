@@ -318,8 +318,9 @@ pub async fn delete_user<C: ConnectionTrait>(
 /// account is attached to an OAuth identity only through the authenticated
 /// link flow (`OAuthMode::Link`), never by an email claim alone — otherwise an
 /// attacker who controls an IdP account with a victim's email could sign in as
-/// the victim. Auto-creation additionally requires a *verified* email so an
-/// account can't be materialized for an address the user doesn't control.
+/// the victim. Auto-creation rejects an email the IdP explicitly marks
+/// unverified (`email_verified: false`); an absent claim is allowed since the
+/// email rides on an id_token already validated against the trusted issuer.
 ///
 /// MUST be called inside a transaction.
 pub async fn find_or_create_via_oauth<C: ConnectionTrait>(
@@ -348,9 +349,13 @@ pub async fn find_or_create_via_oauth<C: ConnectionTrait>(
                 "OAuth provider did not return an email; cannot auto-create user".into(),
             )
         })?;
-    if !verified.email_verified {
+    // Reject only an explicit "unverified" assertion. An absent claim (e.g.
+    // Microsoft Entra never sends `email_verified`) is allowed: the email comes
+    // from an id_token already cryptographically validated against the
+    // admin-configured, trusted issuer.
+    if verified.email_verified == Some(false) {
         return Err(CoreError::BadRequest(
-            "OAuth provider did not assert a verified email; cannot auto-create user".into(),
+            "OAuth provider asserts the email is not verified; cannot auto-create user".into(),
         ));
     }
     // No email-based linking: an email that already belongs to a local account

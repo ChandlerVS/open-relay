@@ -36,7 +36,9 @@ pub enum IdTokenError {
 pub struct IdTokenClaims {
     pub subject: String,
     pub email: Option<String>,
-    pub email_verified: bool,
+    /// `Some(true)`/`Some(false)` when the `email_verified` claim is present,
+    /// `None` when absent (some IdPs, e.g. Microsoft Entra, never send it).
+    pub email_verified: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,15 +155,18 @@ pub fn verify_with_jwks(
     Ok(IdTokenClaims {
         subject: claims.sub,
         email: claims.email,
-        email_verified: is_truthy(claims.email_verified.as_ref()),
+        email_verified: parse_bool(claims.email_verified.as_ref()),
     })
 }
 
-fn is_truthy(v: Option<&serde_json::Value>) -> bool {
+/// Interpret an `email_verified` claim that may be a JSON bool or the strings
+/// "true"/"false". Returns `None` when the claim is absent/null/unrecognized.
+fn parse_bool(v: Option<&serde_json::Value>) -> Option<bool> {
     match v {
-        Some(serde_json::Value::Bool(b)) => *b,
-        Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case("true"),
-        _ => false,
+        Some(serde_json::Value::Bool(b)) => Some(*b),
+        Some(serde_json::Value::String(s)) if s.eq_ignore_ascii_case("true") => Some(true),
+        Some(serde_json::Value::String(s)) if s.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
     }
 }
 
@@ -260,7 +265,7 @@ uPPiyZuqLoKYBEWIMr+6O7MK\n\
         let out = verify_with_jwks(&jwks(), &token, ISSUER, CLIENT_ID, NONCE).unwrap();
         assert_eq!(out.subject, "user-123");
         assert_eq!(out.email.as_deref(), Some("alice@example.com"));
-        assert!(out.email_verified);
+        assert_eq!(out.email_verified, Some(true));
     }
 
     #[test]
@@ -332,11 +337,13 @@ uPPiyZuqLoKYBEWIMr+6O7MK\n\
     }
 
     #[test]
-    fn email_verified_accepts_string_true() {
-        assert!(is_truthy(Some(&serde_json::json!("true"))));
-        assert!(is_truthy(Some(&serde_json::json!(true))));
-        assert!(!is_truthy(Some(&serde_json::json!("false"))));
-        assert!(!is_truthy(Some(&serde_json::json!(false))));
-        assert!(!is_truthy(None));
+    fn email_verified_parsing() {
+        assert_eq!(parse_bool(Some(&serde_json::json!("true"))), Some(true));
+        assert_eq!(parse_bool(Some(&serde_json::json!(true))), Some(true));
+        assert_eq!(parse_bool(Some(&serde_json::json!("false"))), Some(false));
+        assert_eq!(parse_bool(Some(&serde_json::json!(false))), Some(false));
+        // Absent / null / unrecognized → None (claim not asserted).
+        assert_eq!(parse_bool(None), None);
+        assert_eq!(parse_bool(Some(&serde_json::json!(null))), None);
     }
 }

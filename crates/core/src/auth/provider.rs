@@ -44,10 +44,10 @@ pub struct VerifiedIdentity {
     pub provider: &'static str,
     pub subject: String,
     pub email: Option<String>,
-    /// Whether the IdP asserts the email is verified (the `email_verified`
-    /// claim). Required before OpenRelay will materialize a local account from
-    /// it. `false` when the claim is absent.
-    pub email_verified: bool,
+    /// The IdP's `email_verified` assertion: `Some(true)`/`Some(false)` when the
+    /// claim is present, `None` when absent (e.g. Microsoft Entra omits it).
+    /// Account auto-creation rejects only an explicit `Some(false)`.
+    pub email_verified: Option<bool>,
 }
 
 #[derive(Default)]
