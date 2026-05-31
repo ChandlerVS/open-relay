@@ -22,6 +22,7 @@ use crate::state::AppState;
         (name = "auth", description = "Local + SSO authentication."),
         (name = "oauth", description = "Admin-configured OAuth provider + account linking."),
         (name = "setup", description = "First-time bootstrap."),
+        (name = "dashboard", description = "Aggregate admin overview."),
         (name = "users", description = "User management."),
         (name = "roles", description = "Roles + permission catalogue."),
         (name = "forms", description = "Form schemas embedded by host pages."),
@@ -37,6 +38,7 @@ pub fn build(state: AppState) -> Router {
         .nest("/healthz", routes::health::router())
         .nest("/auth", crate::auth::router())
         .nest("/setup", routes::setup::router())
+        .nest("/dashboard", routes::dashboard::router())
         .nest("/users", routes::users::router())
         .nest("/roles", routes::roles::router())
         .nest("/permissions", routes::roles::permissions_router())
