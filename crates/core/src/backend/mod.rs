@@ -70,6 +70,13 @@ pub trait BackendFactory: Send + Sync + 'static {
     /// Stable kind identifier shared with the `backend_instance.kind` column.
     fn kind(&self) -> &'static str;
 
+    /// Top-level keys in this kind's `config` JSON that hold secrets (API
+    /// tokens, refresh tokens, …). These are redacted from admin-facing DTOs
+    /// and preserved across partial updates that omit them. Default: none.
+    fn secret_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Parse + validate the row's `config` JSON and yield a ready-to-call
     /// backend. Called every delivery — implementations should keep this
     /// cheap (clone a shared `reqwest::Client`, etc.) rather than spin up

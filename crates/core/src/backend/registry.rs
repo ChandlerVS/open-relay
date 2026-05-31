@@ -49,6 +49,16 @@ impl BackendRegistry {
         self.factories.get(kind).cloned()
     }
 
+    /// Secret-bearing `config` keys for a kind (empty for unknown/static
+    /// kinds). Used to redact admin-facing DTOs and preserve secrets across
+    /// partial updates.
+    pub fn secret_keys(&self, kind: &str) -> &'static [&'static str] {
+        self.factories
+            .get(kind)
+            .map(|f| f.secret_keys())
+            .unwrap_or(&[])
+    }
+
     /// `true` when this registry knows about a kind (static or factory).
     pub fn knows(&self, kind: &str) -> bool {
         self.statics.contains_key(kind) || self.factories.contains_key(kind)

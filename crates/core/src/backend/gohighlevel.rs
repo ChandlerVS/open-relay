@@ -105,6 +105,10 @@ impl BackendFactory for GoHighLevelFactory {
         KIND
     }
 
+    fn secret_keys(&self) -> &'static [&'static str] {
+        &["private_integration_token"]
+    }
+
     fn build(&self, config: &Value) -> Result<Arc<dyn Backend>, BackendBuildError> {
         let cfg: GoHighLevelConfig = serde_json::from_value(config.clone())
             .map_err(|e| BackendBuildError::Invalid(format!("decode: {e}")))?;

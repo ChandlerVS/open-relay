@@ -37,7 +37,7 @@ pub async fn list_backends(
     AuthUser(claims): AuthUser,
 ) -> AppResult<Json<BackendInstanceList>> {
     require_permission(&state, claims, Permission::BackendsRead).await?;
-    let list = service::list(&state.db).await?;
+    let list = service::list(&state.db, &state.backends).await?;
     Ok(Json(list))
 }
 
@@ -82,7 +82,7 @@ pub async fn get_backend(
     let row = service::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("backend instance not found".into()))?;
-    Ok(Json(row.into()))
+    Ok(Json(BackendInstanceDto::from_model(&state.backends, row)))
 }
 
 #[utoipa::path(
@@ -112,7 +112,10 @@ pub async fn create_backend(
         })
         .await
         .map_err(unwrap_tx)?;
-    Ok((StatusCode::CREATED, Json(BackendInstanceDto::from(row))))
+    Ok((
+        StatusCode::CREATED,
+        Json(BackendInstanceDto::from_model(&state.backends, row)),
+    ))
 }
 
 #[utoipa::path(
@@ -145,7 +148,7 @@ pub async fn update_backend(
         })
         .await
         .map_err(unwrap_tx)?;
-    Ok(Json(row.into()))
+    Ok(Json(BackendInstanceDto::from_model(&state.backends, row)))
 }
 
 #[utoipa::path(

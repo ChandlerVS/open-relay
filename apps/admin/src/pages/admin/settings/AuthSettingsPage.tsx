@@ -43,6 +43,7 @@ const schema = z.object({
     .url("Must be a URL.")
     .or(z.literal(""))
     .optional(),
+  issuer: z.string().optional(),
   scopes: z.string().min(1, "Required."),
   default_role_id: z.string().optional(),
   email_claim: z.string().optional(),
@@ -60,6 +61,7 @@ const defaults: FormValues = {
   token_url: "",
   userinfo_url: "",
   jwks_url: "",
+  issuer: "",
   scopes: "openid email profile",
   default_role_id: "",
   email_claim: "email",
@@ -92,6 +94,7 @@ export function AuthSettingsPage() {
         token_url: cfg.data.token_url,
         userinfo_url: cfg.data.userinfo_url ?? "",
         jwks_url: cfg.data.jwks_url ?? "",
+        issuer: cfg.data.issuer ?? "",
         scopes: cfg.data.scopes,
         default_role_id: cfg.data.default_role_id?.toString() ?? "",
         email_claim: cfg.data.email_claim,
@@ -116,6 +119,7 @@ export function AuthSettingsPage() {
         token_url: values.token_url.trim(),
         userinfo_url: values.userinfo_url?.trim() || undefined,
         jwks_url: values.jwks_url?.trim() || undefined,
+        issuer: values.issuer?.trim() || undefined,
         scopes: values.scopes.trim(),
         default_role_id: values.default_role_id
           ? Number(values.default_role_id)
@@ -150,6 +154,7 @@ export function AuthSettingsPage() {
         shouldDirty: true,
       });
       form.setValue("jwks_url", prefill.jwks_url ?? "", { shouldDirty: true });
+      form.setValue("issuer", prefill.issuer ?? "", { shouldDirty: true });
       if (prefill.scopes_supported && prefill.scopes_supported.length > 0) {
         // Only override if our current scopes are still the default.
         const current = form.getValues("scopes")?.trim();
@@ -336,10 +341,18 @@ export function AuthSettingsPage() {
                 <FormField
                   id="jwks_url"
                   label="JWKS URL"
-                  hint="Reserved for future ID-token signature verification."
+                  hint="Required. Public keys used to verify the ID-token signature."
                   error={form.formState.errors.jwks_url?.message}
                 >
                   <Input {...form.register("jwks_url")} />
+                </FormField>
+                <FormField
+                  id="issuer"
+                  label="Issuer"
+                  hint="Required. Must match the id_token `iss` claim. Microsoft Entra multi-tenant may use the `{tenantid}` placeholder."
+                  error={form.formState.errors.issuer?.message}
+                >
+                  <Input {...form.register("issuer")} />
                 </FormField>
                 <FormField id="email_claim" label="Email claim">
                   <Input {...form.register("email_claim")} />

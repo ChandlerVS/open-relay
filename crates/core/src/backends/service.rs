@@ -7,7 +7,7 @@ use sea_orm::{
 
 use super::{
     BackendInstanceDto, BackendInstanceFormRef, BackendInstanceInUse, BackendInstanceList,
-    NewBackendInstance, UpdateBackendInstance,
+    NewBackendInstance, UpdateBackendInstance, value_is_empty,
 };
 use crate::backend::{BackendBuildError, BackendRegistry};
 use crate::error::{CoreError, CoreResult};
@@ -42,13 +42,19 @@ fn validate_config(
     }
 }
 
-pub async fn list<C: ConnectionTrait>(conn: &C) -> CoreResult<BackendInstanceList> {
+pub async fn list<C: ConnectionTrait>(
+    conn: &C,
+    registry: &BackendRegistry,
+) -> CoreResult<BackendInstanceList> {
     let rows = entity::backend_instance::Entity::find()
         .order_by_asc(entity::backend_instance::Column::Name)
         .all(conn)
         .await?;
     let total = rows.len() as u64;
-    let items: Vec<BackendInstanceDto> = rows.into_iter().map(Into::into).collect();
+    let items: Vec<BackendInstanceDto> = rows
+        .into_iter()
+        .map(|m| BackendInstanceDto::from_model(registry, m))
+        .collect();
     Ok(BackendInstanceList { items, total })
 }
 
@@ -100,12 +106,38 @@ pub async fn update<C: ConnectionTrait>(
         active.name = ActiveValue::Set(name);
     }
 
-    if let Some(config) = input.config {
+    if let Some(mut config) = input.config {
+        // Secrets are redacted out of the DTO the admin GET'd, so a round-tripped
+        // config omits them. Treat a missing/empty secret key as "keep existing"
+        // (mirrors OAuth `client_secret: None`) rather than clobbering the token.
+        preserve_secrets(registry, &existing.kind, &existing.config, &mut config);
         validate_config(registry, &existing.kind, &config)?;
         active.config = ActiveValue::Set(config);
     }
 
     Ok(active.update(conn).await?)
+}
+
+/// For each secret key the kind declares, if `incoming` omits it (absent, null,
+/// or empty string) but `existing` has a value, carry the existing value over.
+fn preserve_secrets(
+    registry: &BackendRegistry,
+    kind: &str,
+    existing: &serde_json::Value,
+    incoming: &mut serde_json::Value,
+) {
+    let Some(incoming_obj) = incoming.as_object_mut() else {
+        return;
+    };
+    for key in registry.secret_keys(kind) {
+        let incoming_empty = incoming_obj.get(*key).map(value_is_empty).unwrap_or(true);
+        if !incoming_empty {
+            continue;
+        }
+        if let Some(existing_val) = existing.get(*key).filter(|v| !value_is_empty(v)) {
+            incoming_obj.insert((*key).to_string(), existing_val.clone());
+        }
+    }
 }
 
 /// Delete a backend instance. Returns `CoreError::Conflict` (carrying a JSON
@@ -169,4 +201,46 @@ async fn references_for<C: ConnectionTrait>(
 /// Cheap convenience for the worker / debug.
 pub async fn count<C: ConnectionTrait>(conn: &C) -> CoreResult<u64> {
     Ok(entity::backend_instance::Entity::find().count(conn).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::GoHighLevelFactory;
+    use std::sync::Arc;
+
+    fn registry() -> BackendRegistry {
+        let mut r = BackendRegistry::new();
+        r.register_factory(Arc::new(GoHighLevelFactory::new()));
+        r
+    }
+
+    #[test]
+    fn preserve_secrets_keeps_existing_when_omitted() {
+        let existing = serde_json::json!({
+            "location_id": "loc_old",
+            "private_integration_token": "pit-existing",
+        });
+        // Admin round-trips the redacted config (no token) with a changed location.
+        let mut incoming = serde_json::json!({ "location_id": "loc_new" });
+        preserve_secrets(&registry(), "gohighlevel", &existing, &mut incoming);
+        assert_eq!(incoming["location_id"], "loc_new");
+        assert_eq!(incoming["private_integration_token"], "pit-existing");
+    }
+
+    #[test]
+    fn preserve_secrets_respects_explicit_new_value() {
+        let existing = serde_json::json!({ "private_integration_token": "pit-old" });
+        let mut incoming = serde_json::json!({ "private_integration_token": "pit-new" });
+        preserve_secrets(&registry(), "gohighlevel", &existing, &mut incoming);
+        assert_eq!(incoming["private_integration_token"], "pit-new");
+    }
+
+    #[test]
+    fn preserve_secrets_treats_empty_string_as_omitted() {
+        let existing = serde_json::json!({ "private_integration_token": "pit-old" });
+        let mut incoming = serde_json::json!({ "private_integration_token": "" });
+        preserve_secrets(&registry(), "gohighlevel", &existing, &mut incoming);
+        assert_eq!(incoming["private_integration_token"], "pit-old");
+    }
 }

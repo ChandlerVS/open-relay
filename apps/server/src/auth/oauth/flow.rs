@@ -54,13 +54,15 @@ async fn build_authorize(
 
     let redirect_uri = format!("{}{}", state.public_api_url, CALLBACK_PATH);
     let provider = OidcProvider::from_config(&cfg);
-    let nonce = oauth_state::random_nonce();
+    let state_nonce = oauth_state::random_nonce();
+    let oidc_nonce = oauth_state::random_nonce();
     let (authorize_url, pkce_verifier) = provider
-        .authorize_with_pkce(&redirect_uri, &nonce)
+        .authorize_with_pkce(&redirect_uri, &state_nonce, &oidc_nonce)
         .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
 
     let mut flow = OAuthFlowState::new(mode, pkce_verifier);
-    flow.nonce = nonce;
+    flow.nonce = state_nonce;
+    flow.oidc_nonce = oidc_nonce;
     let cookie = oauth_state::issue_state(&state.auth_keys, &flow).map_err(AppError::from)?;
     Ok((authorize_url, cookie))
 }
@@ -171,7 +173,7 @@ pub async fn callback(
     let provider = OidcProvider::from_config(&cfg);
     let redirect_uri = format!("{}{}", state.public_api_url, CALLBACK_PATH);
     let verified = provider
-        .exchange(code, &redirect_uri, Some(&flow.pkce_verifier))
+        .exchange(code, &redirect_uri, Some(&flow.pkce_verifier), &flow.oidc_nonce)
         .await
         .map_err(|e| AppError::from(CoreError::OAuthExchangeFailed(e.to_string())))?;
 

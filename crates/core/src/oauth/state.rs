@@ -2,6 +2,7 @@
 //!
 //! During the authorize → callback round-trip we need to bind:
 //!   - the random `state` nonce echoed by the IdP (CSRF defense),
+//!   - the OIDC `nonce` echoed inside the signed id_token (replay defense),
 //!   - the PKCE verifier (proof-of-possession on the token exchange),
 //!   - the flow mode (sign-in vs link to an existing user),
 //!   - an absolute expiry.
@@ -32,7 +33,11 @@ pub enum OAuthMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthFlowState {
+    /// CSRF `state` value echoed by the IdP in the redirect query.
     pub nonce: String,
+    /// OIDC `nonce` echoed inside the signed id_token. Distinct from `nonce`
+    /// (which travels in the URL) so the id_token binding is independent.
+    pub oidc_nonce: String,
     pub pkce_verifier: String,
     pub mode: OAuthMode,
     pub expires_at: i64,
@@ -42,6 +47,7 @@ impl OAuthFlowState {
     pub fn new(mode: OAuthMode, pkce_verifier: String) -> Self {
         Self {
             nonce: random_nonce(),
+            oidc_nonce: random_nonce(),
             pkce_verifier,
             mode,
             expires_at: chrono::Utc::now().timestamp() + STATE_TTL_SECONDS,

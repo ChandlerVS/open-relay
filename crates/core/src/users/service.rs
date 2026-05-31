@@ -311,10 +311,15 @@ pub async fn delete_user<C: ConnectionTrait>(
 /// Branches:
 /// 1. An existing `external_identity` row for `(provider_config_id, subject)`
 ///    → load and return that user.
-/// 2. No identity row, but `verified.email` matches an existing user → link
-///    the identity to that user (first-time sign-in for a known account).
-/// 3. Otherwise → insert a new user with `password_hash = None`, link the
+/// 2. Otherwise → insert a new user with `password_hash = None`, link the
 ///    identity, and assign `default_role_id` if one was configured.
+///
+/// Security: there is **no** email-based auto-linking. A pre-existing local
+/// account is attached to an OAuth identity only through the authenticated
+/// link flow (`OAuthMode::Link`), never by an email claim alone — otherwise an
+/// attacker who controls an IdP account with a victim's email could sign in as
+/// the victim. Auto-creation additionally requires a *verified* email so an
+/// account can't be materialized for an address the user doesn't control.
 ///
 /// MUST be called inside a transaction.
 pub async fn find_or_create_via_oauth<C: ConnectionTrait>(
@@ -333,29 +338,24 @@ pub async fn find_or_create_via_oauth<C: ConnectionTrait>(
             .ok_or_else(|| CoreError::Internal(anyhow!("orphaned external_identity row")));
     }
 
-    let email_normalized = verified
+    let email = verified
         .email
         .as_deref()
         .map(|e| e.trim().to_string())
-        .filter(|e| !e.is_empty());
-
-    if let Some(email) = &email_normalized {
-        if let Some(user) = find_by_email(conn, email).await? {
-            external_identity_service::link_to_user(
-                conn,
-                user.id,
-                provider_config_id,
-                &verified.subject,
-                Some(email),
+        .filter(|e| !e.is_empty())
+        .ok_or_else(|| {
+            CoreError::BadRequest(
+                "OAuth provider did not return an email; cannot auto-create user".into(),
             )
-            .await?;
-            return Ok(user);
-        }
+        })?;
+    if !verified.email_verified {
+        return Err(CoreError::BadRequest(
+            "OAuth provider did not assert a verified email; cannot auto-create user".into(),
+        ));
     }
-
-    let email = email_normalized.clone().ok_or_else(|| {
-        CoreError::BadRequest("OAuth provider did not return an email; cannot auto-create user".into())
-    })?;
+    // No email-based linking: an email that already belongs to a local account
+    // is a hard conflict, not a silent takeover. The user must use the
+    // authenticated link flow to connect this identity.
     if find_by_email(conn, &email).await?.is_some() {
         return Err(CoreError::Conflict("email already in use".into()));
     }

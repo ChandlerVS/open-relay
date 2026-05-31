@@ -27,12 +27,15 @@ pub trait Provider: Send + Sync + 'static {
     /// Exchange the authorization code (returned to our callback) for a
     /// verified email/subject this Provider asserts. `pkce_verifier` carries
     /// the PKCE code verifier when the authorize step used PKCE — which all
-    /// modern OIDC flows do.
+    /// modern OIDC flows do. `expected_nonce` is the OIDC `nonce` planted in
+    /// the authorize request; the provider matches it against the validated
+    /// id_token to bind the token to this flow.
     async fn exchange(
         &self,
         code: &str,
         redirect_uri: &str,
         pkce_verifier: Option<&str>,
+        expected_nonce: &str,
     ) -> Result<VerifiedIdentity, ProviderError>;
 }
 
@@ -41,6 +44,10 @@ pub struct VerifiedIdentity {
     pub provider: &'static str,
     pub subject: String,
     pub email: Option<String>,
+    /// Whether the IdP asserts the email is verified (the `email_verified`
+    /// claim). Required before OpenRelay will materialize a local account from
+    /// it. `false` when the claim is absent.
+    pub email_verified: bool,
 }
 
 #[derive(Default)]

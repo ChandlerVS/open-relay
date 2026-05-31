@@ -51,6 +51,11 @@ pub fn build(state: AppState) -> Router {
     // CORS that supports credentials (needed for the OAuth state cookie to be
     // set on cross-origin POST responses). Origin allowlist comes from
     // `ADMIN_URL`; "*" is not valid with credentials.
+    //
+    // `ADMIN_URL` is validated as a header-safe origin at config load
+    // (`Config::validate`), so this parse succeeds in practice. The `Err`
+    // branch fails *closed* — a deny-all CORS layer (no allowed origin) rather
+    // than `CorsLayer::permissive()`, so a bad origin can never widen access.
     let cors = match HeaderValue::from_str(&state.admin_url) {
         Ok(origin) => CorsLayer::new()
             .allow_origin(AllowOrigin::exact(origin))
@@ -63,7 +68,13 @@ pub fn build(state: AppState) -> Router {
             ])
             .allow_headers([AUTHORIZATION, CONTENT_TYPE])
             .allow_credentials(true),
-        Err(_) => CorsLayer::permissive(),
+        Err(_) => {
+            tracing::error!(
+                admin_url = %state.admin_url,
+                "ADMIN_URL is not a valid CORS origin; denying all cross-origin requests"
+            );
+            CorsLayer::new()
+        }
     };
 
     router
