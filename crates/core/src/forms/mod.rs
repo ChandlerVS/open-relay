@@ -275,3 +275,59 @@ pub struct PublicFormDto {
     pub custom_fields: Vec<CustomField>,
     pub backends: Vec<BackendBinding>,
 }
+
+/// A ready-to-paste embed snippet for a form, returned to admins so they can
+/// install the form on their own site. Everything in `snippet` derives from
+/// trusted server config plus the form id — there's no caller-supplied input —
+/// so it's safe to render verbatim.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct EmbedSnippetDto {
+    /// The form's numeric id (rendered as `data-form-id`).
+    pub form_id: i32,
+    /// URL the embed SDK bundle (`open-relay.js`) is served from — the `src`.
+    pub sdk_url: String,
+    /// Public API base URL the embedded form fetches its schema from and posts
+    /// submissions to (rendered as `data-api-url`).
+    pub api_url: String,
+    /// The full `<script>` tag to copy-paste into a host page's HTML.
+    pub snippet: String,
+}
+
+impl EmbedSnippetDto {
+    /// Assemble the snippet from the form id and the (already-normalised) SDK
+    /// and API base URLs. Pure string assembly — no I/O — so it's unit-testable
+    /// without a server or database. `data-theme` is omitted intentionally: the
+    /// SDK defaults to a static light theme, which a host opts out of explicitly.
+    pub fn build(form_id: i32, sdk_url: &str, api_url: &str) -> Self {
+        let snippet = format!(
+            "<script src=\"{sdk_url}\" data-form-id=\"{form_id}\" data-api-url=\"{api_url}\"></script>"
+        );
+        Self {
+            form_id,
+            sdk_url: sdk_url.to_string(),
+            api_url: api_url.to_string(),
+            snippet,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embed_snippet_renders_script_tag() {
+        let dto = EmbedSnippetDto::build(
+            42,
+            "https://cdn.example.com/open-relay.js",
+            "https://api.example.com",
+        );
+        assert_eq!(
+            dto.snippet,
+            "<script src=\"https://cdn.example.com/open-relay.js\" data-form-id=\"42\" data-api-url=\"https://api.example.com\"></script>"
+        );
+        assert_eq!(dto.form_id, 42);
+        assert_eq!(dto.sdk_url, "https://cdn.example.com/open-relay.js");
+        assert_eq!(dto.api_url, "https://api.example.com");
+    }
+}

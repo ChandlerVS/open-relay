@@ -60,6 +60,18 @@ pub struct Config {
     /// Fully-qualified base URL the admin SPA is reachable at. Used as the
     /// post-OAuth-callback redirect target.
     pub admin_url: String,
+    /// Fully-qualified URL the embed SDK bundle (`open-relay.js`) is served
+    /// from. Host pages load it via `<script src="…">`, and the admin surfaces
+    /// a copy-paste snippet built from it. Optional: when blank, it defaults to
+    /// `{public_api_url}/embed/open-relay.js` (see [`AppState::new`]).
+    #[serde(default)]
+    pub embed_sdk_url: String,
+    /// Filesystem path to the built embed SDK bundle, served at
+    /// `GET /embed/open-relay.js`. Relative paths resolve against the process
+    /// working directory (the repo root under `cargo run`). Defaults to the
+    /// Vite build output so the snippet works out of the box in local dev.
+    #[serde(default = "default_embed_sdk_path")]
+    pub embed_sdk_path: String,
     /// Whether to set the `Secure` attribute on the OAuth state cookie.
     /// Must be false when serving the API over plain HTTP locally.
     #[serde(default = "default_cookie_secure")]
@@ -68,6 +80,10 @@ pub struct Config {
 
 fn default_cookie_secure() -> bool {
     true
+}
+
+fn default_embed_sdk_path() -> String {
+    "apps/embed-sdk/dist/open-relay.js".to_string()
 }
 
 impl Config {
@@ -83,6 +99,8 @@ impl Config {
                         "ENVIRONMENT",
                         "PUBLIC_API_URL",
                         "ADMIN_URL",
+                        "EMBED_SDK_URL",
+                        "EMBED_SDK_PATH",
                         "COOKIE_SECURE",
                     ])
                     .map(|k| k.as_str().to_lowercase().into()),
@@ -196,6 +214,8 @@ mod tests {
             environment: Environment::Production,
             public_api_url: "http://localhost:8080".into(),
             admin_url: admin_url.into(),
+            embed_sdk_url: String::new(),
+            embed_sdk_path: default_embed_sdk_path(),
             cookie_secure: true,
         }
     }

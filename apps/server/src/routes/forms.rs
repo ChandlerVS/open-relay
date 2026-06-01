@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use open_relay_core::error::CoreError;
 use open_relay_core::forms::{
-    FormDto, FormList, FormSelectOption, ListQuery, NewForm, UpdateForm, service,
+    EmbedSnippetDto, FormDto, FormList, FormSelectOption, ListQuery, NewForm, UpdateForm, service,
 };
 use open_relay_core::permissions::Permission;
 use sea_orm::TransactionTrait;
@@ -88,6 +88,34 @@ pub async fn get_form(
         .await?
         .ok_or_else(|| AppError::NotFound("form not found".into()))?;
     let dto = service::dto_from_model(form)?;
+    Ok(Json(dto))
+}
+
+#[utoipa::path(
+    get,
+    path = "/{id}/embed",
+    tag = "forms",
+    security(("bearer" = [])),
+    params(("id" = i32, Path, description = "Form id")),
+    responses(
+        (status = 200, description = "Copy-paste embed snippet", body = EmbedSnippetDto),
+        (status = 401, description = "Missing or invalid token"),
+        (status = 403, description = "Insufficient permission"),
+        (status = 404, description = "Form not found"),
+    )
+)]
+pub async fn get_embed_snippet(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i32>,
+) -> AppResult<Json<EmbedSnippetDto>> {
+    require_permission(&state, claims, Permission::FormsRead).await?;
+    // Confirm the form exists (404 otherwise) so we never hand out a snippet
+    // for a form that can't be embedded.
+    let form = service::find_by_id(&state.db, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("form not found".into()))?;
+    let dto = EmbedSnippetDto::build(form.id, &state.embed_sdk_url, &state.public_api_url);
     Ok(Json(dto))
 }
 
@@ -196,6 +224,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_forms, create_form))
         .routes(routes!(form_select_list))
+        .routes(routes!(get_embed_snippet))
         .routes(routes!(get_form, update_form, delete_form))
 }
 

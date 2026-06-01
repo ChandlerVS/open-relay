@@ -24,6 +24,13 @@ pub struct AppState {
     /// "Superadmin" in the DB.
     pub superadmin_role_id: i32,
     pub public_api_url: String,
+    /// Absolute URL the embed SDK bundle is served from, used to build the
+    /// copy-paste `<script>` snippet handed to form owners. Derived at boot:
+    /// `config.embed_sdk_url` when set, else `{public_api_url}/embed/open-relay.js`.
+    pub embed_sdk_url: String,
+    /// Filesystem path the embed SDK bundle is read from when serving
+    /// `GET /embed/open-relay.js`. See [`Config::embed_sdk_path`].
+    pub embed_sdk_path: String,
     pub admin_url: String,
     pub cookie_secure: bool,
     pub environment: Environment,
@@ -41,6 +48,13 @@ impl AppState {
         let mut backends = BackendRegistry::new();
         backends.register_static(Arc::new(OpenRelayBackend));
         backends.register_factory(Arc::new(GoHighLevelFactory::new()));
+        let public_api_url = config.public_api_url.trim_end_matches('/').to_string();
+        // Fall back to a same-origin path under the API when EMBED_SDK_URL is
+        // unset, so the snippet is still well-formed in dev/local setups.
+        let embed_sdk_url = match config.embed_sdk_url.trim() {
+            "" => format!("{public_api_url}/embed/open-relay.js"),
+            url => url.to_string(),
+        };
         Ok(Self {
             db,
             auth_keys,
@@ -48,7 +62,9 @@ impl AppState {
             providers,
             backends,
             superadmin_role_id,
-            public_api_url: config.public_api_url.trim_end_matches('/').to_string(),
+            public_api_url,
+            embed_sdk_url,
+            embed_sdk_path: config.embed_sdk_path.clone(),
             admin_url: config.admin_url.trim_end_matches('/').to_string(),
             cookie_secure: config.cookie_secure,
             environment: config.environment,

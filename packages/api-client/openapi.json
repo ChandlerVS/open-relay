@@ -1057,6 +1057,52 @@
         ]
       }
     },
+    "/forms/{id}/embed": {
+      "get": {
+        "tags": [
+          "forms"
+        ],
+        "operationId": "get_embed_snippet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Form id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Copy-paste embed snippet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedSnippetDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Form not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -2442,6 +2488,35 @@
         "properties": {
           "discovery_url": {
             "type": "string"
+          }
+        }
+      },
+      "EmbedSnippetDto": {
+        "type": "object",
+        "description": "A ready-to-paste embed snippet for a form, returned to admins so they can\ninstall the form on their own site. Everything in `snippet` derives from\ntrusted server config plus the form id — there's no caller-supplied input —\nso it's safe to render verbatim.",
+        "required": [
+          "form_id",
+          "sdk_url",
+          "api_url",
+          "snippet"
+        ],
+        "properties": {
+          "api_url": {
+            "type": "string",
+            "description": "Public API base URL the embedded form fetches its schema from and posts\nsubmissions to (rendered as `data-api-url`)."
+          },
+          "form_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The form's numeric id (rendered as `data-form-id`)."
+          },
+          "sdk_url": {
+            "type": "string",
+            "description": "URL the embed SDK bundle (`open-relay.js`) is served from — the `src`."
+          },
+          "snippet": {
+            "type": "string",
+            "description": "The full `<script>` tag to copy-paste into a host page's HTML."
           }
         }
       },

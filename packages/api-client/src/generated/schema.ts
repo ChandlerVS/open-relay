@@ -324,6 +324,22 @@ export interface paths {
         patch: operations["update_form"];
         trace?: never;
     };
+    "/forms/{id}/embed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_embed_snippet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -749,6 +765,28 @@ export interface components {
         };
         DiscoveryRequest: {
             discovery_url: string;
+        };
+        /**
+         * @description A ready-to-paste embed snippet for a form, returned to admins so they can
+         *     install the form on their own site. Everything in `snippet` derives from
+         *     trusted server config plus the form id — there's no caller-supplied input —
+         *     so it's safe to render verbatim.
+         */
+        EmbedSnippetDto: {
+            /**
+             * @description Public API base URL the embedded form fetches its schema from and posts
+             *     submissions to (rendered as `data-api-url`).
+             */
+            api_url: string;
+            /**
+             * Format: int32
+             * @description The form's numeric id (rendered as `data-form-id`).
+             */
+            form_id: number;
+            /** @description URL the embed SDK bundle (`open-relay.js`) is served from — the `src`. */
+            sdk_url: string;
+            /** @description The full `<script>` tag to copy-paste into a host page's HTML. */
+            snippet: string;
         };
         ExternalIdentityDto: {
             /** Format: date-time */
@@ -2261,6 +2299,50 @@ export interface operations {
             };
             /** @description Slug already in use */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_embed_snippet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Form id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Copy-paste embed snippet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmbedSnippetDto"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Form not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

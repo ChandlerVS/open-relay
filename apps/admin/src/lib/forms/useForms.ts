@@ -6,6 +6,7 @@ import { extractApiErrorMessage } from "../api/errors";
 export type FormDto = components["schemas"]["FormDto"];
 export type FormList = components["schemas"]["FormList"];
 export type FormSelectOption = components["schemas"]["FormSelectOption"];
+export type EmbedSnippet = components["schemas"]["EmbedSnippetDto"];
 
 export interface FormsListParams {
   limit?: number;
@@ -41,6 +42,23 @@ export function useForm(id: number | null) {
       if (data) return data;
       throw new Error(extractApiErrorMessage(error, "Failed to load form."));
     },
+  });
+}
+
+export function useFormEmbed(id: number | null) {
+  return useQuery<EmbedSnippet>({
+    queryKey: ["forms", "embed", id],
+    enabled: id != null,
+    queryFn: async () => {
+      const { data, error } = await api.client.GET("/forms/{id}/embed", {
+        params: { path: { id: id as number } },
+      });
+      if (data) return data;
+      throw new Error(
+        extractApiErrorMessage(error, "Failed to load embed code."),
+      );
+    },
+    staleTime: 60_000,
   });
 }
 

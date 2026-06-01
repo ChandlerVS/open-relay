@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Check, Copy, TriangleAlert } from "lucide-react";
 import { ShadowForm } from "@open-relay/form-renderer";
 import {
   Alert,
   AlertDescription,
   AlertTitle,
+  Button,
   Card,
   CardContent,
   CardDescription,
@@ -14,7 +15,7 @@ import {
   Skeleton,
 } from "@open-relay/ui";
 import { api } from "../../../lib/api/client";
-import { useForm } from "../../../lib/forms/useForms";
+import { useForm, useFormEmbed } from "../../../lib/forms/useForms";
 import { useTheme } from "../../../lib/theme/useTheme";
 
 type Result =
@@ -28,6 +29,7 @@ export function FormPreviewPage() {
 
   const { resolved: theme } = useTheme();
   const { data: form, isLoading } = useForm(valid ? formId : null);
+  const embed = useFormEmbed(valid ? formId : null);
   const [result, setResult] = useState<Result | null>(null);
 
   return (
@@ -138,6 +140,69 @@ export function FormPreviewPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Embed on your site</CardTitle>
+          <CardDescription>
+            Paste this snippet into your page's HTML where you want the form to
+            appear. It loads the OpenRelay SDK and renders this form — no other
+            setup required.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {embed.isLoading && <Skeleton className="h-16 w-full" />}
+          {embed.isError && (
+            <Alert variant="destructive">
+              <TriangleAlert className="h-4 w-4" />
+              <AlertTitle>Couldn't load embed code</AlertTitle>
+              <AlertDescription>{embed.error.message}</AlertDescription>
+            </Alert>
+          )}
+          {embed.data && (
+            <>
+              <pre className="overflow-x-auto rounded-md border bg-muted p-3 text-xs leading-relaxed">
+                <code>{embed.data.snippet}</code>
+              </pre>
+              <CopyButton value={embed.data.snippet} />
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
+  );
+}
+
+/** Copies `value` to the clipboard, flipping its label to "Copied" briefly. */
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 2000);
+        } catch {
+          // Clipboard API unavailable (e.g. a non-secure context) — leave the
+          // snippet on screen for manual selection.
+        }
+      }}
+    >
+      {copied ? (
+        <>
+          <Check className="h-4 w-4" />
+          Copied
+        </>
+      ) : (
+        <>
+          <Copy className="h-4 w-4" />
+          Copy snippet
+        </>
+      )}
+    </Button>
   );
 }
