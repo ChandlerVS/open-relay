@@ -105,10 +105,11 @@ pub async fn create_backend(
 ) -> AppResult<impl IntoResponse> {
     require_permission(&state, claims, Permission::BackendsWrite).await?;
     let registry = state.backends.clone();
+    let cipher = state.cipher.clone();
     let row = state
         .db
         .transaction::<_, entity::backend_instance::Model, CoreError>(|tx| {
-            Box::pin(async move { service::create(tx, &registry, input).await })
+            Box::pin(async move { service::create(tx, &registry, &cipher, input).await })
         })
         .await
         .map_err(unwrap_tx)?;
@@ -141,10 +142,11 @@ pub async fn update_backend(
 ) -> AppResult<Json<BackendInstanceDto>> {
     require_permission(&state, claims, Permission::BackendsWrite).await?;
     let registry = state.backends.clone();
+    let cipher = state.cipher.clone();
     let row = state
         .db
         .transaction::<_, entity::backend_instance::Model, CoreError>(|tx| {
-            Box::pin(async move { service::update(tx, &registry, id, input).await })
+            Box::pin(async move { service::update(tx, &registry, &cipher, id, input).await })
         })
         .await
         .map_err(unwrap_tx)?;

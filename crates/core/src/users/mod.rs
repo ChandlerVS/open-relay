@@ -68,9 +68,21 @@ pub struct UpdateUser {
     pub role_ids: Option<Vec<i32>>,
 }
 
+/// Admin-initiated password reset for another user. No current-password proof
+/// (the actor is acting by permission, not as the target), but the service
+/// forbids resetting a user who outranks the actor and revokes the target's
+/// sessions. See `service::admin_set_password`.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-pub struct ChangePassword {
+pub struct AdminSetPassword {
     pub password: String,
+}
+
+/// Self-service password change. Requires proof of the current password and
+/// revokes the user's other sessions. See `service::change_own_password`.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ChangeOwnPassword {
+    pub current_password: String,
+    pub new_password: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]

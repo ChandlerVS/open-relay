@@ -32,12 +32,18 @@ pub async fn login(
         return Err(AppError::Unauthorized);
     }
     let token = auth::issue_for_user(&state.auth_keys, &user)?;
+    let refresh_token = auth::refresh::issue(&state.db, user.id).await?;
     Ok(Json(LoginResponse {
         token,
+        refresh_token,
         user: user.into(),
     }))
 }
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(login))
+    // Per-IP rate limit on the login endpoint — online brute force / account
+    // enumeration defense. Scoped here so it only throttles `/auth/login`.
+    OpenApiRouter::new()
+        .routes(routes!(login))
+        .layer(crate::ratelimit::login_layer())
 }

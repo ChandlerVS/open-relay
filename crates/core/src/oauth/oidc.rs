@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::auth::provider::{Provider, ProviderError, VerifiedIdentity};
-use crate::oauth::idtoken;
+use crate::crypto::SecretCipher;
+use crate::oauth::{idtoken, ssrf};
 
 const PROVIDER_NAME: &str = "oidc";
 
@@ -63,13 +64,24 @@ pub struct OidcProvider {
     pub scopes: Vec<String>,
     pub email_claim: String,
     pub subject_claim: String,
+    /// Relax the SSRF guard (allow loopback/private endpoints) — development only.
+    pub allow_private: bool,
 }
 
 impl OidcProvider {
-    pub fn from_config(cfg: &entity::oauth_provider_config::Model) -> Self {
-        Self {
+    /// Build a provider from the stored config. Fallible because the
+    /// `client_secret` is decrypted from its at-rest ciphertext.
+    pub fn from_config(
+        cfg: &entity::oauth_provider_config::Model,
+        cipher: &SecretCipher,
+        allow_private: bool,
+    ) -> Result<Self, ProviderError> {
+        let client_secret = cipher
+            .decrypt(&cfg.client_secret)
+            .map_err(|_| ProviderError::Other("could not decrypt client_secret".into()))?;
+        Ok(Self {
             client_id: cfg.client_id.clone(),
-            client_secret: cfg.client_secret.clone(),
+            client_secret,
             issuer: cfg.issuer.clone(),
             authorize_url: cfg.authorize_url.clone(),
             token_url: cfg.token_url.clone(),
@@ -82,7 +94,8 @@ impl OidcProvider {
                 .collect(),
             email_claim: cfg.email_claim.clone(),
             subject_claim: cfg.subject_claim.clone(),
-        }
+            allow_private,
+        })
     }
 
     fn build_client(&self, redirect_uri: &str) -> Result<OidcClient, ProviderError> {
@@ -151,6 +164,12 @@ impl Provider for OidcProvider {
         pkce_verifier: Option<&str>,
         expected_nonce: &str,
     ) -> Result<VerifiedIdentity, ProviderError> {
+        // SSRF guard: the token endpoint is admin-supplied. Pairs with the
+        // no-redirect client below.
+        ssrf::guard_url(&self.token_url, self.allow_private)
+            .await
+            .map_err(|e| ProviderError::Other(format!("token_url blocked: {e}")))?;
+
         let client = self.build_client(redirect_uri)?;
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -181,6 +200,11 @@ impl Provider for OidcProvider {
             .id_token
             .as_deref()
             .ok_or_else(|| ProviderError::Other("provider returned no id_token".into()))?;
+
+        // SSRF guard before fetching the (admin-supplied) JWKS endpoint.
+        ssrf::guard_url(jwks_url, self.allow_private)
+            .await
+            .map_err(|e| ProviderError::Other(format!("jwks_url blocked: {e}")))?;
 
         let claims = idtoken::verify(
             &http,
@@ -222,6 +246,10 @@ impl OidcProvider {
         let Some(userinfo) = self.userinfo_url.as_deref() else {
             return Ok(None);
         };
+        // SSRF guard before fetching the (admin-supplied) userinfo endpoint.
+        ssrf::guard_url(userinfo, self.allow_private)
+            .await
+            .map_err(|e| ProviderError::Other(format!("userinfo_url blocked: {e}")))?;
         let claims: Value = http
             .get(userinfo)
             .bearer_auth(access_token)

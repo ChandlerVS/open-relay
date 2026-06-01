@@ -12,6 +12,7 @@ use crate::users::UserDto;
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct InitializeResponse {
     pub token: String,
+    pub refresh_token: String,
     pub user: UserDto,
 }
 

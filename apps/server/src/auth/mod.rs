@@ -9,6 +9,7 @@ pub mod local;
 pub mod me;
 pub mod oauth;
 pub mod permissions;
+pub mod refresh;
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -45,5 +46,6 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(local::router())
         .merge(me::router())
+        .merge(refresh::router())
         .nest("/oauth", oauth::router())
 }

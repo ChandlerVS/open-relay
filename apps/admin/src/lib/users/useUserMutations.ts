@@ -6,7 +6,7 @@ import type { UserDto } from "./useUsers";
 
 export type NewUser = components["schemas"]["NewUser"];
 export type UpdateUser = components["schemas"]["UpdateUser"];
-export type ChangePassword = components["schemas"]["ChangePassword"];
+export type ChangePassword = components["schemas"]["AdminSetPassword"];
 
 function invalidateUsers(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["users"] });

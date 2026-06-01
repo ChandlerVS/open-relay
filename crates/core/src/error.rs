@@ -26,6 +26,11 @@ pub enum CoreError {
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
 
+    /// Encrypt/decrypt failure for a secret column. The message is kept generic
+    /// (never echoes key material or ciphertext) and maps to a 500.
+    #[error("encryption error")]
+    Crypto,
+
     #[error("database error")]
     Db(#[from] sea_orm::DbErr),
 

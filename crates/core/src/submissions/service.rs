@@ -27,6 +27,10 @@ use crate::forms::{
 
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
+/// Hidden anti-bot field the renderer includes off-screen. A real user never
+/// fills it; a non-empty value means a bot, so we reject. Kept generic in the
+/// error so a bot can't learn the field name from the response.
+const HONEYPOT_KEY: &str = "_hp";
 const MAX_STANDARD_FIELD_LEN: usize = 1000;
 const MAX_MESSAGE_LEN: usize = 10_000;
 
@@ -250,11 +254,26 @@ fn json_kind(v: &JsonValue) -> &'static str {
 /// Accept a submission for the given (already-loaded) form. Caller is
 /// responsible for running this inside a transaction so the submission row
 /// insert + the delivery fan-out commit atomically.
+/// `true` if the honeypot field is present and non-empty (a bot filled the
+/// hidden input a real user never sees).
+fn honeypot_tripped(payload: &NewSubmissionPayload) -> bool {
+    match payload.0.get(HONEYPOT_KEY) {
+        None | Some(JsonValue::Null) => false,
+        Some(JsonValue::String(s)) => !s.trim().is_empty(),
+        Some(_) => true,
+    }
+}
+
 pub async fn create_submission<C: ConnectionTrait>(
     conn: &C,
     form: &entity::form::Model,
     payload: NewSubmissionPayload,
 ) -> CoreResult<entity::submission::Model> {
+    // Honeypot: reject (generically) if the hidden field was filled in.
+    if honeypot_tripped(&payload) {
+        return Err(CoreError::BadRequest("submission rejected".into()));
+    }
+
     let standard_cfg = forms_service::dto_from_model(form.clone())?.standard_fields;
     let custom_fields = forms_service::dto_from_model(form.clone())?.custom_fields;
     let backends = forms_service::backends_from_model(form)?;
@@ -529,6 +548,22 @@ mod tests {
     use crate::forms::{
         CustomField, CustomFieldType, StandardFieldConfig, StandardFieldsConfig,
     };
+
+    #[test]
+    fn honeypot_detection() {
+        let trip = |v: serde_json::Value| {
+            let mut m = std::collections::HashMap::new();
+            m.insert(HONEYPOT_KEY.to_string(), v);
+            honeypot_tripped(&NewSubmissionPayload(m))
+        };
+        assert!(trip(serde_json::json!("i am a bot")));
+        assert!(trip(serde_json::json!(123)));
+        assert!(!trip(serde_json::json!("")));
+        assert!(!trip(serde_json::json!("   ")));
+        assert!(!trip(serde_json::Value::Null));
+        // Absent field => not tripped.
+        assert!(!honeypot_tripped(&NewSubmissionPayload(std::collections::HashMap::new())));
+    }
 
     fn enabled_required() -> StandardFieldConfig {
         StandardFieldConfig {

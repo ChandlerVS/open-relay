@@ -44,3 +44,6 @@ dotenvy = { workspace = true }
 # Misc
 async-trait = { workspace = true }
 cookie = { workspace = true }
+base64 = { workspace = true }
+tower_governor = { workspace = true }
+governor = { workspace = true }

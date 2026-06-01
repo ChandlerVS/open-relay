@@ -61,6 +61,7 @@ pub async fn initialize(
                     created.id,
                     &[superadmin_role_id],
                     superadmin_role_id,
+                    &open_relay_core::rbac::AssignActor::system(),
                 )
                 .await?;
                 Ok(created)
@@ -76,8 +77,10 @@ pub async fn initialize(
     );
 
     let token = auth::issue_for_user(&state.auth_keys, &user)?;
+    let refresh_token = auth::refresh::issue(&state.db, user.id).await?;
     let body = InitializeResponse {
         token,
+        refresh_token,
         user: user.into(),
     };
     Ok((StatusCode::CREATED, Json(body)))

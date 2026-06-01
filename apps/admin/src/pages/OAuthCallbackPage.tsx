@@ -39,11 +39,12 @@ export function OAuthCallbackPage() {
     }
 
     const token = fragment.get("token");
-    if (!token) {
+    const refreshToken = fragment.get("refresh");
+    if (!token || !refreshToken) {
       setError("Missing token in callback response.");
       return;
     }
-    void signInWithToken(token).then(() => {
+    void signInWithToken(token, refreshToken).then(() => {
       navigate("/", { replace: true });
     });
   }, [navigate, signInWithToken]);

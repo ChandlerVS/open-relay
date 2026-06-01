@@ -3,8 +3,10 @@
 //! Schema permits multiple rows for future multi-provider support, but the
 //! application enforces exactly one row with `is_active = true` at any time.
 //!
-//! Security note: `client_secret` is stored as plaintext in v1. A follow-up
-//! should AEAD-encrypt it with an env-derived key.
+//! Security note: `client_secret` is AEAD-encrypted at rest
+//! (`enc:v1:<base64>` via `core::crypto::SecretCipher`, keyed by
+//! `ENCRYPTION_KEY`). It is decrypted only in `OidcProvider::from_config`. The
+//! admin DTO surfaces presence as `has_client_secret`, never the value.
 
 use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;

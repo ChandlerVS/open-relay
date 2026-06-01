@@ -17,7 +17,7 @@ open-relay-core = { path = "crates/core" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "set-header", "limit"] }
 
 # Data
 sea-orm = { version = "=2.0.0-rc.38", default-features = false, features = [
@@ -49,6 +49,14 @@ base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 rand = "0.9"
+
+# Secrets at rest (AEAD)
+chacha20poly1305 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+
+# Rate limiting
+tower_governor = "0.7"
+governor = "0.8"
 
 # Serde / errors
 serde = { version = "1", features = ["derive"] }

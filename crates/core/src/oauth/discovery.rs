@@ -9,6 +9,7 @@ use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::error::{CoreError, CoreResult};
+use crate::oauth::ssrf;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -25,9 +26,13 @@ pub struct DiscoveryDocument {
     pub scopes_supported: Option<Vec<String>>,
 }
 
-pub async fn fetch_discovery(url: &str) -> CoreResult<DiscoveryDocument> {
+pub async fn fetch_discovery(url: &str, allow_private: bool) -> CoreResult<DiscoveryDocument> {
+    // SSRF guard before any outbound connection — the URL is admin-supplied.
+    ssrf::guard_url(url, allow_private).await?;
+
     let client = reqwest::Client::builder()
         .timeout(DISCOVERY_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| CoreError::OAuthDiscoveryFailed(format!("client init: {e}")))?;
 

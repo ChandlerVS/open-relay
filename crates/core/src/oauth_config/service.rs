@@ -5,6 +5,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, ConnectionTrait, Entit
 use super::{
     DiscoveryPrefill, DiscoveryRequest, OAuthConfigPublicDto, UpsertOAuthConfig,
 };
+use crate::crypto::SecretCipher;
 use crate::error::{CoreError, CoreResult};
 use crate::oauth::discovery::fetch_discovery;
 
@@ -36,6 +37,8 @@ pub async fn get_public<C: ConnectionTrait>(conn: &C) -> CoreResult<OAuthConfigP
 
 pub async fn upsert<C: ConnectionTrait>(
     conn: &C,
+    cipher: &SecretCipher,
+    allow_private: bool,
     input: UpsertOAuthConfig,
 ) -> CoreResult<entity::oauth_provider_config::Model> {
     let display_name = input.display_name.trim().to_string();
@@ -46,16 +49,16 @@ pub async fn upsert<C: ConnectionTrait>(
     if client_id.is_empty() {
         return Err(CoreError::BadRequest("client_id is required".into()));
     }
-    validate_url("authorize_url", &input.authorize_url)?;
-    validate_url("token_url", &input.token_url)?;
+    validate_url("authorize_url", &input.authorize_url, allow_private)?;
+    validate_url("token_url", &input.token_url, allow_private)?;
     if let Some(u) = input.userinfo_url.as_deref() {
         if !u.is_empty() {
-            validate_url("userinfo_url", u)?;
+            validate_url("userinfo_url", u, allow_private)?;
         }
     }
     if let Some(u) = input.jwks_url.as_deref() {
         if !u.is_empty() {
-            validate_url("jwks_url", u)?;
+            validate_url("jwks_url", u, allow_private)?;
         }
     }
     let scopes = input.scopes.trim();
@@ -101,8 +104,10 @@ pub async fn upsert<C: ConnectionTrait>(
 
     match existing {
         Some(model) => {
+            // A new secret arrives as plaintext → encrypt it. `None` keeps the
+            // existing value, which is already an encrypted-at-rest blob.
             let secret_to_store = match now_secret {
-                Some(s) if !s.is_empty() => s,
+                Some(s) if !s.is_empty() => cipher.encrypt(&s)?,
                 Some(_) => return Err(CoreError::BadRequest("client_secret cannot be empty".into())),
                 None => model.client_secret.clone(),
             };
@@ -124,7 +129,7 @@ pub async fn upsert<C: ConnectionTrait>(
         }
         None => {
             let secret = match now_secret {
-                Some(s) if !s.is_empty() => s,
+                Some(s) if !s.is_empty() => cipher.encrypt(&s)?,
                 _ => {
                     return Err(CoreError::BadRequest(
                         "client_secret is required when creating a new OAuth config".into(),
@@ -164,8 +169,8 @@ pub async fn delete_active<C: ConnectionTrait>(conn: &C) -> CoreResult<()> {
     Ok(())
 }
 
-pub async fn discover(req: DiscoveryRequest) -> CoreResult<DiscoveryPrefill> {
-    let doc = fetch_discovery(req.discovery_url.trim()).await?;
+pub async fn discover(req: DiscoveryRequest, allow_private: bool) -> CoreResult<DiscoveryPrefill> {
+    let doc = fetch_discovery(req.discovery_url.trim(), allow_private).await?;
     Ok(DiscoveryPrefill {
         issuer: doc.issuer,
         authorize_url: doc.authorization_endpoint,
@@ -176,7 +181,12 @@ pub async fn discover(req: DiscoveryRequest) -> CoreResult<DiscoveryPrefill> {
     })
 }
 
-fn validate_url(field: &str, url: &str) -> CoreResult<()> {
+/// Validate a stored endpoint URL. HTTPS is required; plain `http://localhost`
+/// is permitted only when `allow_private` (development), so a production config
+/// can never persist a loopback/internal endpoint. Stricter SSRF resolution
+/// (DNS → IP range checks) happens in [`crate::oauth::ssrf::guard_url`] at fetch
+/// time; this is the cheap, synchronous format gate at write time.
+fn validate_url(field: &str, url: &str, allow_private: bool) -> CoreResult<()> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err(CoreError::BadRequest(format!("{field} is required")));
@@ -193,7 +203,7 @@ fn validate_url(field: &str, url: &str) -> CoreResult<()> {
         let host = &rest[..host_end];
         let host_no_port = host.split(':').next().unwrap_or("");
         let is_localhost = matches!(host_no_port, "localhost" | "127.0.0.1" | "[::1]" | "::1");
-        if is_localhost {
+        if allow_private && is_localhost {
             return Ok(());
         }
         return Err(CoreError::BadRequest(format!("{field} must use HTTPS")));
@@ -209,19 +219,25 @@ mod tests {
 
     #[test]
     fn validate_url_accepts_https() {
-        assert!(validate_url("x", "https://example.com/auth").is_ok());
+        assert!(validate_url("x", "https://example.com/auth", false).is_ok());
+        assert!(validate_url("x", "https://example.com/auth", true).is_ok());
     }
 
     #[test]
-    fn validate_url_rejects_http_except_localhost() {
-        assert!(validate_url("x", "http://example.com/auth").is_err());
-        assert!(validate_url("x", "http://localhost:8080/auth").is_ok());
-        assert!(validate_url("x", "http://127.0.0.1/auth").is_ok());
+    fn validate_url_permits_localhost_http_only_in_dev() {
+        // Development (allow_private = true): localhost http is allowed.
+        assert!(validate_url("x", "http://localhost:8080/auth", true).is_ok());
+        assert!(validate_url("x", "http://127.0.0.1/auth", true).is_ok());
+        // Production (allow_private = false): even localhost http is rejected.
+        assert!(validate_url("x", "http://localhost:8080/auth", false).is_err());
+        assert!(validate_url("x", "http://127.0.0.1/auth", false).is_err());
+        // Plain http to a public host is always rejected.
+        assert!(validate_url("x", "http://example.com/auth", true).is_err());
     }
 
     #[test]
     fn validate_url_rejects_garbage() {
-        assert!(validate_url("x", "not a url").is_err());
-        assert!(validate_url("x", "").is_err());
+        assert!(validate_url("x", "not a url", true).is_err());
+        assert!(validate_url("x", "", true).is_err());
     }
 }

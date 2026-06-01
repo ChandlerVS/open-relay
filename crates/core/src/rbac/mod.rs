@@ -10,10 +10,34 @@
 
 pub mod service;
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::permissions::Permission;
+
+/// Identity + privilege context of whoever is performing a role assignment.
+/// Used by [`service::assign_roles_to_user`] to bound escalation: a
+/// non-superadmin may not grant the superadmin/system role, nor any permission
+/// they don't themselves hold.
+#[derive(Debug, Clone)]
+pub struct AssignActor {
+    pub is_superadmin: bool,
+    pub permissions: HashSet<Permission>,
+}
+
+impl AssignActor {
+    /// A trusted, non-user-initiated caller (bootstrap, OAuth default-role
+    /// assignment). Bypasses privilege-bounding — these paths are not
+    /// attacker-controllable escalation vectors.
+    pub fn system() -> Self {
+        Self {
+            is_superadmin: true,
+            permissions: HashSet::new(),
+        }
+    }
+}
 
 /// Full role detail — name, description, grants. Returned by `GET /roles/{id}`
 /// and used by the role editor in the admin SPA.

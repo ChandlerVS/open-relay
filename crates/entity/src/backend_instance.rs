@@ -4,9 +4,10 @@
 //! row here. Built-in singletons (e.g. `open-relay`) don't need a row.
 //!
 //! Security note: `config` is a JSON blob that may contain secrets (API
-//! tokens, refresh tokens). Stored plaintext in v1 — same caveat as
-//! `oauth_provider_config.client_secret`. A follow-up should AEAD-encrypt
-//! secret-bearing fields with an env-derived key.
+//! tokens, refresh tokens). Secret-bearing keys (declared per kind via
+//! `BackendFactory::secret_keys`) are AEAD-encrypted at rest in place
+//! (`enc:v1:<base64>` via `core::crypto::SecretCipher`, keyed by
+//! `ENCRYPTION_KEY`); the worker decrypts them just before `BackendFactory::build`.
 
 use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;

@@ -59,7 +59,7 @@ export function LoginPage() {
       throw new Error(extractApiErrorMessage(error, "Sign-in failed."));
     },
     onSuccess: (data) => {
-      signIn(data.token, data.user);
+      signIn(data.token, data.refresh_token, data.user);
       const from = (location.state as LocationState | null)?.from?.pathname ?? "/";
       navigate(from, { replace: true });
     },

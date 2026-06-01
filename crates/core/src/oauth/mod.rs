@@ -9,4 +9,5 @@
 pub mod discovery;
 pub mod idtoken;
 pub mod oidc;
+pub mod ssrf;
 pub mod state;

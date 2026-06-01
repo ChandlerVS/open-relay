@@ -72,7 +72,13 @@ pub async fn admin_upsert_config(
     Json(input): Json<UpsertOAuthConfig>,
 ) -> AppResult<Json<OAuthConfigDto>> {
     require_permission(&state, claims, Permission::AuthConfigWrite).await?;
-    let model = oauth_config_service::upsert(&state.db, input).await?;
+    let model = oauth_config_service::upsert(
+        &state.db,
+        &state.cipher,
+        state.allow_private_network(),
+        input,
+    )
+    .await?;
     Ok(Json(model.into()))
 }
 
@@ -116,7 +122,7 @@ pub async fn admin_discover(
     Json(input): Json<DiscoveryRequest>,
 ) -> AppResult<Json<DiscoveryPrefill>> {
     require_permission(&state, claims, Permission::AuthConfigWrite).await?;
-    let prefill = oauth_config_service::discover(input).await?;
+    let prefill = oauth_config_service::discover(input, state.allow_private_network()).await?;
     Ok(Json(prefill))
 }
 

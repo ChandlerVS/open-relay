@@ -20,11 +20,39 @@ const JWT_SECRET_PLACEHOLDERS: &[&str] = &[
     "password",
 ];
 
+/// Required raw length, in bytes, of the decoded `ENCRYPTION_KEY`. This is the
+/// key size for the XChaCha20-Poly1305 AEAD used to encrypt secrets at rest.
+const ENCRYPTION_KEY_LEN: usize = 32;
+
+/// Deployment environment. Gates affordances that are safe in local
+/// development but dangerous in production: the unauthenticated Swagger
+/// UI / `/openapi.json`, the SSRF allowance for loopback/private OAuth
+/// endpoints, and HSTS emission. Defaults to [`Environment::Production`]
+/// so an unset or typo'd value fails *safe* rather than opening the surface.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Environment {
+    Development,
+    #[default]
+    Production,
+}
+
+fn default_environment() -> Environment {
+    Environment::Production
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub listen_addr: String,
     pub database_url: String,
     pub jwt_secret: String,
+    /// AEAD key (base64) used to encrypt secret columns at rest
+    /// (`oauth_provider_config.client_secret`, backend instance tokens).
+    /// Separate from `jwt_secret`; must decode to exactly 32 bytes.
+    pub encryption_key: String,
+    /// Deployment environment. See [`Environment`].
+    #[serde(default = "default_environment")]
+    pub environment: Environment,
     /// Fully-qualified base URL the API is reachable at from end-user browsers.
     /// Used to construct the OAuth redirect_uri the IdP whitelists.
     /// e.g. `http://localhost:8080` for dev, `https://api.example.com` in prod.
@@ -51,6 +79,8 @@ impl Config {
                         "LISTEN_ADDR",
                         "DATABASE_URL",
                         "JWT_SECRET",
+                        "ENCRYPTION_KEY",
+                        "ENVIRONMENT",
                         "PUBLIC_API_URL",
                         "ADMIN_URL",
                         "COOKIE_SECURE",
@@ -84,12 +114,47 @@ impl Config {
             );
         }
 
+        // ENCRYPTION_KEY must be a distinct, full-strength AEAD key. Reusing
+        // JWT_SECRET (or a low-entropy placeholder) would tie secret-at-rest
+        // confidentiality to the token-signing key. Require it to base64-decode
+        // to exactly 32 bytes — fail closed at boot, never silently plaintext.
+        let enc_key = self.encryption_key.trim();
+        if JWT_SECRET_PLACEHOLDERS
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(enc_key))
+        {
+            bail!(
+                "ENCRYPTION_KEY is set to a known placeholder value; replace it with a unique \
+                 key (generate one with `openssl rand -base64 32`)"
+            );
+        }
+        if enc_key.eq_ignore_ascii_case(secret) {
+            bail!("ENCRYPTION_KEY must differ from JWT_SECRET (use a separate key)");
+        }
+        match base64_decode(enc_key) {
+            Some(bytes) if bytes.len() == ENCRYPTION_KEY_LEN => {}
+            _ => bail!(
+                "ENCRYPTION_KEY must be base64 that decodes to exactly {ENCRYPTION_KEY_LEN} bytes \
+                 (generate one with `openssl rand -base64 32`)"
+            ),
+        }
+
         // These become CORS / redirect origins. Validate now so the parse in
         // the router can't fail open. The router uses the trimmed form.
         validate_origin("ADMIN_URL", &self.admin_url)?;
         validate_origin("PUBLIC_API_URL", &self.public_api_url)?;
         Ok(())
     }
+}
+
+/// Standard-alphabet base64 decode (with or without padding), used only to
+/// length-check `ENCRYPTION_KEY` at boot.
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(s))
+        .ok()
 }
 
 /// Ensure a configured base URL is non-empty and usable as an HTTP header value
@@ -115,11 +180,20 @@ fn validate_origin(name: &str, value: &str) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    /// Valid base64 for exactly 32 bytes, computed at runtime to avoid a
+    /// hand-miscounted literal.
+    fn strong_encryption_key() -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode([0u8; ENCRYPTION_KEY_LEN])
+    }
+
     fn config_with(jwt_secret: &str, admin_url: &str) -> Config {
         Config {
             listen_addr: "0.0.0.0:8080".into(),
             database_url: "mysql://localhost/db".into(),
             jwt_secret: jwt_secret.into(),
+            encryption_key: strong_encryption_key(),
+            environment: Environment::Production,
             public_api_url: "http://localhost:8080".into(),
             admin_url: admin_url.into(),
             cookie_secure: true,
@@ -149,5 +223,41 @@ mod tests {
         // A space is not a legal header-value byte.
         assert!(config_with(STRONG_SECRET, "http://localhost:5173 ").validate().is_err());
         assert!(config_with(STRONG_SECRET, "").validate().is_err());
+    }
+
+    #[test]
+    fn accepts_valid_encryption_key() {
+        assert!(config_with(STRONG_SECRET, "http://localhost:5173").validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_encryption_key_wrong_length() {
+        use base64::Engine;
+        let short = base64::engine::general_purpose::STANDARD.encode([0u8; 16]);
+        let mut cfg = config_with(STRONG_SECRET, "http://localhost:5173");
+        cfg.encryption_key = short;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_encryption_key_not_base64() {
+        let mut cfg = config_with(STRONG_SECRET, "http://localhost:5173");
+        cfg.encryption_key = "not valid base64 !!!".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_encryption_key_equal_to_jwt_secret() {
+        let mut cfg = config_with(STRONG_SECRET, "http://localhost:5173");
+        cfg.encryption_key = STRONG_SECRET.into();
+        cfg.jwt_secret = STRONG_SECRET.into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_placeholder_encryption_key() {
+        let mut cfg = config_with(STRONG_SECRET, "http://localhost:5173");
+        cfg.encryption_key = "change_me".into();
+        assert!(cfg.validate().is_err());
     }
 }

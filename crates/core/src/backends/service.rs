@@ -10,6 +10,7 @@ use super::{
     NewBackendInstance, UpdateBackendInstance, value_is_empty,
 };
 use crate::backend::{BackendBuildError, BackendRegistry};
+use crate::crypto::SecretCipher;
 use crate::error::{CoreError, CoreResult};
 
 const MAX_NAME_LEN: usize = 200;
@@ -70,6 +71,7 @@ pub async fn find_by_id<C: ConnectionTrait>(
 pub async fn create<C: ConnectionTrait>(
     conn: &C,
     registry: &BackendRegistry,
+    cipher: &SecretCipher,
     input: NewBackendInstance,
 ) -> CoreResult<entity::backend_instance::Model> {
     let kind = input.kind.trim().to_string();
@@ -79,12 +81,16 @@ pub async fn create<C: ConnectionTrait>(
         )));
     }
     let name = validate_name(&input.name)?;
+    // Validate against the plaintext config (the factory rejects empty tokens),
+    // then encrypt secret-bearing keys before they touch the DB.
     validate_config(registry, &kind, &input.config)?;
+    let mut config = input.config;
+    encrypt_secret_keys(registry, &kind, &mut config, cipher)?;
 
     let active = entity::backend_instance::ActiveModel {
         kind: ActiveValue::Set(kind),
         name: ActiveValue::Set(name),
-        config: ActiveValue::Set(input.config),
+        config: ActiveValue::Set(config),
         ..Default::default()
     };
     Ok(active.insert(conn).await?)
@@ -93,6 +99,7 @@ pub async fn create<C: ConnectionTrait>(
 pub async fn update<C: ConnectionTrait>(
     conn: &C,
     registry: &BackendRegistry,
+    cipher: &SecretCipher,
     id: i32,
     input: UpdateBackendInstance,
 ) -> CoreResult<entity::backend_instance::Model> {
@@ -110,8 +117,15 @@ pub async fn update<C: ConnectionTrait>(
         // Secrets are redacted out of the DTO the admin GET'd, so a round-tripped
         // config omits them. Treat a missing/empty secret key as "keep existing"
         // (mirrors OAuth `client_secret: None`) rather than clobbering the token.
+        // `existing.config` holds *encrypted* secret blobs, so the carried-over
+        // values are ciphertext at this point.
         preserve_secrets(registry, &existing.kind, &existing.config, &mut config);
+        // Bring every secret key to a uniform plaintext view (newly-supplied
+        // values pass through untouched; carried-over ciphertext is decrypted),
+        // validate against plaintext, then re-encrypt before persisting.
+        decrypt_secret_keys(registry, &existing.kind, &mut config, cipher)?;
         validate_config(registry, &existing.kind, &config)?;
+        encrypt_secret_keys(registry, &existing.kind, &mut config, cipher)?;
         active.config = ActiveValue::Set(config);
     }
 
@@ -138,6 +152,49 @@ fn preserve_secrets(
             incoming_obj.insert((*key).to_string(), existing_val.clone());
         }
     }
+}
+
+/// Encrypt each declared secret key in `config` that holds a non-empty string
+/// and isn't already ciphertext. Idempotent — safe to call on a config whose
+/// secrets are already encrypted.
+pub(crate) fn encrypt_secret_keys(
+    registry: &BackendRegistry,
+    kind: &str,
+    config: &mut serde_json::Value,
+    cipher: &SecretCipher,
+) -> CoreResult<()> {
+    let Some(obj) = config.as_object_mut() else {
+        return Ok(());
+    };
+    for key in registry.secret_keys(kind) {
+        if let Some(serde_json::Value::String(s)) = obj.get(*key) {
+            if !s.trim().is_empty() && !SecretCipher::is_encrypted(s) {
+                let enc = cipher.encrypt(s)?;
+                obj.insert((*key).to_string(), serde_json::Value::String(enc));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Decrypt each declared secret key in `config` back to plaintext. A legacy
+/// plaintext value (no `enc:v1:` prefix) passes through unchanged.
+pub(crate) fn decrypt_secret_keys(
+    registry: &BackendRegistry,
+    kind: &str,
+    config: &mut serde_json::Value,
+    cipher: &SecretCipher,
+) -> CoreResult<()> {
+    let Some(obj) = config.as_object_mut() else {
+        return Ok(());
+    };
+    for key in registry.secret_keys(kind) {
+        if let Some(serde_json::Value::String(s)) = obj.get(*key) {
+            let plain = cipher.decrypt(s)?;
+            obj.insert((*key).to_string(), serde_json::Value::String(plain));
+        }
+    }
+    Ok(())
 }
 
 /// Delete a backend instance. Returns `CoreError::Conflict` (carrying a JSON
@@ -242,5 +299,38 @@ mod tests {
         let mut incoming = serde_json::json!({ "private_integration_token": "" });
         preserve_secrets(&registry(), "gohighlevel", &existing, &mut incoming);
         assert_eq!(incoming["private_integration_token"], "pit-old");
+    }
+
+    fn cipher() -> SecretCipher {
+        SecretCipher::from_key_bytes(&[3u8; crate::crypto::KEY_LEN]).unwrap()
+    }
+
+    #[test]
+    fn encrypt_then_decrypt_secret_keys_round_trips() {
+        let c = cipher();
+        let mut config = serde_json::json!({
+            "location_id": "loc_1",
+            "private_integration_token": "pit-live-xyz",
+        });
+        encrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        // Secret is now ciphertext; non-secret untouched.
+        let stored = config["private_integration_token"].as_str().unwrap();
+        assert!(SecretCipher::is_encrypted(stored));
+        assert_eq!(config["location_id"], "loc_1");
+
+        decrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        assert_eq!(config["private_integration_token"], "pit-live-xyz");
+        assert_eq!(config["location_id"], "loc_1");
+    }
+
+    #[test]
+    fn encrypt_secret_keys_is_idempotent() {
+        let c = cipher();
+        let mut config = serde_json::json!({ "private_integration_token": "pit" });
+        encrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        let once = config["private_integration_token"].as_str().unwrap().to_string();
+        encrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        // Already-encrypted value is left as-is (not double-encrypted).
+        assert_eq!(config["private_integration_token"], once);
     }
 }

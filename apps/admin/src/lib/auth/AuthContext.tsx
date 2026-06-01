@@ -18,13 +18,13 @@ export interface AuthContextValue {
    */
   permissions: Permission[];
   roles: RoleSummary[];
-  signIn: (token: string, user: AuthUser) => void;
+  signIn: (token: string, refreshToken: string, user: AuthUser) => void;
   /**
-   * Token-only sign in for flows (like OAuth) where the server hands us a JWT
-   * without a user payload. Stores the token then loads the session shape via
+   * Token-pair sign in for flows (like OAuth) where the server hands us tokens
+   * without a user payload. Stores them then loads the session shape via
    * `/auth/me`.
    */
-  signInWithToken: (token: string) => Promise<void>;
+  signInWithToken: (token: string, refreshToken: string) => Promise<void>;
   signOut: () => void;
 }
 

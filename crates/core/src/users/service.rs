@@ -12,7 +12,10 @@ use sea_orm::{
     QueryFilter, QueryOrder, QuerySelect,
 };
 
-use super::{ChangePassword, ListQuery, NewUser, UpdateUser, UserDto, UserList, UserSelectOption};
+use super::{
+    AdminSetPassword, ChangeOwnPassword, ListQuery, NewUser, UpdateUser, UserDto, UserList,
+    UserSelectOption,
+};
 use crate::auth::provider::VerifiedIdentity;
 use crate::error::{CoreError, CoreResult};
 use crate::external_identity::service as external_identity_service;
@@ -243,19 +246,64 @@ pub async fn update_user<C: ConnectionTrait>(
     Ok(active.update(conn).await?)
 }
 
-pub async fn change_password<C: ConnectionTrait>(
+/// Self-service password change. Verifies the current password, sets the new
+/// one, and revokes the user's existing refresh tokens (forcing other sessions
+/// to re-authenticate). Run inside a transaction.
+pub async fn change_own_password<C: ConnectionTrait>(
     conn: &C,
-    id: i32,
-    input: ChangePassword,
+    user_id: i32,
+    input: ChangeOwnPassword,
 ) -> CoreResult<()> {
-    validate_password(&input.password)?;
-    let existing = find_by_id(conn, id)
+    let existing = find_by_id(conn, user_id)
         .await?
         .ok_or_else(|| CoreError::NotFound("user not found".into()))?;
+    let Some(hash) = existing.password_hash.as_deref() else {
+        return Err(CoreError::BadRequest(
+            "no local password set for this account".into(),
+        ));
+    };
+    if !verify_password(hash, &input.current_password) {
+        return Err(CoreError::Unauthorized);
+    }
+    validate_password(&input.new_password)?;
+    let new_hash = hash_password(&input.new_password)?;
+    let mut active: entity::user::ActiveModel = existing.into();
+    active.password_hash = ActiveValue::Set(Some(new_hash));
+    active.update(conn).await?;
+    crate::auth::refresh::revoke_all_for_user(conn, user_id).await?;
+    Ok(())
+}
+
+/// Admin password reset of another user. Forbids resetting a user who outranks
+/// the actor (a non-superadmin cannot reset a superadmin), then revokes the
+/// target's sessions so the old credentials can't continue. Run inside a
+/// transaction.
+pub async fn admin_set_password<C: ConnectionTrait>(
+    conn: &C,
+    actor_is_superadmin: bool,
+    superadmin_role_id: i32,
+    target_id: i32,
+    input: AdminSetPassword,
+) -> CoreResult<()> {
+    validate_password(&input.password)?;
+    let existing = find_by_id(conn, target_id)
+        .await?
+        .ok_or_else(|| CoreError::NotFound("user not found".into()))?;
+
+    // Rank guard: only a superadmin may reset a superadmin's password.
+    let target_is_superadmin =
+        rbac_service::user_has_role(conn, target_id, superadmin_role_id).await?;
+    if target_is_superadmin && !actor_is_superadmin {
+        return Err(CoreError::Forbidden(
+            "cannot reset the password of a superadmin".into(),
+        ));
+    }
+
     let hash = hash_password(&input.password)?;
     let mut active: entity::user::ActiveModel = existing.into();
     active.password_hash = ActiveValue::Set(Some(hash));
     active.update(conn).await?;
+    crate::auth::refresh::revoke_all_for_user(conn, target_id).await?;
     Ok(())
 }
 
@@ -380,7 +428,16 @@ pub async fn find_or_create_via_oauth<C: ConnectionTrait>(
     )
     .await?;
     if let Some(role_id) = default_role_id {
-        rbac_service::assign_roles_to_user(conn, created.id, &[role_id], superadmin_role_id).await?;
+        // Trusted system path: the admin configured this default role, the
+        // sign-in user isn't choosing it, so privilege-bounding doesn't apply.
+        rbac_service::assign_roles_to_user(
+            conn,
+            created.id,
+            &[role_id],
+            superadmin_role_id,
+            &crate::rbac::AssignActor::system(),
+        )
+        .await?;
     }
     Ok(created)
 }

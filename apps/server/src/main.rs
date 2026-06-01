@@ -6,6 +6,7 @@ mod auth;
 mod config;
 mod error;
 mod jobs;
+mod ratelimit;
 mod router;
 mod routes;
 mod state;
@@ -57,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(db.clone(), &config, superadmin_role_id)?;
 
     // Spawn delivery worker.
-    jobs::spawn(db.clone(), state.backends.clone());
+    jobs::spawn(db.clone(), state.backends.clone(), state.cipher.clone());
 
     let app = router::build(state.clone());
 
@@ -65,7 +66,14 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("binding {}", config.listen_addr))?;
     tracing::info!(listen = %config.listen_addr, "ready");
-    axum::serve(listener, app).await.context("axum::serve")?;
+    // `into_make_service_with_connect_info` exposes the peer `SocketAddr` so the
+    // per-IP rate limiters (tower_governor `PeerIpKeyExtractor`) can key on it.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .context("axum::serve")?;
 
     Ok(())
 }

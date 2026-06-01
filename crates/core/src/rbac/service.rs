@@ -17,7 +17,7 @@ use sea_orm::{
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
 };
 
-use super::{NewRole, RoleDto, RoleSummary, UpdateRole};
+use super::{AssignActor, NewRole, RoleDto, RoleSummary, UpdateRole};
 use crate::error::{CoreError, CoreResult};
 use crate::permissions::Permission;
 
@@ -141,6 +141,21 @@ pub async fn roles_for_users<C: ConnectionTrait>(
 /// Flat set of permissions a user holds, expanded from their role grants.
 /// Unknown slugs (left over from a previously-deployed enum variant) are
 /// silently dropped — see the doc on `Permission::from_slug`.
+/// `true` if `user_id` is directly assigned `role_id`. Used to decide whether
+/// an actor is a superadmin for the role-assignment escalation guard.
+pub async fn user_has_role<C: ConnectionTrait>(
+    conn: &C,
+    user_id: i32,
+    role_id: i32,
+) -> CoreResult<bool> {
+    Ok(entity::user_role::Entity::find()
+        .filter(entity::user_role::Column::UserId.eq(user_id))
+        .filter(entity::user_role::Column::RoleId.eq(role_id))
+        .one(conn)
+        .await?
+        .is_some())
+}
+
 pub async fn load_user_permissions<C: ConnectionTrait>(
     conn: &C,
     user_id: i32,
@@ -272,6 +287,7 @@ pub async fn assign_roles_to_user<C: ConnectionTrait>(
     user_id: i32,
     role_ids: &[i32],
     superadmin_role_id: i32,
+    actor: &AssignActor,
 ) -> CoreResult<()> {
     let mut requested: Vec<i32> = role_ids.iter().copied().collect();
     requested.sort();
@@ -304,6 +320,30 @@ pub async fn assign_roles_to_user<C: ConnectionTrait>(
 
     let to_remove: Vec<i32> = current.difference(&requested_set).copied().collect();
     let to_add: Vec<i32> = requested_set.difference(&current).copied().collect();
+
+    // Privilege-bounding (escalation guard): only newly-*added* roles are
+    // checked, so re-saving an existing assignment never trips it. A superadmin
+    // actor may grant anything; everyone else is bounded.
+    if !actor.is_superadmin && !to_add.is_empty() {
+        // Adding the superadmin/system role is reserved to superadmins.
+        if to_add.contains(&superadmin_role_id) {
+            return Err(CoreError::Forbidden(
+                "only a superadmin may assign the superadmin role".into(),
+            ));
+        }
+        // Forbid granting any permission the actor doesn't already hold —
+        // otherwise `users:write` + `roles:assign` becomes arbitrary escalation.
+        let perms_by_role = permissions_by_role(conn, to_add.clone()).await?;
+        for perms in perms_by_role.values() {
+            for p in perms {
+                if !actor.permissions.contains(p) {
+                    return Err(CoreError::Forbidden(
+                        "cannot assign a role granting permissions you do not hold".into(),
+                    ));
+                }
+            }
+        }
+    }
 
     if !to_remove.is_empty() {
         entity::user_role::Entity::delete_many()

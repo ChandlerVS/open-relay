@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/me": {
         parameters: {
             query?: never;
@@ -164,6 +180,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["change_own_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/backends": {
         parameters: {
             query?: never;
@@ -210,6 +258,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["update_backend"];
+        trace?: never;
+    };
+    "/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_overview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/forms": {
@@ -505,6 +569,15 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * @description Admin-initiated password reset for another user. No current-password proof
+         *     (the actor is acting by permission, not as the target), but the service
+         *     forbids resetting a user who outranks the actor and revokes the target's
+         *     sessions. See `service::admin_set_password`.
+         */
+        AdminSetPassword: {
+            password: string;
+        };
+        /**
          * @description One backend destination on a form. Each entry queues one delivery row per
          *     submission.
          *
@@ -522,12 +595,14 @@ export interface components {
             kind: string;
         };
         /**
-         * @description Admin-facing instance shape. The `config` JSON round-trips verbatim —
-         *     the client owns kind-specific schemas. Secret fields are kept in `config`
-         *     rather than promoted to typed columns so future kinds can ship without
-         *     new migrations.
+         * @description Admin-facing instance shape. Secret-bearing keys (declared per kind via
+         *     [`crate::backend::BackendFactory::secret_keys`]) are **stripped** from
+         *     `config` and surfaced as presence booleans in `secret_fields`, so the live
+         *     token never reaches the client / browser cache / OpenAPI client. Mirrors
+         *     `OAuthConfigDto`'s `has_client_secret` redaction.
          */
         BackendInstanceDto: {
+            /** @description Non-secret config keys, verbatim. Secret keys are removed. */
             config: unknown;
             /** Format: date-time */
             created_at: string;
@@ -535,6 +610,13 @@ export interface components {
             id: number;
             kind: string;
             name: string;
+            /**
+             * @description For each secret key this kind declares: `true` if a non-empty value is
+             *     on record. Lets the admin UI render "set / unset" without leaking it.
+             */
+            secret_fields: {
+                [key: string]: boolean;
+            };
             /** Format: date-time */
             updated_at: string;
         };
@@ -570,14 +652,21 @@ export interface components {
             configurable: boolean;
             kind: string;
         };
-        ChangePassword: {
-            password: string;
+        /**
+         * @description Self-service password change. Requires proof of the current password and
+         *     revokes the user's other sessions. See `service::change_own_password`.
+         */
+        ChangeOwnPassword: {
+            current_password: string;
+            new_password: string;
         };
         CustomField: components["schemas"]["CustomFieldType"] & {
             help_text?: string | null;
             /**
-             * @description snake_case identifier, unique within the form. Used as the
-             *     submission key.
+             * @description Identifier, unique within the form. Used verbatim as the submission key
+             *     and as the lookup key a backend maps onto its destination field, so it
+             *     accepts any format the destination needs (e.g. a GoHighLevel custom-field
+             *     unique key or field id) — only whitespace/control chars are rejected.
              */
             key: string;
             label: string;
@@ -622,6 +711,33 @@ export interface components {
         } | {
             /** @enum {string} */
             type: "checkbox";
+        };
+        /**
+         * @description Aggregate payload backing the admin dashboard. `recent_submissions` is
+         *     `None` (serialised as `null`) when the caller lacks `submissions:read`.
+         */
+        DashboardOverview: {
+            delivery_status: components["schemas"]["DeliveryStatusCount"][];
+            recent_submissions?: components["schemas"]["RecentSubmission"][] | null;
+            top_forms: components["schemas"]["FormSubmissionCount"][];
+            totals: components["schemas"]["DashboardTotals"];
+        };
+        /** @description Headline entity counts shown as stat cards. */
+        DashboardTotals: {
+            /** Format: int64 */
+            backends: number;
+            /** Format: int64 */
+            forms: number;
+            /** Format: int64 */
+            submissions: number;
+            /** Format: int64 */
+            users: number;
+        };
+        /** @description One bucket of the delivery-status breakdown (e.g. `succeeded` → 42). */
+        DeliveryStatusCount: {
+            /** Format: int64 */
+            count: number;
+            status: string;
         };
         DiscoveryPrefill: {
             authorize_url: string;
@@ -677,10 +793,19 @@ export interface components {
             id: number;
             label: string;
         };
+        /** @description A form ranked by how many submissions it has received. */
+        FormSubmissionCount: {
+            /** Format: int64 */
+            count: number;
+            /** Format: int32 */
+            form_id: number;
+            form_name: string;
+        };
         Health: {
             status: string;
         };
         InitializeResponse: {
+            refresh_token: string;
             token: string;
             user: components["schemas"]["UserDto"];
         };
@@ -692,6 +817,12 @@ export interface components {
             password: string;
         };
         LoginResponse: {
+            /**
+             * @description Opaque refresh secret — exchanged at `/auth/refresh` for a new access
+             *     token. Returned only here and on refresh; never retrievable afterward.
+             */
+            refresh_token: string;
+            /** @description Short-lived access JWT (sent as `Authorization: Bearer`). */
             token: string;
             user: components["schemas"]["UserDto"];
         };
@@ -810,6 +941,24 @@ export interface components {
             name: string;
             slug: string;
             standard_fields: components["schemas"]["StandardFieldsConfig"];
+        };
+        /**
+         * @description A condensed submission row for the recent-activity feed. Deliberately
+         *     minimal — the full record is available via `/submissions/{id}`.
+         */
+        RecentSubmission: {
+            /** Format: date-time */
+            created_at: string;
+            email?: string | null;
+            /** Format: int32 */
+            form_id: number;
+            form_name?: string | null;
+            /** Format: int32 */
+            id: number;
+            name?: string | null;
+        };
+        RefreshRequest: {
+            refresh_token: string;
         };
         /**
          * @description Full role detail — name, description, grants. Returned by `GET /roles/{id}`
@@ -933,6 +1082,14 @@ export interface components {
             offset: number;
             /** Format: int64 */
             total: number;
+        };
+        /**
+         * @description Result of a successful `/auth/refresh` rotation: a fresh access token plus
+         *     the rotated refresh secret (the presented one is now revoked).
+         */
+        TokenPair: {
+            refresh_token: string;
+            token: string;
         };
         /** @description Partial update. `None` means "leave the field alone". */
         UpdateBackendInstance: {
@@ -1061,6 +1218,31 @@ export interface operations {
                 };
             };
             /** @description Invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1458,6 +1640,73 @@ export interface operations {
             };
         };
     };
+    change_own_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeOwnPassword"];
+            };
+        };
+        responses: {
+            /** @description Password changed; other sessions revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation failed / no local password */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing/invalid token or wrong current password */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    refresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Rotated token pair */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenPair"];
+                };
+            };
+            /** @description Invalid, expired, or revoked refresh token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     list_backends: {
         parameters: {
             query?: never;
@@ -1714,6 +1963,33 @@ export interface operations {
             };
             /** @description Backend instance not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_overview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aggregate admin overview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardOverview"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2843,11 +3119,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ChangePassword"];
+                "application/json": components["schemas"]["AdminSetPassword"];
             };
         };
         responses: {
-            /** @description Password updated */
+            /** @description Password reset; target's sessions revoked */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -2868,7 +3144,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Insufficient permission */
+            /** @description Insufficient permission or target outranks actor */
             403: {
                 headers: {
                     [name: string]: unknown;

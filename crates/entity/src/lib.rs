@@ -30,6 +30,7 @@ pub mod backend_instance;
 pub mod external_identity;
 pub mod form;
 pub mod oauth_provider_config;
+pub mod refresh_token;
 pub mod role;
 pub mod role_permission;
 pub mod submission;

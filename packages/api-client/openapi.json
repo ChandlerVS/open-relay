@@ -43,6 +43,27 @@
         }
       }
     },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Session revoked"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/auth/me": {
       "get": {
         "tags": [
@@ -409,6 +430,73 @@
         }
       }
     },
+    "/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "change_own_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeOwnPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed; other sessions revoked"
+          },
+          "400": {
+            "description": "Validation failed / no local password"
+          },
+          "401": {
+            "description": "Missing/invalid token or wrong current password"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "refresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated token pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired, or revoked refresh token"
+          }
+        }
+      }
+    },
     "/backends": {
       "get": {
         "tags": [
@@ -657,6 +745,34 @@
           },
           "404": {
             "description": "Backend instance not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/dashboard": {
+      "get": {
+        "tags": [
+          "dashboard"
+        ],
+        "operationId": "get_overview",
+        "responses": {
+          "200": {
+            "description": "Aggregate admin overview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
           }
         },
         "security": [
@@ -1829,7 +1945,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ChangePassword"
+                "$ref": "#/components/schemas/AdminSetPassword"
               }
             }
           },
@@ -1837,7 +1953,7 @@
         },
         "responses": {
           "204": {
-            "description": "Password updated"
+            "description": "Password reset; target's sessions revoked"
           },
           "400": {
             "description": "Validation failed"
@@ -1846,7 +1962,7 @@
             "description": "Missing or invalid token"
           },
           "403": {
-            "description": "Insufficient permission"
+            "description": "Insufficient permission or target outranks actor"
           },
           "404": {
             "description": "User not found"
@@ -1862,6 +1978,18 @@
   },
   "components": {
     "schemas": {
+      "AdminSetPassword": {
+        "type": "object",
+        "description": "Admin-initiated password reset for another user. No current-password proof\n(the actor is acting by permission, not as the target), but the service\nforbids resetting a user who outranks the actor and revokes the target's\nsessions. See `service::admin_set_password`.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          }
+        }
+      },
       "BackendBinding": {
         "type": "object",
         "description": "One backend destination on a form. Each entry queues one delivery row per\nsubmission.\n\n`kind` matches a backend kind registered in `BackendRegistry` — either a\nstatic singleton like `\"open-relay\"` (in which case `instance_id` is\n`None`) or a configurable kind like `\"gohighlevel\"` whose credentials\nlive in `backend_instance` (in which case `instance_id` is `Some`).\n\nThe legacy serde key `\"name\"` is accepted as an alias for `kind` so JSON\nwritten before configurable instances landed still parses.",
@@ -1883,17 +2011,20 @@
       },
       "BackendInstanceDto": {
         "type": "object",
-        "description": "Admin-facing instance shape. The `config` JSON round-trips verbatim —\nthe client owns kind-specific schemas. Secret fields are kept in `config`\nrather than promoted to typed columns so future kinds can ship without\nnew migrations.",
+        "description": "Admin-facing instance shape. Secret-bearing keys (declared per kind via\n[`crate::backend::BackendFactory::secret_keys`]) are **stripped** from\n`config` and surfaced as presence booleans in `secret_fields`, so the live\ntoken never reaches the client / browser cache / OpenAPI client. Mirrors\n`OAuthConfigDto`'s `has_client_secret` redaction.",
         "required": [
           "id",
           "kind",
           "name",
           "config",
+          "secret_fields",
           "created_at",
           "updated_at"
         ],
         "properties": {
-          "config": {},
+          "config": {
+            "description": "Non-secret config keys, verbatim. Secret keys are removed."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -1907,6 +2038,16 @@
           },
           "name": {
             "type": "string"
+          },
+          "secret_fields": {
+            "type": "object",
+            "description": "For each secret key this kind declares: `true` if a non-empty value is\non record. Lets the admin UI render \"set / unset\" without leaking it.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "updated_at": {
             "type": "string",
@@ -1986,13 +2127,18 @@
           }
         }
       },
-      "ChangePassword": {
+      "ChangeOwnPassword": {
         "type": "object",
+        "description": "Self-service password change. Requires proof of the current password and\nrevokes the user's other sessions. See `service::change_own_password`.",
         "required": [
-          "password"
+          "current_password",
+          "new_password"
         ],
         "properties": {
-          "password": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
             "type": "string"
           }
         }
@@ -2017,7 +2163,7 @@
               },
               "key": {
                 "type": "string",
-                "description": "snake_case identifier, unique within the form. Used as the\nsubmission key."
+                "description": "Identifier, unique within the form. Used verbatim as the submission key\nand as the lookup key a backend maps onto its destination field, so it\naccepts any format the destination needs (e.g. a GoHighLevel custom-field\nunique key or field id) — only whitespace/control chars are rejected."
               },
               "label": {
                 "type": "string"
@@ -2162,6 +2308,91 @@
           }
         ],
         "description": "HTML input types we expose for custom fields.\n\n`Select` carries its options on the variant so the renderer can't see a\nselect-typed field without options. `Checkbox` is a single boolean\ncheckbox (multi-select uses `Select`)."
+      },
+      "DashboardOverview": {
+        "type": "object",
+        "description": "Aggregate payload backing the admin dashboard. `recent_submissions` is\n`None` (serialised as `null`) when the caller lacks `submissions:read`.",
+        "required": [
+          "totals",
+          "delivery_status",
+          "top_forms"
+        ],
+        "properties": {
+          "delivery_status": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryStatusCount"
+            }
+          },
+          "recent_submissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RecentSubmission"
+            }
+          },
+          "top_forms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FormSubmissionCount"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/DashboardTotals"
+          }
+        }
+      },
+      "DashboardTotals": {
+        "type": "object",
+        "description": "Headline entity counts shown as stat cards.",
+        "required": [
+          "users",
+          "forms",
+          "submissions",
+          "backends"
+        ],
+        "properties": {
+          "backends": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "forms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "submissions": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "users": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DeliveryStatusCount": {
+        "type": "object",
+        "description": "One bucket of the delivery-status breakdown (e.g. `succeeded` → 42).",
+        "required": [
+          "status",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          }
+        }
       },
       "DiscoveryPrefill": {
         "type": "object",
@@ -2348,6 +2579,29 @@
           }
         }
       },
+      "FormSubmissionCount": {
+        "type": "object",
+        "description": "A form ranked by how many submissions it has received.",
+        "required": [
+          "form_id",
+          "form_name",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "form_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "form_name": {
+            "type": "string"
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -2363,9 +2617,13 @@
         "type": "object",
         "required": [
           "token",
+          "refresh_token",
           "user"
         ],
         "properties": {
+          "refresh_token": {
+            "type": "string"
+          },
           "token": {
             "type": "string"
           },
@@ -2404,11 +2662,17 @@
         "type": "object",
         "required": [
           "token",
+          "refresh_token",
           "user"
         ],
         "properties": {
+          "refresh_token": {
+            "type": "string",
+            "description": "Opaque refresh secret — exchanged at `/auth/refresh` for a new access\ntoken. Returned only here and on refresh; never retrievable afterward."
+          },
           "token": {
-            "type": "string"
+            "type": "string",
+            "description": "Short-lived access JWT (sent as `Authorization: Bearer`)."
           },
           "user": {
             "$ref": "#/components/schemas/UserDto"
@@ -2737,6 +3001,58 @@
           },
           "standard_fields": {
             "$ref": "#/components/schemas/StandardFieldsConfig"
+          }
+        }
+      },
+      "RecentSubmission": {
+        "type": "object",
+        "description": "A condensed submission row for the recent-activity feed. Deliberately\nminimal — the full record is available via `/submissions/{id}`.",
+        "required": [
+          "id",
+          "form_id",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "form_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "form_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string"
           }
         }
       },
@@ -3107,6 +3423,22 @@
           }
         }
       },
+      "TokenPair": {
+        "type": "object",
+        "description": "Result of a successful `/auth/refresh` rotation: a fresh access token plus\nthe rotated refresh secret (the presented one is now revoked).",
+        "required": [
+          "token",
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateBackendInstance": {
         "type": "object",
         "description": "Partial update. `None` means \"leave the field alone\".",
@@ -3395,6 +3727,10 @@
     {
       "name": "setup",
       "description": "First-time bootstrap."
+    },
+    {
+      "name": "dashboard",
+      "description": "Aggregate admin overview."
     },
     {
       "name": "users",

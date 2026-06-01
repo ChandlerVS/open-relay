@@ -69,7 +69,7 @@ export function SetupPage() {
       throw new Error(extractApiErrorMessage(error, "Couldn't create the admin account."));
     },
     onSuccess: (data) => {
-      signIn(data.token, data.user);
+      signIn(data.token, data.refresh_token, data.user);
       navigate("/", { replace: true });
     },
     onError: (err: Error) => setFormError(err.message),

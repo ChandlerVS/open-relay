@@ -52,8 +52,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Wire shape of the `backend_instance.config` JSON for a GoHighLevel row.
 ///
-/// `private_integration_token` is stored plaintext in v1. TODO: AEAD-encrypt
-/// with an env-derived key alongside `oauth_provider_config.client_secret`.
+/// `private_integration_token` is AEAD-encrypted at rest (see
+/// [`crate::crypto::SecretCipher`]); it is decrypted into this plaintext shape
+/// only just before `build`, so the value held here is always plaintext.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoHighLevelConfig {
     pub location_id: String,
@@ -88,6 +89,9 @@ impl GoHighLevelFactory {
     pub fn new() -> Self {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            // No redirect following: the target host is a fixed constant, so a
+            // 3xx pointing elsewhere is never legitimate.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest client builds with default config");
         Self { http }

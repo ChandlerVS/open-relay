@@ -77,7 +77,11 @@ pub async fn create_submission_for_form(
 }
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(get_public_form, create_submission_for_form))
+    // Per-IP rate limit on the public form surface (schema GET + submission
+    // POST) — blunts DB flooding and amplified CRM spam.
+    OpenApiRouter::new()
+        .routes(routes!(get_public_form, create_submission_for_form))
+        .layer(crate::ratelimit::public_layer())
 }
 
 fn unwrap_tx(err: sea_orm::TransactionError<CoreError>) -> AppError {

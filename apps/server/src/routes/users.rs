@@ -13,9 +13,10 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use open_relay_core::error::CoreError;
 use open_relay_core::permissions::Permission;
+use open_relay_core::rbac::AssignActor;
 use open_relay_core::rbac::service as rbac_service;
 use open_relay_core::users::{
-    ChangePassword, ListQuery, NewUser, UpdateUser, UserDto, UserList, UserSelectOption, service,
+    AdminSetPassword, ListQuery, NewUser, UpdateUser, UserDto, UserList, UserSelectOption, service,
 };
 use sea_orm::TransactionTrait;
 use utoipa_axum::router::OpenApiRouter;
@@ -118,6 +119,7 @@ pub async fn create_user(
         require_permission(&state, authz.claims.clone(), Permission::RolesAssign).await?;
     }
     let superadmin_role_id = state.superadmin_role_id;
+    let actor = actor_context(&state, &authz).await?;
     let role_ids = input.role_ids.clone();
     let dto = state
         .db
@@ -129,8 +131,14 @@ pub async fn create_user(
                 })
                 .await?;
                 if !role_ids.is_empty() {
-                    rbac_service::assign_roles_to_user(tx, created.id, &role_ids, superadmin_role_id)
-                        .await?;
+                    rbac_service::assign_roles_to_user(
+                        tx,
+                        created.id,
+                        &role_ids,
+                        superadmin_role_id,
+                        &actor,
+                    )
+                    .await?;
                 }
                 service::dto_with_roles(tx, created).await
             })
@@ -167,6 +175,7 @@ pub async fn update_user(
         require_permission(&state, authz.claims.clone(), Permission::RolesAssign).await?;
     }
     let superadmin_role_id = state.superadmin_role_id;
+    let actor = actor_context(&state, &authz).await?;
     let role_ids = input.role_ids.clone();
     let dto = state
         .db
@@ -178,8 +187,14 @@ pub async fn update_user(
                 })
                 .await?;
                 if let Some(ids) = role_ids {
-                    rbac_service::assign_roles_to_user(tx, updated.id, &ids, superadmin_role_id)
-                        .await?;
+                    rbac_service::assign_roles_to_user(
+                        tx,
+                        updated.id,
+                        &ids,
+                        superadmin_role_id,
+                        &actor,
+                    )
+                    .await?;
                 }
                 service::dto_with_roles(tx, updated).await
             })
@@ -195,12 +210,12 @@ pub async fn update_user(
     tag = "users",
     security(("bearer" = [])),
     params(("id" = i32, Path, description = "User id")),
-    request_body = ChangePassword,
+    request_body = AdminSetPassword,
     responses(
-        (status = 204, description = "Password updated"),
+        (status = 204, description = "Password reset; target's sessions revoked"),
         (status = 400, description = "Validation failed"),
         (status = 401, description = "Missing or invalid token"),
-        (status = 403, description = "Insufficient permission"),
+        (status = 403, description = "Insufficient permission or target outranks actor"),
         (status = 404, description = "User not found"),
     )
 )]
@@ -208,10 +223,30 @@ pub async fn change_password(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<i32>,
-    Json(input): Json<ChangePassword>,
+    Json(input): Json<AdminSetPassword>,
 ) -> AppResult<impl IntoResponse> {
-    require_permission(&state, claims, Permission::UsersWrite).await?;
-    service::change_password(&state.db, id, input).await?;
+    let authz = require_permission(&state, claims, Permission::UsersWrite).await?;
+    let superadmin_role_id = state.superadmin_role_id;
+    let actor_is_superadmin =
+        rbac_service::user_has_role(&state.db, authz.id, superadmin_role_id).await?;
+    let target_id = id;
+    // Reset + session revocation must be atomic.
+    state
+        .db
+        .transaction::<_, (), CoreError>(|tx| {
+            Box::pin(async move {
+                service::admin_set_password(
+                    tx,
+                    actor_is_superadmin,
+                    superadmin_role_id,
+                    target_id,
+                    input,
+                )
+                .await
+            })
+        })
+        .await
+        .map_err(unwrap_tx)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -254,6 +289,21 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(select_list))
         .routes(routes!(get_user, update_user, delete_user))
         .routes(routes!(change_password))
+}
+
+/// Build the role-assignment actor context from an already-authorized user,
+/// reusing the permission set loaded by `require_permission` and adding a
+/// single role-membership lookup for superadmin status.
+async fn actor_context(
+    state: &AppState,
+    authz: &crate::auth::permissions::AuthorizedUser,
+) -> AppResult<AssignActor> {
+    let is_superadmin =
+        rbac_service::user_has_role(&state.db, authz.id, state.superadmin_role_id).await?;
+    Ok(AssignActor {
+        is_superadmin,
+        permissions: authz.permissions.clone(),
+    })
 }
 
 fn unwrap_tx(err: sea_orm::TransactionError<CoreError>) -> AppError {

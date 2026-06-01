@@ -29,6 +29,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::backend::{Backend, BackendBuildError, DeliveryError, DeliveryPayload};
 use crate::backend::registry::BackendRegistry;
+use crate::crypto::SecretCipher;
 use crate::submissions::service::{
     STATUS_EXHAUSTED, STATUS_IN_PROGRESS, STATUS_PENDING, STATUS_PERMANENT_FAILURE,
     STATUS_SUCCEEDED, delivery_data,
@@ -46,12 +47,16 @@ pub struct WorkerHandle {
     _marker: (),
 }
 
-pub fn spawn(db: DatabaseConnection, registry: BackendRegistry) -> WorkerHandle {
-    tokio::spawn(run(db, registry));
+pub fn spawn(
+    db: DatabaseConnection,
+    registry: BackendRegistry,
+    cipher: Arc<SecretCipher>,
+) -> WorkerHandle {
+    tokio::spawn(run(db, registry, cipher));
     WorkerHandle { _marker: () }
 }
 
-async fn run(db: DatabaseConnection, registry: BackendRegistry) {
+async fn run(db: DatabaseConnection, registry: BackendRegistry, cipher: Arc<SecretCipher>) {
     let kinds: Vec<String> = registry.kinds().into_iter().map(|k| k.kind).collect();
     info!(backends = ?kinds, "submission delivery worker started");
 
@@ -60,7 +65,7 @@ async fn run(db: DatabaseConnection, registry: BackendRegistry) {
     }
 
     loop {
-        match lease_and_deliver_batch(&db, &registry).await {
+        match lease_and_deliver_batch(&db, &registry, &cipher).await {
             Ok(n) if n > 0 => continue,
             Ok(_) => sleep(IDLE_INTERVAL).await,
             Err(e) => {
@@ -106,6 +111,7 @@ struct Leased {
 async fn lease_and_deliver_batch(
     db: &DatabaseConnection,
     registry: &BackendRegistry,
+    cipher: &SecretCipher,
 ) -> anyhow::Result<usize> {
     let leased = lease_batch(db).await?;
     if leased.is_empty() {
@@ -113,7 +119,7 @@ async fn lease_and_deliver_batch(
     }
     let count = leased.len();
     for row in leased {
-        if let Err(e) = dispatch_one(db, registry, row).await {
+        if let Err(e) = dispatch_one(db, registry, cipher, row).await {
             // Already logged inside dispatch_one; soak so the batch keeps moving.
             error!(error = ?e, "dispatch returned error after handling");
         }
@@ -185,6 +191,7 @@ async fn lease_batch(db: &DatabaseConnection) -> anyhow::Result<Vec<Leased>> {
 async fn dispatch_one(
     db: &DatabaseConnection,
     registry: &BackendRegistry,
+    cipher: &SecretCipher,
     row: Leased,
 ) -> anyhow::Result<()> {
     let submission = entity::submission::Entity::find_by_id(row.submission_id)
@@ -255,7 +262,23 @@ async fn dispatch_one(
                     return Ok(());
                 }
             };
-            match factory.build(&inst.config) {
+            // Secret keys are encrypted at rest; decrypt them into a plaintext
+            // copy of the config just before handing it to the factory.
+            let mut config = inst.config.clone();
+            if let Err(e) =
+                crate::backends::service::decrypt_secret_keys(registry, &inst.kind, &mut config, cipher)
+            {
+                warn!(
+                    delivery_id = row.id,
+                    backend = %inst.kind,
+                    instance_id,
+                    error = ?e,
+                    "backend config secret decrypt failed — marking permanent_failure"
+                );
+                mark_permanent(db, row.id, "backend config decrypt failed").await?;
+                return Ok(());
+            }
+            match factory.build(&config) {
                 Ok(b) => b,
                 Err(BackendBuildError::Invalid(msg)) => {
                     warn!(

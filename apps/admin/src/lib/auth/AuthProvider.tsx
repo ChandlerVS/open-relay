@@ -4,9 +4,10 @@ import { api } from "../api/client";
 import {
   SESSION_EXPIRED_EVENT,
   getCurrentToken,
+  setCurrentRefreshToken,
   setCurrentToken,
 } from "../api/tokenSource";
-import { clearToken, setToken } from "./storage";
+import { clearToken, setRefreshToken, setToken } from "./storage";
 import {
   AuthContext,
   type AuthContextValue,
@@ -62,8 +63,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [status, fetchSession]);
 
   // Refetch when the tab regains focus — surfaces role changes within
-  // seconds rather than waiting for the next sign-in. The 24h JWT TTL still
-  // governs hard revocation; this is best-effort propagation.
+  // seconds rather than waiting for the next sign-in. Hard revocation is
+  // governed server-side by refresh-token revocation (logout / password
+  // change) bounded by the short access-token TTL; this is best-effort
+  // propagation of softer changes like role badges.
   useEffect(() => {
     if (status !== "authenticated") return;
     const onFocus = () => {
@@ -86,34 +89,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, []);
 
+  const persistTokens = useCallback((nextToken: string, nextRefresh: string) => {
+    setToken(nextToken);
+    setRefreshToken(nextRefresh);
+    setCurrentToken(nextToken);
+    setCurrentRefreshToken(nextRefresh);
+    setTokenState(nextToken);
+  }, []);
+
   const signIn = useCallback(
-    (nextToken: string, nextUser: AuthUser) => {
-      setToken(nextToken);
-      setCurrentToken(nextToken);
-      setTokenState(nextToken);
+    (nextToken: string, nextRefresh: string, nextUser: AuthUser) => {
+      persistTokens(nextToken, nextRefresh);
       setUser(nextUser);
       setStatus("authenticated");
       // Background: fetch the full session so `permissions`/`roles` populate
       // and the user shape is refreshed with role badges.
       void fetchSession();
     },
-    [fetchSession],
+    [fetchSession, persistTokens],
   );
 
   const signInWithToken = useCallback(
-    async (nextToken: string) => {
-      setToken(nextToken);
-      setCurrentToken(nextToken);
-      setTokenState(nextToken);
+    async (nextToken: string, nextRefresh: string) => {
+      persistTokens(nextToken, nextRefresh);
       setStatus("loading");
       await fetchSession();
     },
-    [fetchSession],
+    [fetchSession, persistTokens],
   );
 
   const signOut = useCallback(() => {
+    // Best-effort server-side revocation of the refresh token; clear local
+    // state regardless of the result.
+    void api.client.POST("/auth/logout").catch(() => {});
     clearToken();
     setCurrentToken(null);
+    setCurrentRefreshToken(null);
     setTokenState(null);
     setUser(null);
     setPermissions([]);

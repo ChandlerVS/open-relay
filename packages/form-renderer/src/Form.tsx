@@ -224,6 +224,33 @@ export function Form({
             scope={schema.id}
           />
         ))}
+        {/*
+          Honeypot: a hidden field a real user never sees or tabs to, but many
+          bots auto-fill. The server rejects a submission whose `_hp` is set.
+          Hidden inline (not via CSS class) so it works even if the host page
+          strips our stylesheet.
+        */}
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: "-9999px",
+            width: "1px",
+            height: "1px",
+            overflow: "hidden",
+          }}
+        >
+          <label htmlFor={`or-${schema.id}-_hp`}>Leave this field empty</label>
+          <input
+            id={`or-${schema.id}-_hp`}
+            name="_hp"
+            type="text"
+            tabIndex={-1}
+            autoComplete="off"
+            value={String(values["_hp"] ?? "")}
+            onChange={(e) => set("_hp", e.target.value)}
+          />
+        </div>
       </div>
       {status === "submit_error" && error && (
         <div className="or-form__error" role="alert">

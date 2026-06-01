@@ -44,6 +44,8 @@ impl From<CoreError> for AppError {
             CoreError::NotFound(m) => AppError::NotFound(m),
             CoreError::Conflict(m) => AppError::Conflict(m),
             CoreError::Internal(e) => AppError::Internal(e),
+            // Encrypt/decrypt failure: surface as a generic 500, never leak detail.
+            CoreError::Crypto => AppError::Internal(anyhow::anyhow!("encryption error")),
             CoreError::Db(e) => AppError::Db(e),
             CoreError::OAuthDiscoveryFailed(m) => AppError::BadGateway(m),
             CoreError::OAuthExchangeFailed(m) => AppError::BadGateway(m),

@@ -53,7 +53,8 @@ async fn build_authorize(
         .ok_or_else(|| AppError::from(CoreError::OAuthNotConfigured))?;
 
     let redirect_uri = format!("{}{}", state.public_api_url, CALLBACK_PATH);
-    let provider = OidcProvider::from_config(&cfg);
+    let provider = OidcProvider::from_config(&cfg, &state.cipher, state.allow_private_network())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
     let state_nonce = oauth_state::random_nonce();
     let oidc_nonce = oauth_state::random_nonce();
     let (authorize_url, pkce_verifier) = provider
@@ -170,7 +171,8 @@ pub async fn callback(
     let cfg = oauth_config_service::get_active(&state.db)
         .await?
         .ok_or_else(|| AppError::from(CoreError::OAuthNotConfigured))?;
-    let provider = OidcProvider::from_config(&cfg);
+    let provider = OidcProvider::from_config(&cfg, &state.cipher, state.allow_private_network())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
     let redirect_uri = format!("{}{}", state.public_api_url, CALLBACK_PATH);
     let verified = provider
         .exchange(code, &redirect_uri, Some(&flow.pkce_verifier), &flow.oidc_nonce)
@@ -179,9 +181,9 @@ pub async fn callback(
 
     match flow.mode {
         OAuthMode::SignIn => {
-            let token = state
+            let (token, refresh_token) = state
                 .db
-                .transaction::<_, String, CoreError>(|tx| {
+                .transaction::<_, (String, String), CoreError>(|tx| {
                     let auth_keys = state.auth_keys.clone();
                     let superadmin_role_id = state.superadmin_role_id;
                     let default_role_id = cfg.default_role_id;
@@ -196,12 +198,19 @@ pub async fn callback(
                             superadmin_role_id,
                         )
                         .await?;
-                        auth::issue_for_user(&auth_keys, &user)
+                        let token = auth::issue_for_user(&auth_keys, &user)?;
+                        let refresh_token = auth::refresh::issue(tx, user.id).await?;
+                        Ok((token, refresh_token))
                     })
                 })
                 .await
                 .map_err(unwrap_tx)?;
-            Ok(redirect_with_signin(&state.admin_url, &token, &clear_cookie))
+            Ok(redirect_with_signin(
+                &state.admin_url,
+                &token,
+                &refresh_token,
+                &clear_cookie,
+            ))
         }
         OAuthMode::Link { user_id } => {
             external_identity_service::link_to_user(
@@ -217,8 +226,18 @@ pub async fn callback(
     }
 }
 
-fn redirect_with_signin(admin_url: &str, token: &str, clear_cookie: &str) -> Response {
-    let location = format!("{}/oauth/callback#token={}&mode=signin", admin_url, token);
+fn redirect_with_signin(
+    admin_url: &str,
+    token: &str,
+    refresh_token: &str,
+    clear_cookie: &str,
+) -> Response {
+    // Both tokens ride the URL fragment (never sent to the server, unlike a
+    // query string), where the SPA reads and immediately clears them.
+    let location = format!(
+        "{}/oauth/callback#token={}&refresh={}&mode=signin",
+        admin_url, token, refresh_token
+    );
     redirect_303(&location, clear_cookie)
 }
 
