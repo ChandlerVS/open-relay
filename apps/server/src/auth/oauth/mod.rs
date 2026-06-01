@@ -11,7 +11,12 @@ use utoipa_axum::router::OpenApiRouter;
 use crate::state::AppState;
 
 pub const STATE_COOKIE_NAME: &str = "oauth_state";
-pub const STATE_COOKIE_PATH: &str = "/auth/oauth/";
+// Scopes the state cookie to the OAuth endpoints so the browser only sends it
+// where it's needed. MUST match where those routes are actually mounted — the
+// whole API lives under `/api/v1` (see `router::build`); a stale path here means
+// the cookie isn't sent back on the callback and every flow fails with an
+// "oauth state mismatch".
+pub const STATE_COOKIE_PATH: &str = "/api/v1/auth/oauth/";
 pub const STATE_COOKIE_MAX_AGE_SECONDS: i64 = 600;
 
 pub fn router() -> OpenApiRouter<AppState> {

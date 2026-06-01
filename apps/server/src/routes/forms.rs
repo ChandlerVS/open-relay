@@ -115,7 +115,11 @@ pub async fn get_embed_snippet(
     let form = service::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("form not found".into()))?;
-    let dto = EmbedSnippetDto::build(form.id, &state.embed_sdk_url, &state.public_api_url);
+    // `data-api-url` is the base the embedded form-renderer fetches its schema
+    // and posts submissions against (it appends `/public/forms/…`). The public
+    // API lives under `/api/v1`, so hand the renderer that versioned base.
+    let api_base = format!("{}/api/v1", state.public_api_url);
+    let dto = EmbedSnippetDto::build(form.id, &state.embed_sdk_url, &api_base);
     Ok(Json(dto))
 }
 

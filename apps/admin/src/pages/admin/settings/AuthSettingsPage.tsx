@@ -363,7 +363,7 @@ export function AuthSettingsPage() {
                 <p className="text-xs text-muted-foreground">
                   Redirect URI to register with the IdP:{" "}
                   <code className="font-mono">
-                    {new URL("/auth/oauth/callback", window.location.origin.replace(":5173", ":8080")).toString()}
+                    {new URL("/api/v1/auth/oauth/callback", window.location.origin.replace(":5173", ":8080")).toString()}
                   </code>
                 </p>
               </div>

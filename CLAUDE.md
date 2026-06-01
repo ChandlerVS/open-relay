@@ -30,7 +30,7 @@ Prereqs: Rust (edition 2024), Node 22.11 (`nvm use`), pnpm 10, Docker.
 # Local MySQL (required before server start)
 docker compose -f infra/docker-compose.yml up -d mysql
 
-# Backend (binds 0.0.0.0:8080 by default; serves /healthz, /openapi.json, /docs)
+# Backend (binds 0.0.0.0:8080 by default; JSON API under /api/v1 e.g. /api/v1/healthz; /openapi.json, /docs at root)
 cp .env.example .env   # first time only
 cargo run -p open-relay-server
 

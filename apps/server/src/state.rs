@@ -55,7 +55,7 @@ impl AppState {
         // Fall back to a same-origin path under the API when EMBED_SDK_URL is
         // unset, so the snippet is still well-formed in dev/local setups.
         let embed_sdk_url = match config.embed_sdk_url.trim() {
-            "" => format!("{public_api_url}/embed/open-relay.js"),
+            "" => format!("{public_api_url}/api/v1/embed/open-relay.js"),
             url => url.to_string(),
         };
         Ok(Self {

@@ -4,7 +4,7 @@ import { mount } from "./mount";
 // Host pages embed via:
 //   <script src=".../open-relay.js"
 //           data-form-id="abc123"
-//           data-api-url="https://api.openrelay.io"
+//           data-api-url="https://api.openrelay.io/api/v1"
 //           data-theme="dark"></script>
 //
 // We read attributes off the currently-executing <script>, then insert a
@@ -27,7 +27,10 @@ function readTheme(raw: string | null): FormTheme {
 const script = document.currentScript as HTMLScriptElement | null;
 if (script) {
   const formId = script.getAttribute("data-form-id");
-  const apiUrl = script.getAttribute("data-api-url") ?? window.location.origin;
+  // The renderer appends `/public/forms/…` to this base. The public API lives
+  // under `/api/v1`, so the same-origin fallback (used when the snippet omits
+  // data-api-url) must include that prefix to resolve correctly.
+  const apiUrl = script.getAttribute("data-api-url") ?? `${window.location.origin}/api/v1`;
   const theme = readTheme(script.getAttribute("data-theme"));
   if (formId) {
     const host = document.createElement("div");

@@ -74,7 +74,7 @@ cp .env.example .env
 #   openssl rand -base64 32   # -> JWT_SECRET
 #   openssl rand -base64 32   # -> ENCRYPTION_KEY
 cargo run -p open-relay-server
-# -> http://localhost:8080  (/healthz, /openapi.json, /docs)
+# -> http://localhost:8080  (/api/v1/healthz, /openapi.json, /docs)
 
 # 3. Frontend (second terminal)
 pnpm install

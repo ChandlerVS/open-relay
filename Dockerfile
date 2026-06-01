@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # All-in-one OpenRelay image: a single process (the Rust `open-relay-server`
-# binary) serves the JSON API, the embed SDK bundle (`/embed/open-relay.js`),
-# and the admin SPA (catch-all fallback) on one origin/port. The only external
-# dependency is MySQL.
+# binary) serves the JSON API and the embed SDK bundle (both under `/api/v1`,
+# e.g. `/api/v1/embed/open-relay.js`) plus the admin SPA (catch-all fallback) on
+# one origin/port. The only external dependency is MySQL.
 #
 # Build:   docker build -t open-relay .
 # Run:     docker run -p 8080:8080 --env-file .env open-relay
@@ -85,6 +85,6 @@ EXPOSE 8080
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+    CMD curl -fsS http://127.0.0.1:8080/api/v1/healthz || exit 1
 
 ENTRYPOINT ["open-relay-server"]

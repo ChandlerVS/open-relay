@@ -25,7 +25,10 @@ use crate::auth::permissions::authenticated_user;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-const CALLBACK_PATH: &str = "/auth/oauth/callback";
+// Absolute path the OAuth provider redirects back to, used to build the
+// `redirect_uri`. Must match where the callback handler is actually mounted —
+// the whole API lives under `/api/v1` (see `router::build`).
+const CALLBACK_PATH: &str = "/api/v1/auth/oauth/callback";
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LinkStartResponse {

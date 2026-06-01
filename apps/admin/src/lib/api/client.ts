@@ -6,7 +6,13 @@ import {
   storeTokens,
 } from "./tokenSource";
 
-const baseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+// The whole API is served under `/api/v1`. Carrying that prefix in `baseUrl`
+// keeps the generated openapi-fetch client (whose paths are relative to the
+// server base) and every hand-written `${baseUrl}/…` fetch pointed at the
+// versioned API without threading the prefix through each call site. An empty
+// VITE_API_URL (the all-in-one Docker image) yields a same-origin `/api/v1`.
+const apiOrigin = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const baseUrl = `${apiOrigin.replace(/\/$/, "")}/api/v1`;
 
 // Single-flight refresh: concurrent 401s share one in-flight refresh so we
 // don't rotate the refresh token several times in parallel (which would

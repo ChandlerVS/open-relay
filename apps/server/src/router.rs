@@ -32,6 +32,11 @@ const ADMIN_BODY_LIMIT: usize = 1024 * 1024;
         title = "OpenRelay API",
         description = "Form orchestration backend.",
     ),
+    // The whole API is served under this prefix (see `build`), so paths in this
+    // spec are relative to it. Keeping it as a server base — rather than baking
+    // `/api/v1` into every path — lets the generated TS client stay prefix-free
+    // and carry the version in its `baseUrl`.
+    servers((url = "/api/v1", description = "Versioned API root")),
     tags(
         (name = "health", description = "Liveness / readiness."),
         (name = "auth", description = "Local + SSO authentication."),
@@ -158,7 +163,17 @@ pub fn build(state: AppState) -> Router {
 
     // Merge the two axum routers and union their OpenAPI specs. CORS is already
     // baked into each surface, so the merged router carries both policies.
-    let mut router = admin_router.merge(public_router);
+    //
+    // The whole JSON API (admin + public surfaces, plus `/healthz` and the embed
+    // bundle) is then nested under a single `/api/v1` prefix. This keeps the API
+    // off the root namespace so it never shadows the admin SPA's client-side
+    // routes: a browser navigation to an SPA path like `/forms` or `/users` no
+    // longer matches a same-named API handler (returning a 401 JSON), and instead
+    // falls through to the catch-all SPA fallback below. Each surface's CORS,
+    // body-limit and header layers were applied pre-merge, so they survive the
+    // nest unchanged.
+    let api_router = admin_router.merge(public_router);
+    let mut router = Router::new().nest("/api/v1", api_router);
     let mut api = admin_api;
     api.merge(public_api);
 
