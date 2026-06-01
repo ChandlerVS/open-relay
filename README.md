@@ -1,5 +1,7 @@
 # OpenRelay
 
+**Version 0.1.0**
+
 **Embeddable form orchestration.** Drop a `<script>` tag onto any website to render a form, then route each submission to one or more configurable backends (OpenRelay's own store, GoHighLevel, …) with durable, retrying delivery. A React admin panel manages forms, backends, users, and submissions.
 
 - **Rust API + delivery worker** (Axum) — collects submissions and delivers them asynchronously with at-least-once semantics.
@@ -137,6 +139,16 @@ See [`CLAUDE.md`](CLAUDE.md) for the full set of architecture conventions.
 Functional and end-to-end for the core flow: embed → collect → durable, retrying delivery, with auth, RBAC, forms/backends/submissions management, and the admin SPA all in place.
 
 Still evolving: concrete delivery backends beyond the built-ins, additional OAuth/SSO providers, and broader admin UX. APIs may change before a tagged release — pin a commit if you build on it.
+
+## Scaling limitations
+
+This is an early (0.1.0) release tuned for correctness and simplicity over throughput. Known limitations:
+
+- **No cache layer.** Every form submission writes synchronously to MySQL on the request path, and form schemas are read from the database on each fetch rather than served from an in-memory or distributed cache. Under high submission volume the database becomes the bottleneck.
+- **Database-backed queue.** The delivery queue is the `submission_delivery` table polled with `SELECT … FOR UPDATE SKIP LOCKED`. This is durable and simple but couples queue throughput to database capacity; it is not a substitute for a dedicated broker at scale.
+- **Single-instance worker assumptions.** The delivery worker leases rows safely across instances, but there is no horizontal autoscaling story, backpressure signalling, or rate limiting on the public submission endpoint yet.
+
+These are on the roadmap. Planned work includes a cache layer in front of form-schema reads and submission writes (e.g. a write-buffer / ingestion queue so submissions are acknowledged without a blocking DB write), and the option to back the delivery queue with a dedicated message broker.
 
 ## Contributing
 
