@@ -16,7 +16,9 @@ open-relay-core = { workspace = true }
 # Async / web
 axum = { workspace = true }
 tokio = { workspace = true }
-tower = { workspace = true }
+# `util` gives us `service_fn` + `ServiceExt::oneshot`, used to build the admin
+# SPA fallback (serve a real file, else the SPA shell with a 200).
+tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true }
 
 # Data

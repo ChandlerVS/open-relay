@@ -1,0 +1,26 @@
+# Build output / deps — rebuilt inside the image.
+target/
+**/target/
+node_modules/
+**/node_modules/
+**/dist/
+
+# Local env & secrets — never bake into the image.
+.env
+.env.local
+.env.*.local
+
+# VCS / tooling noise.
+.git/
+.gitignore
+.github/
+**/.turbo/
+*.log
+
+# Docs / local-only.
+OpenRelay.md
+infra/
+
+# This file and the Dockerfile itself.
+Dockerfile
+.dockerignore

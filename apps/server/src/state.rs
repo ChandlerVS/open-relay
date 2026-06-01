@@ -31,6 +31,9 @@ pub struct AppState {
     /// Filesystem path the embed SDK bundle is read from when serving
     /// `GET /embed/open-relay.js`. See [`Config::embed_sdk_path`].
     pub embed_sdk_path: String,
+    /// Filesystem path to the built admin SPA, served as the router fallback
+    /// when set. See [`Config::admin_dist_path`].
+    pub admin_dist_path: Option<String>,
     pub admin_url: String,
     pub cookie_secure: bool,
     pub environment: Environment,
@@ -65,6 +68,7 @@ impl AppState {
             public_api_url,
             embed_sdk_url,
             embed_sdk_path: config.embed_sdk_path.clone(),
+            admin_dist_path: config.admin_dist_path.clone(),
             admin_url: config.admin_url.trim_end_matches('/').to_string(),
             cookie_secure: config.cookie_secure,
             environment: config.environment,

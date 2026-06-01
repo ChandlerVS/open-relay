@@ -1,13 +1,15 @@
 use axum::Router;
+use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
-use axum::http::HeaderValue;
-use axum::http::Method;
 use axum::http::header::{
     AUTHORIZATION, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY,
     STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
+use axum::http::{HeaderValue, Method, Request, StatusCode};
+use axum::response::IntoResponse;
+use tower::{ServiceBuilder, ServiceExt, service_fn};
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::services::ServeFile;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
@@ -164,6 +166,59 @@ pub fn build(state: AppState) -> Router {
     // full API surface. Kept on in development so `pnpm gen:api` can scrape it.
     if !is_production {
         router = router.merge(SwaggerUi::new("/docs").url("/openapi.json", api));
+    }
+
+    // Optionally serve the built admin SPA as the catch-all fallback. Every API
+    // route is registered above and matches first; any other path falls through
+    // here. Real files (hashed `/assets/*`, favicon, …) are served by `ServeDir`
+    // as-is; anything else is a client-side route (hit on hard-refresh or a deep
+    // link) and gets the SPA shell with a *200* so React Router can take over —
+    // unlike `ServeDir::not_found_service`, which would return the shell under a
+    // 404. Enabled only when `ADMIN_DIST_PATH` is set (the all-in-one image); in
+    // local dev Vite serves the SPA on :5173. The shell carries the same
+    // frame-denial + nosniff headers as the authenticated API surface, since it
+    // must never be embeddable.
+    if let Some(dir) = state.admin_dist_path.clone() {
+        let index = format!("{dir}/index.html");
+        let spa_fallback = service_fn(move |req: Request<Body>| {
+            let dir = dir.clone();
+            let index = index.clone();
+            async move {
+                let res = ServeDir::new(&dir).oneshot(req).await.into_response();
+                if res.status() != StatusCode::NOT_FOUND {
+                    return Ok::<_, std::convert::Infallible>(res);
+                }
+                // Unknown path → serve the SPA shell with 200 (client routing).
+                let shell = match tokio::fs::read(&index).await {
+                    Ok(html) => (
+                        [(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))],
+                        html,
+                    )
+                        .into_response(),
+                    Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                };
+                Ok(shell)
+            }
+        });
+        let spa = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                REFERRER_POLICY,
+                HeaderValue::from_static("no-referrer"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                X_FRAME_OPTIONS,
+                HeaderValue::from_static("DENY"),
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("frame-ancestors 'none'"),
+            ))
+            .service(spa_fallback);
+        router = router.fallback_service(spa);
     }
 
     router.layer(TraceLayer::new_for_http()).with_state(state)

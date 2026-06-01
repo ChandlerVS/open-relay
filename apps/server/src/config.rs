@@ -72,6 +72,12 @@ pub struct Config {
     /// Vite build output so the snippet works out of the box in local dev.
     #[serde(default = "default_embed_sdk_path")]
     pub embed_sdk_path: String,
+    /// Filesystem path to the built admin SPA (`apps/admin/dist`). When set, the
+    /// server serves it as the catch-all fallback so a single binary hosts the
+    /// API, the embed SDK and the admin UI on one origin (the all-in-one Docker
+    /// image). Unset in local dev, where Vite serves the SPA on :5173 instead.
+    #[serde(default)]
+    pub admin_dist_path: Option<String>,
     /// Whether to set the `Secure` attribute on the OAuth state cookie.
     /// Must be false when serving the API over plain HTTP locally.
     #[serde(default = "default_cookie_secure")]
@@ -101,6 +107,7 @@ impl Config {
                         "ADMIN_URL",
                         "EMBED_SDK_URL",
                         "EMBED_SDK_PATH",
+                        "ADMIN_DIST_PATH",
                         "COOKIE_SECURE",
                     ])
                     .map(|k| k.as_str().to_lowercase().into()),
@@ -216,6 +223,7 @@ mod tests {
             admin_url: admin_url.into(),
             embed_sdk_url: String::new(),
             embed_sdk_path: default_embed_sdk_path(),
+            admin_dist_path: None,
             cookie_secure: true,
         }
     }
