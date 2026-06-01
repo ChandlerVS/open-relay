@@ -22,17 +22,22 @@ const TOP_FORMS_LIMIT: u64 = 5;
 const RECENT_SUBMISSIONS_LIMIT: u64 = 10;
 
 /// Row shape for the `GROUP BY status` delivery roll-up.
+///
+/// `count` is `i64`: MySQL's `COUNT()` yields a signed `BIGINT`, so decoding
+/// it as `u64` (SQL `BIGINT UNSIGNED`) fails the sqlx type check.
 #[derive(Debug, FromQueryResult)]
 struct StatusGroup {
     status: String,
-    count: u64,
+    count: i64,
 }
 
 /// Row shape for the `GROUP BY form_id` submission roll-up.
+///
+/// See [`StatusGroup`] for why `count` is `i64`.
 #[derive(Debug, FromQueryResult)]
 struct FormGroup {
     form_id: i32,
-    count: u64,
+    count: i64,
 }
 
 /// Assemble the dashboard payload. When `include_recent` is false the
@@ -82,7 +87,7 @@ async fn delivery_status_breakdown<C: ConnectionTrait>(
         .into_iter()
         .map(|g| DeliveryStatusCount {
             status: g.status,
-            count: g.count,
+            count: g.count.max(0) as u64,
         })
         .collect())
 }
@@ -111,7 +116,7 @@ async fn top_forms<C: ConnectionTrait>(conn: &C) -> CoreResult<Vec<FormSubmissio
                 .cloned()
                 .unwrap_or_else(|| format!("Form #{}", g.form_id)),
             form_id: g.form_id,
-            count: g.count,
+            count: g.count.max(0) as u64,
         })
         .collect())
 }
