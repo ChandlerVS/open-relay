@@ -8,8 +8,9 @@ export interface FormProps {
   formId: string;
   apiUrl: string;
   /**
-   * Color theme. "auto" (the default) follows the host's `prefers-color-scheme`
-   * and tracks OS changes live; pass "light"/"dark" to force one.
+   * Color theme. "light" (the default) is a static light palette. Pass "dark"
+   * to force dark, or "auto" to opt into the host's `prefers-color-scheme` and
+   * track OS changes live.
    */
   theme?: FormTheme;
   /** Fired after a submission is accepted, with the new submission id. */
@@ -52,7 +53,7 @@ type Status =
 export function Form({
   formId,
   apiUrl,
-  theme = "auto",
+  theme = "light",
   onSubmitted,
   onError,
 }: FormProps) {

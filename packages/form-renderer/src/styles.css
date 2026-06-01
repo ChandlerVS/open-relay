@@ -1,38 +1,81 @@
+/*
+ * Theming: a host page can match this form to its own theme by setting the
+ * public `--or-*` custom properties below on `:root` (or on the form's host
+ * element). Custom properties inherit across the Shadow DOM boundary, and
+ * `all: initial` does NOT reset them, so inherited values reach the rules here.
+ *
+ * Public tokens (set these to theme the form):
+ *   --or-font                    font family (defaults to the host page font)
+ *   --or-radius                  corner radius for the form and its controls
+ *   --or-color-text              body text
+ *   --or-color-muted             help / secondary text
+ *   --or-color-background        form surface (default transparent)
+ *   --or-color-border            form / divider border
+ *   --or-color-input-background  input background
+ *   --or-color-input-border      input border
+ *   --or-color-accent            submit button background
+ *   --or-color-accent-hover      submit hover (defaults to a mix of accent)
+ *   --or-color-accent-text       submit text
+ *   --or-color-error             errors / required marks
+ *
+ * A public override applies in both light and dark mode. For mode-specific
+ * values, scope them with your own `@media (prefers-color-scheme: dark)` on
+ * `:root` — they re-inherit automatically.
+ */
+
 :host {
   all: initial;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Adopt the host page's font by default; --or-font overrides it. */
+  font-family: var(
+    --or-font,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif
+  );
 }
 
 .or-form {
-  /* Light theme (default). Dark values are overridden below via data-theme. */
-  --or-fg: #111;
-  --or-muted: #6b7280;
-  --or-input-bg: #fff;
-  --or-input-border: #d1d5db;
-  --or-border: #e5e7eb;
-  --or-error: #b91c1c;
-  --or-submit-bg: #111827;
-  --or-submit-bg-hover: #1f2937;
-  --or-submit-fg: #fff;
+  /* Light theme (default). Each engine token reads a public token, falling back
+     to the built-in value. Dark equivalents are overridden below via data-theme. */
+  --or-fg: var(--or-color-text, #111);
+  --or-muted: var(--or-color-muted, #6b7280);
+  --or-bg: var(--or-color-background, transparent);
+  --or-border: var(--or-color-border, #e5e7eb);
+  --or-input-bg: var(--or-color-input-background, #fff);
+  --or-input-border: var(--or-color-input-border, #d1d5db);
+  --or-error: var(--or-color-error, #b91c1c);
+  --or-submit-bg: var(--or-color-accent, #111827);
+  --or-submit-bg-hover: var(
+    --or-color-accent-hover,
+    color-mix(in srgb, var(--or-submit-bg) 88%, #000)
+  );
+  --or-submit-fg: var(--or-color-accent-text, #fff);
 
   padding: 1rem;
   border: 1px solid var(--or-border);
-  border-radius: 0.5rem;
+  border-radius: var(--or-radius, 0.5rem);
   max-width: 32rem;
   box-sizing: border-box;
+  background: var(--or-bg);
   color: var(--or-fg);
 }
 
 .or-form[data-theme="dark"] {
-  --or-fg: #e5e7eb;
-  --or-muted: #9ca3af;
-  --or-input-bg: #111827;
-  --or-input-border: #374151;
-  --or-border: #374151;
-  --or-error: #f87171;
-  --or-submit-bg: #f3f4f6;
-  --or-submit-bg-hover: #e5e7eb;
-  --or-submit-fg: #111827;
+  --or-fg: var(--or-color-text, #e5e7eb);
+  --or-muted: var(--or-color-muted, #9ca3af);
+  --or-bg: var(--or-color-background, transparent);
+  --or-border: var(--or-color-border, #374151);
+  --or-input-bg: var(--or-color-input-background, #111827);
+  --or-input-border: var(--or-color-input-border, #374151);
+  --or-error: var(--or-color-error, #f87171);
+  --or-submit-bg: var(--or-color-accent, #f3f4f6);
+  --or-submit-bg-hover: var(
+    --or-color-accent-hover,
+    color-mix(in srgb, var(--or-submit-bg) 88%, #fff)
+  );
+  --or-submit-fg: var(--or-color-accent-text, #111827);
 }
 
 .or-form--loading,
@@ -85,7 +128,7 @@
   font: inherit;
   padding: 0.5rem 0.625rem;
   border: 1px solid var(--or-input-border);
-  border-radius: 0.375rem;
+  border-radius: var(--or-radius, 0.5rem);
   background: var(--or-input-bg);
   color: inherit;
 }
@@ -108,7 +151,7 @@
   background: var(--or-submit-bg);
   color: var(--or-submit-fg);
   border: none;
-  border-radius: 0.375rem;
+  border-radius: var(--or-radius, 0.5rem);
   font: inherit;
   font-weight: 500;
   cursor: pointer;
