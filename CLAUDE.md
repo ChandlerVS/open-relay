@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Skeleton. Boot wiring is in place (server, schema sync, OpenAPI, embed SDK, admin SPA) but no domain resources exist yet. Planned order: Users → Forms → Backends → Submissions. Most route handlers and the delivery worker are intentional no-op stubs that return `NotImplemented` or log a tick.
+Functional end-to-end for the core flow. Boot wiring (server, schema sync, OpenAPI, embed SDK, admin SPA) plus the domain resources — Users, Forms, Backends, Submissions — are implemented, along with auth/RBAC, OAuth provider config, secrets-at-rest, and the delivery worker. Route handlers call into `crates/core` services; `NotImplemented` is just an `AppError` variant, not a stubbed handler. Still evolving: concrete delivery backends beyond the built-ins, more OAuth/SSO providers, and broader admin UX.
 
 `OpenRelay.md` is the engineering design doc — it is gitignored, so consult it for intent but don't expect collaborators to have it.
 
@@ -70,13 +70,13 @@ The TS client is regenerated from this spec; after adding/changing routes, resta
 
 ### Backend delivery is a registry of trait objects
 
-`open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`. The registry is currently constructed empty in `AppState::new` (`apps/server/src/state.rs`) — concrete backends should be registered there at boot.
+`open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.
 
 `DeliveryError` distinguishes `Transient` (worker retries) from `Permanent` (no retry, admin notify). `Backend::deliver` must be idempotent on `submission_id`.
 
-### Delivery worker is a no-op stub
+### Delivery worker
 
-`crates/core/src/jobs/worker.rs` spawns a tokio loop that will eventually poll `submission_delivery` rows with `SELECT … FOR UPDATE SKIP LOCKED`. Today it just logs a tick every 30s. The `submission_delivery` entity does not exist yet; wiring it up unblocks the worker.
+`crates/core/src/jobs/worker.rs` spawns a tokio loop that leases due `submission_delivery` rows with `SELECT … FOR UPDATE SKIP LOCKED`, dispatches each to its `Backend`, and records the outcome. Transient failures are retried on an exponential backoff (30s → 24h over `MAX_ATTEMPTS` = 6) then marked exhausted; permanent failures are not retried. Stale `in_progress` leases (worker crash mid-delivery) are reclaimed on startup. `Backend::deliver` must be idempotent on `submission_id`.
 
 ### Auth is local JWT + pluggable Provider trait
 
