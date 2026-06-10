@@ -17,28 +17,78 @@ const STATUS_LABEL: Record<string, string> = {
   exhausted: "exhausted",
 };
 
-interface Props {
-  deliveries: SubmissionDeliveryDto[];
+/// A delivery can be manually re-synced only from a terminal state — a
+/// `pending`/`in_progress` row is already queued, so re-syncing it is a no-op.
+function isRetryable(status: string): boolean {
+  return (
+    status === "succeeded" ||
+    status === "permanent_failure" ||
+    status === "exhausted"
+  );
 }
 
-export function DeliveryStatusBadges({ deliveries }: Props) {
+interface Props {
+  deliveries: SubmissionDeliveryDto[];
+  /// When true, retryable chips become selection toggles.
+  selectable?: boolean;
+  selectedIds?: Set<number>;
+  onToggle?: (id: number) => void;
+}
+
+export function DeliveryStatusBadges({
+  deliveries,
+  selectable = false,
+  selectedIds,
+  onToggle,
+}: Props) {
   if (deliveries.length === 0) {
     return <span className="text-xs text-muted-foreground">—</span>;
   }
   return (
     <div className="flex flex-wrap gap-1">
-      {deliveries.map((d) => (
-        <span
-          key={d.id}
-          className={cn(
-            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-            STATUS_CLASS[d.status] ?? "bg-muted text-muted-foreground",
-          )}
-          title={d.last_error ?? undefined}
-        >
-          {d.backend_name}: {STATUS_LABEL[d.status] ?? d.status}
-        </span>
-      ))}
+      {deliveries.map((d) => {
+        const base = cn(
+          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+          STATUS_CLASS[d.status] ?? "bg-muted text-muted-foreground",
+        );
+        const label = `${d.backend_name}: ${STATUS_LABEL[d.status] ?? d.status}`;
+
+        if (selectable && isRetryable(d.status)) {
+          const selected = selectedIds?.has(d.id) ?? false;
+          return (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => onToggle?.(d.id)}
+              aria-pressed={selected}
+              title={d.last_error ?? "Select to re-sync"}
+              className={cn(
+                base,
+                "cursor-pointer transition-shadow hover:opacity-90",
+                selected &&
+                  "ring-2 ring-primary ring-offset-1 ring-offset-background",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "inline-block h-2 w-2 rounded-full border",
+                  selected
+                    ? "border-primary bg-primary"
+                    : "border-current opacity-50",
+                )}
+              />
+              {label}
+            </button>
+          );
+        }
+
+        return (
+          <span key={d.id} className={base} title={d.last_error ?? undefined}>
+            {label}
+          </span>
+        );
+      })}
     </div>
   );
 }

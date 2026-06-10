@@ -34,6 +34,7 @@ use crate::submissions::service::{
     STATUS_EXHAUSTED, STATUS_IN_PROGRESS, STATUS_PENDING, STATUS_PERMANENT_FAILURE,
     STATUS_SUCCEEDED, delivery_data,
 };
+use crate::forms::service::tags_from_model;
 
 const IDLE_INTERVAL: Duration = Duration::from_secs(5);
 const BATCH_SIZE: u32 = 16;
@@ -210,6 +211,32 @@ async fn dispatch_one(
         }
     };
 
+    let tags = match entity::form::Entity::find_by_id(submission.form_id)
+        .one(db)
+        .await?
+    {
+        Some(form) => match tags_from_model(&form) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(
+                    delivery_id = row.id,
+                    form_id = submission.form_id,
+                    error = ?e,
+                    "form tags parse failed — continuing with empty tags"
+                );
+                Vec::new()
+            }
+        },
+        None => {
+            warn!(
+                delivery_id = row.id,
+                form_id = submission.form_id,
+                "form row missing — continuing with empty tags"
+            );
+            Vec::new()
+        }
+    };
+
     let backend: Arc<dyn Backend> = match row.backend_instance_id {
         None => match registry.get_static(&row.backend_name) {
             Some(b) => b,
@@ -299,6 +326,7 @@ async fn dispatch_one(
         submission_id: submission.id,
         form_id: submission.form_id,
         data: delivery_data(&submission),
+        tags,
     };
 
     match backend.deliver(&payload).await {

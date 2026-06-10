@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
 import {
@@ -25,7 +25,10 @@ import {
   type SubmissionDto,
   useSubmissionsList,
 } from "../../../lib/submissions/useSubmissions";
-import { useDeleteSubmission } from "../../../lib/submissions/useSubmissionMutations";
+import {
+  useDeleteSubmission,
+  useRetryDeliveries,
+} from "../../../lib/submissions/useSubmissionMutations";
 import { SubmissionDetailDialog } from "./SubmissionDetailDialog";
 import { DeliveryStatusBadges } from "./DeliveryStatusBadges";
 
@@ -60,7 +63,29 @@ export function SubmissionsPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deleteMutation = useDeleteSubmission();
 
+  // Selected `submission_delivery` ids queued for a manual re-sync.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [retryConfirming, setRetryConfirming] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const retryMutation = useRetryDeliveries();
+
   const canDelete = has("submissions:delete");
+  const canRetry = has("submissions:retry");
+
+  // Drop the selection whenever the visible rows change (paging / filtering),
+  // since the selected delivery ids may no longer be on screen.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [offset, formId]);
+
+  const toggleDelivery = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const rangeText = useMemo(() => {
     if (!data) return null;
@@ -82,19 +107,33 @@ export function SubmissionsPage() {
             Form fills delivered through OpenRelay, with per-backend status.
           </p>
         </div>
-        {formId != null && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              params.delete("form_id");
-              setParams(params);
-              setOffset(0);
-            }}
-          >
-            Clear form filter
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {canRetry && selected.size > 0 && (
+            <Button
+              size="sm"
+              onClick={() => {
+                setRetryError(null);
+                setRetryConfirming(true);
+              }}
+            >
+              Re-sync {selected.size}{" "}
+              {selected.size === 1 ? "delivery" : "deliveries"}
+            </Button>
+          )}
+          {formId != null && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                params.delete("form_id");
+                setParams(params);
+                setOffset(0);
+              }}
+            >
+              Clear form filter
+            </Button>
+          )}
+        </div>
       </div>
 
       {isError && (
@@ -159,8 +198,15 @@ export function SubmissionsPage() {
                     {formNameById.get(s.form_id) ?? `Form #${s.form_id}`}
                   </TableCell>
                   <TableCell className="text-sm">{submitterLabel(s)}</TableCell>
-                  <TableCell>
-                    <DeliveryStatusBadges deliveries={s.deliveries} />
+                  <TableCell
+                    onClick={canRetry ? (e) => e.stopPropagation() : undefined}
+                  >
+                    <DeliveryStatusBadges
+                      deliveries={s.deliveries}
+                      selectable={canRetry}
+                      selectedIds={selected}
+                      onToggle={toggleDelivery}
+                    />
                   </TableCell>
                   <TableCell
                     className="text-right pr-2"
@@ -267,6 +313,41 @@ export function SubmissionsPage() {
                 setDeleteError(null);
               },
               onError: (err) => setDeleteError(err.message),
+            },
+          );
+        }}
+      />
+
+      <ConfirmDialog
+        open={retryConfirming}
+        onOpenChange={(o) => {
+          if (!o) {
+            setRetryConfirming(false);
+            setRetryError(null);
+          }
+        }}
+        title={`Re-sync ${selected.size} ${selected.size === 1 ? "delivery" : "deliveries"}?`}
+        description={
+          <span>
+            Re-queues the selected deliveries for immediate re-delivery to their
+            backends. Already-queued or in-flight deliveries are left untouched.
+            {retryError && (
+              <span className="mt-2 block text-destructive">{retryError}</span>
+            )}
+          </span>
+        }
+        confirmLabel="Re-sync"
+        pending={retryMutation.isPending}
+        onConfirm={() => {
+          retryMutation.mutate(
+            { deliveryIds: [...selected] },
+            {
+              onSuccess: () => {
+                setSelected(new Set());
+                setRetryConfirming(false);
+                setRetryError(null);
+              },
+              onError: (err) => setRetryError(err.message),
             },
           );
         }}

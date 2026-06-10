@@ -208,6 +208,10 @@ pub struct NewForm {
     /// backend or submissions go nowhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backends: Option<Vec<BackendBinding>>,
+    /// Tags dispatched to backends alongside every submission from this form.
+    /// Defaults to empty.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Outbound representation of a form. `owner_id` is exposed to admins; the
@@ -221,6 +225,7 @@ pub struct FormDto {
     pub standard_fields: StandardFieldsConfig,
     pub custom_fields: Vec<CustomField>,
     pub backends: Vec<BackendBinding>,
+    pub tags: Vec<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -239,6 +244,8 @@ pub struct UpdateForm {
     pub custom_fields: Option<Vec<CustomField>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backends: Option<Vec<BackendBinding>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]

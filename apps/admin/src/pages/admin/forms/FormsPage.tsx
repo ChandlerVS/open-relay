@@ -100,6 +100,7 @@ export function FormsPage() {
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Slug</TableHead>
+              <TableHead>Tags</TableHead>
               <TableHead>Fields</TableHead>
               <TableHead>Updated</TableHead>
               <TableHead className="w-10 text-right pr-3">
@@ -118,6 +119,9 @@ export function FormsPage() {
                     <Skeleton className="h-4 w-32" />
                   </TableCell>
                   <TableCell>
+                    <Skeleton className="h-4 w-16" />
+                  </TableCell>
+                  <TableCell>
                     <Skeleton className="h-4 w-20" />
                   </TableCell>
                   <TableCell>
@@ -134,6 +138,11 @@ export function FormsPage() {
                     <code className="text-xs rounded bg-muted px-1.5 py-0.5">
                       {f.slug}
                     </code>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {f.tags.length > 0
+                      ? `${f.tags.length} tag${f.tags.length !== 1 ? "s" : ""}`
+                      : "—"}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {countEnabledStandard(f)} standard ·{" "}
@@ -159,7 +168,7 @@ export function FormsPage() {
             ) : (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="text-center py-10 text-sm text-muted-foreground"
                 >
                   No forms to show.

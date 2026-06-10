@@ -108,3 +108,23 @@ pub struct SubmissionList {
     pub limit: u32,
     pub offset: u32,
 }
+
+/// Request body for a manual delivery re-sync. Carries the `submission_delivery`
+/// row ids the operator picked in the admin UI.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct RetryDeliveriesRequest {
+    pub delivery_ids: Vec<i32>,
+}
+
+/// Outcome of a manual re-sync, partitioned by what happened to each requested
+/// id. A row already `pending`/`in_progress` is left untouched (it's already
+/// queued); an unknown id lands in `not_found`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RetryDeliveriesResponse {
+    /// Ids reset to `pending` for immediate re-delivery.
+    pub requeued: Vec<i32>,
+    /// Ids already `pending`/`in_progress` — left alone.
+    pub skipped: Vec<i32>,
+    /// Ids that don't correspond to a delivery row.
+    pub not_found: Vec<i32>,
+}

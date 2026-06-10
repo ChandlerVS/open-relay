@@ -17,7 +17,8 @@ use sea_orm::{
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::{
-    ListQuery, NewSubmissionPayload, SubmissionDeliveryDto, SubmissionDto, SubmissionList,
+    ListQuery, NewSubmissionPayload, RetryDeliveriesRequest, RetryDeliveriesResponse,
+    SubmissionDeliveryDto, SubmissionDto, SubmissionList,
 };
 use crate::error::{CoreError, CoreResult};
 use crate::forms::{
@@ -454,6 +455,52 @@ fn dto_from_model(
         created_at: m.created_at,
         deliveries,
     }
+}
+
+/// Manually re-queue delivery rows for another attempt. For each requested id
+/// we reset the row to a fresh `pending` attempt (cleared error, full retry
+/// budget, due now) so the worker picks it up on its next poll. Rows already
+/// `pending`/`in_progress` are skipped (re-queuing an in-flight row would be a
+/// no-op at best, a double-send at worst); unknown ids are reported back.
+///
+/// `Backend::deliver` is contractually idempotent on `submission_id`, so
+/// re-sending an already-`succeeded` row is safe.
+pub async fn retry_deliveries<C: ConnectionTrait>(
+    conn: &C,
+    req: &RetryDeliveriesRequest,
+) -> CoreResult<RetryDeliveriesResponse> {
+    let now = Utc::now();
+    let mut requeued = Vec::new();
+    let mut skipped = Vec::new();
+    let mut not_found = Vec::new();
+
+    for &id in &req.delivery_ids {
+        let Some(row) = entity::submission_delivery::Entity::find_by_id(id)
+            .one(conn)
+            .await?
+        else {
+            not_found.push(id);
+            continue;
+        };
+        if row.status == STATUS_PENDING || row.status == STATUS_IN_PROGRESS {
+            skipped.push(id);
+            continue;
+        }
+        let mut active: entity::submission_delivery::ActiveModel = row.into();
+        active.status = ActiveValue::Set(STATUS_PENDING.to_string());
+        active.attempts = ActiveValue::Set(0);
+        active.next_attempt_at = ActiveValue::Set(now);
+        active.last_error = ActiveValue::Set(None);
+        active.delivered_at = ActiveValue::Set(None);
+        active.update(conn).await?;
+        requeued.push(id);
+    }
+
+    Ok(RetryDeliveriesResponse {
+        requeued,
+        skipped,
+        not_found,
+    })
 }
 
 /// Build the JSON payload handed to a backend. Merges the standard columns

@@ -205,6 +205,7 @@ function CreateForm({
   );
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [backends, setBackends] = useState<BackendBinding[]>([openRelayBinding()]);
+  const [tags, setTags] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
@@ -226,6 +227,7 @@ function CreateForm({
             standard_fields: standardFields,
             custom_fields: customFields,
             backends,
+            tags,
           },
           {
             onSuccess: (f) => onSaved(f),
@@ -259,6 +261,12 @@ function CreateForm({
         hint="Every submission fans out to each selected backend."
       >
         <DeliveryDestinations value={backends} onChange={setBackends} />
+      </Section>
+      <Section
+        title="Tags"
+        hint="Labels dispatched to backends with every submission. Press Enter or comma to add."
+      >
+        <TagsEditor value={tags} onChange={setTags} />
       </Section>
       <DialogFooter>
         <Button
@@ -294,6 +302,7 @@ function EditForm({
   );
   const [customFields, setCustomFields] = useState<CustomField[]>(form.custom_fields);
   const [backends, setBackends] = useState<BackendBinding[]>(form.backends);
+  const [tags, setTags] = useState<string[]>(form.tags);
   const [formError, setFormError] = useState<string | null>(null);
   const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
@@ -313,6 +322,8 @@ function EditForm({
         const backendsChanged =
           existingKeys.size !== nextKeys.size ||
           [...existingKeys].some((k) => !nextKeys.has(k));
+        const tagsChanged =
+          tags.join(",") !== form.tags.join(",");
         update.mutate(
           {
             id: form.id,
@@ -322,6 +333,7 @@ function EditForm({
               standard_fields: standardFields,
               custom_fields: customFields,
               backends: backendsChanged ? backends : undefined,
+              tags: tagsChanged ? tags : undefined,
             },
           },
           {
@@ -356,6 +368,12 @@ function EditForm({
         hint="Every submission fans out to each selected backend."
       >
         <DeliveryDestinations value={backends} onChange={setBackends} />
+      </Section>
+      <Section
+        title="Tags"
+        hint="Labels dispatched to backends with every submission. Press Enter or comma to add."
+      >
+        <TagsEditor value={tags} onChange={setTags} />
       </Section>
       <DialogFooter>
         <Button
@@ -521,6 +539,66 @@ function kindDescription(kind: string): string {
     default:
       return kind;
   }
+}
+
+function TagsEditor({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (tags: string[]) => void;
+}) {
+  const [input, setInput] = useState("");
+
+  const add = () => {
+    const trimmed = input.trim();
+    if (trimmed && !value.includes(trimmed)) {
+      onChange([...value, trimmed]);
+    }
+    setInput("");
+  };
+
+  const remove = (index: number) => {
+    onChange(value.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div className="space-y-2">
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {value.map((tag, i) => (
+            <span
+              key={`${tag}-${i}`}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs"
+            >
+              {tag}
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-foreground leading-none"
+                onClick={() => remove(i)}
+              >
+                &times;
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <Input
+        value={input}
+        placeholder="Add a tag..."
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add();
+          } else if (e.key === ",") {
+            e.preventDefault();
+            add();
+          }
+        }}
+      />
+    </div>
+  );
 }
 
 function Section({

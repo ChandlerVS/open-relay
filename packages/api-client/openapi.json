@@ -9,6 +9,12 @@
     },
     "version": "0.1.0"
   },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "Versioned API root"
+    }
+  ],
   "paths": {
     "/auth/login": {
       "post": {
@@ -1611,6 +1617,47 @@
         ]
       }
     },
+    "/submissions/deliveries/retry": {
+      "post": {
+        "tags": [
+          "submissions"
+        ],
+        "operationId": "retry_deliveries",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryDeliveriesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Delivery rows re-queued (partitioned report)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryDeliveriesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/submissions/{id}": {
       "get": {
         "tags": [
@@ -2563,6 +2610,7 @@
           "standard_fields",
           "custom_fields",
           "backends",
+          "tags",
           "created_at",
           "updated_at"
         ],
@@ -2599,6 +2647,12 @@
           },
           "standard_fields": {
             "$ref": "#/components/schemas/StandardFieldsConfig"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "updated_at": {
             "type": "string",
@@ -2838,6 +2892,12 @@
                 "$ref": "#/components/schemas/StandardFieldsConfig"
               }
             ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -3010,6 +3070,7 @@
           "forms:write",
           "forms:delete",
           "submissions:read",
+          "submissions:retry",
           "submissions:delete",
           "backends:read",
           "backends:write",
@@ -3128,6 +3189,57 @@
         "properties": {
           "refresh_token": {
             "type": "string"
+          }
+        }
+      },
+      "RetryDeliveriesRequest": {
+        "type": "object",
+        "description": "Request body for a manual delivery re-sync. Carries the `submission_delivery`\nrow ids the operator picked in the admin UI.",
+        "required": [
+          "delivery_ids"
+        ],
+        "properties": {
+          "delivery_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        }
+      },
+      "RetryDeliveriesResponse": {
+        "type": "object",
+        "description": "Outcome of a manual re-sync, partitioned by what happened to each requested\nid. A row already `pending`/`in_progress` is left untouched (it's already\nqueued); an unknown id lands in `not_found`.",
+        "required": [
+          "requeued",
+          "skipped",
+          "not_found"
+        ],
+        "properties": {
+          "not_found": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Ids that don't correspond to a delivery row."
+          },
+          "requeued": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Ids reset to `pending` for immediate re-delivery."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Ids already `pending`/`in_progress` — left alone."
           }
         }
       },
@@ -3570,6 +3682,15 @@
                 "$ref": "#/components/schemas/StandardFieldsConfig"
               }
             ]
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

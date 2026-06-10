@@ -41,6 +41,8 @@ pub enum Permission {
     FormsDelete,
     #[serde(rename = "submissions:read")]
     SubmissionsRead,
+    #[serde(rename = "submissions:retry")]
+    SubmissionsRetry,
     #[serde(rename = "submissions:delete")]
     SubmissionsDelete,
     #[serde(rename = "backends:read")]
@@ -71,6 +73,7 @@ impl Permission {
             Self::FormsWrite => "forms:write",
             Self::FormsDelete => "forms:delete",
             Self::SubmissionsRead => "submissions:read",
+            Self::SubmissionsRetry => "submissions:retry",
             Self::SubmissionsDelete => "submissions:delete",
             Self::BackendsRead => "backends:read",
             Self::BackendsWrite => "backends:write",
@@ -92,6 +95,7 @@ impl Permission {
             "forms:write" => Some(Self::FormsWrite),
             "forms:delete" => Some(Self::FormsDelete),
             "submissions:read" => Some(Self::SubmissionsRead),
+            "submissions:retry" => Some(Self::SubmissionsRetry),
             "submissions:delete" => Some(Self::SubmissionsDelete),
             "backends:read" => Some(Self::BackendsRead),
             "backends:write" => Some(Self::BackendsWrite),
@@ -115,6 +119,7 @@ impl Permission {
             (_, "read") => "View",
             (_, "write") => "Create & edit",
             (_, "delete") => "Delete",
+            ("submissions", "retry") => "Re-trigger delivery",
             ("roles", "assign") => "Assign to users",
             _ => self.slug(),
         }

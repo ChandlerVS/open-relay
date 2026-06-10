@@ -500,6 +500,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/submissions/deliveries/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retry_deliveries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/submissions/{id}": {
         parameters: {
             query?: never;
@@ -814,6 +830,7 @@ export interface components {
             owner_id: number;
             slug: string;
             standard_fields: components["schemas"]["StandardFieldsConfig"];
+            tags: string[];
             /** Format: date-time */
             updated_at: string;
         };
@@ -896,6 +913,7 @@ export interface components {
             name: string;
             slug?: string | null;
             standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
+            tags?: string[];
         };
         NewRole: {
             description?: string | null;
@@ -960,7 +978,7 @@ export interface components {
             enabled: boolean;
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "auth_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "auth_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
@@ -997,6 +1015,26 @@ export interface components {
         };
         RefreshRequest: {
             refresh_token: string;
+        };
+        /**
+         * @description Request body for a manual delivery re-sync. Carries the `submission_delivery`
+         *     row ids the operator picked in the admin UI.
+         */
+        RetryDeliveriesRequest: {
+            delivery_ids: number[];
+        };
+        /**
+         * @description Outcome of a manual re-sync, partitioned by what happened to each requested
+         *     id. A row already `pending`/`in_progress` is left untouched (it's already
+         *     queued); an unknown id lands in `not_found`.
+         */
+        RetryDeliveriesResponse: {
+            /** @description Ids that don't correspond to a delivery row. */
+            not_found: number[];
+            /** @description Ids reset to `pending` for immediate re-delivery. */
+            requeued: number[];
+            /** @description Ids already `pending`/`in_progress` — left alone. */
+            skipped: number[];
         };
         /**
          * @description Full role detail — name, description, grants. Returned by `GET /roles/{id}`
@@ -1144,6 +1182,7 @@ export interface components {
             name?: string | null;
             slug?: string | null;
             standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
+            tags?: string[] | null;
         };
         /**
          * @description Partial update. `None` means "leave alone". `description: Some("")`
@@ -2814,6 +2853,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmissionList"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    retry_deliveries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryDeliveriesRequest"];
+            };
+        };
+        responses: {
+            /** @description Delivery rows re-queued (partitioned report) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryDeliveriesResponse"];
                 };
             };
             /** @description Missing or invalid token */

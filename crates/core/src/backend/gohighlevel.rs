@@ -164,6 +164,14 @@ impl GoHighLevelBackend {
         if !custom_fields.is_empty() {
             body.insert("customFields".to_string(), Value::Array(custom_fields));
         }
+        if !payload.tags.is_empty() {
+            let tags: Vec<Value> = payload
+                .tags
+                .iter()
+                .map(|t| Value::String(t.clone()))
+                .collect();
+            body.insert("tags".to_string(), Value::Array(tags));
+        }
         Value::Object(body)
     }
 }
@@ -240,6 +248,7 @@ mod tests {
             submission_id: 1,
             form_id: 1,
             data,
+            tags: Vec::new(),
         }
     }
 
@@ -316,6 +325,25 @@ mod tests {
         let obj = body.as_object().unwrap();
         assert_eq!(obj["firstName"], "Ada");
         assert!(obj.get("phone").is_none());
+    }
+
+    #[test]
+    fn body_includes_tags_when_present() {
+        let mut p = payload(json!({ "first_name": "Ada" }));
+        p.tags = vec!["hot-lead".to_string(), "webinar".to_string()];
+        let body = backend().build_body(&p);
+        let obj = body.as_object().unwrap();
+        let tags = obj["tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0], "hot-lead");
+        assert_eq!(tags[1], "webinar");
+    }
+
+    #[test]
+    fn body_omits_tags_when_empty() {
+        let body = backend().build_body(&payload(json!({ "first_name": "Ada" })));
+        let obj = body.as_object().unwrap();
+        assert!(obj.get("tags").is_none());
     }
 
     #[test]

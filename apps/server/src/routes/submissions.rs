@@ -9,7 +9,10 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use open_relay_core::permissions::Permission;
-use open_relay_core::submissions::{ListQuery, SubmissionDto, SubmissionList, service};
+use open_relay_core::submissions::{
+    ListQuery, RetryDeliveriesRequest, RetryDeliveriesResponse, SubmissionDto, SubmissionList,
+    service,
+};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -88,8 +91,31 @@ pub async fn delete_submission(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/deliveries/retry",
+    tag = "submissions",
+    security(("bearer" = [])),
+    request_body = RetryDeliveriesRequest,
+    responses(
+        (status = 200, description = "Delivery rows re-queued (partitioned report)", body = RetryDeliveriesResponse),
+        (status = 401, description = "Missing or invalid token"),
+        (status = 403, description = "Insufficient permission"),
+    )
+)]
+pub async fn retry_deliveries(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(req): Json<RetryDeliveriesRequest>,
+) -> AppResult<Json<RetryDeliveriesResponse>> {
+    require_permission(&state, claims, Permission::SubmissionsRetry).await?;
+    let report = service::retry_deliveries(&state.db, &req).await?;
+    Ok(Json(report))
+}
+
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_submissions))
+        .routes(routes!(retry_deliveries))
         .routes(routes!(get_submission, delete_submission))
 }

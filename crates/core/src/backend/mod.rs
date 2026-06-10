@@ -34,6 +34,9 @@ pub struct DeliveryPayload {
     /// keyed by field key. Backends should consume `data` rather than rely on
     /// any particular column layout.
     pub data: Value,
+    /// Tags configured on the form. Included so backends can attach labels
+    /// without an extra DB lookup.
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Error)]

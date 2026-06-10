@@ -24,6 +24,7 @@ const MAX_SLUG_LEN: usize = 100;
 const MAX_LABEL_LEN: usize = 200;
 const MAX_KEY_LEN: usize = 64;
 const MAX_CUSTOM_FIELDS: usize = 100;
+const MAX_TAG_LEN: usize = 255;
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
 
@@ -181,6 +182,38 @@ pub fn validate_custom_fields(fields: &[CustomField]) -> CoreResult<()> {
     Ok(())
 }
 
+/// Tags are permissive strings (GHL accepts spaces, emoji, etc.).
+/// Validation: trim whitespace, reject empty/blank strings, reject any tag
+/// longer than `MAX_TAG_LEN`, deduplicate case-sensitively. No count limit.
+pub fn validate_tags(tags: &[String]) -> CoreResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::with_capacity(tags.len());
+    for t in tags {
+        let trimmed = t.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::BadRequest("tag must not be blank".into()));
+        }
+        if trimmed.chars().count() > MAX_TAG_LEN {
+            return Err(CoreError::BadRequest(format!(
+                "tag exceeds {MAX_TAG_LEN} characters"
+            )));
+        }
+        // Case-sensitive dedup to mirror GHL behaviour.
+        if !out.iter().any(|existing| existing == trimmed) {
+            out.push(trimmed.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// Parse the `tags` JSON column from a form model. `NULL` → empty vec.
+pub fn tags_from_model(m: &entity::form::Model) -> CoreResult<Vec<String>> {
+    match &m.tags {
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| CoreError::Internal(anyhow!("failed to parse tags json: {e}"))),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// Reject empty bindings, duplicates, kinds the registry doesn't know about,
 /// or instance ids that don't resolve to a `backend_instance` row of the
 /// matching kind. Configurable kinds *must* carry an `instance_id`; static
@@ -298,6 +331,7 @@ pub fn dto_from_model(m: entity::form::Model) -> CoreResult<FormDto> {
     let standard_fields = parse_standard_fields(&m.standard_fields)?;
     let custom_fields = parse_custom_fields(&m.custom_fields)?;
     let backends = backends_from_model(&m)?;
+    let tags = tags_from_model(&m)?;
     Ok(FormDto {
         id: m.id,
         owner_id: m.owner_id,
@@ -306,6 +340,7 @@ pub fn dto_from_model(m: entity::form::Model) -> CoreResult<FormDto> {
         standard_fields,
         custom_fields,
         backends,
+        tags,
         created_at: m.created_at,
         updated_at: m.updated_at,
     })
@@ -370,6 +405,8 @@ pub async fn create_form<C: ConnectionTrait>(
     let backends = input.backends.unwrap_or_else(default_backends);
     validate_backends(conn, &backends, registry).await?;
 
+    let tags = validate_tags(&input.tags)?;
+
     let model = entity::form::ActiveModel {
         owner_id: ActiveValue::Set(owner_id),
         name: ActiveValue::Set(name),
@@ -377,6 +414,7 @@ pub async fn create_form<C: ConnectionTrait>(
         standard_fields: ActiveValue::Set(json_or_internal(&standard_fields)?),
         custom_fields: ActiveValue::Set(json_or_internal(&custom_fields)?),
         backends: ActiveValue::Set(Some(json_or_internal(&backends)?)),
+        tags: ActiveValue::Set(if tags.is_empty() { None } else { Some(json_or_internal(&tags)?) }),
         ..Default::default()
     };
     Ok(model.insert(conn).await?)
@@ -460,6 +498,11 @@ pub async fn update_form<C: ConnectionTrait>(
     if let Some(b) = input.backends {
         validate_backends(conn, &b, registry).await?;
         active.backends = ActiveValue::Set(Some(json_or_internal(&b)?));
+    }
+
+    if let Some(t) = input.tags {
+        let tags = validate_tags(&t)?;
+        active.tags = ActiveValue::Set(if tags.is_empty() { None } else { Some(json_or_internal(&tags)?) });
     }
 
     Ok(active.update(conn).await?)

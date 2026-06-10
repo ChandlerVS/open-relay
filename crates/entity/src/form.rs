@@ -36,6 +36,11 @@ pub struct Model {
     /// `NULL`s to `[{ "name": "open-relay" }]`.
     #[sea_orm(column_type = "Json", nullable)]
     pub backends: Option<Json>,
+    /// Tags attached to every submission from this form. Dispatched to
+    /// backends via `DeliveryPayload`. Stored as a JSON array of strings.
+    /// `NULL` is equivalent to an empty list (back-compat).
+    #[sea_orm(column_type = "Json", nullable)]
+    pub tags: Option<Json>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
