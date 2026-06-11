@@ -510,6 +510,7 @@ pub async fn update_form<C: ConnectionTrait>(
 
 pub async fn delete_form<C: ConnectionTrait>(conn: &C, id: i32) -> CoreResult<()> {
     crate::submissions::service::delete_for_form(conn, id).await?;
+    crate::metadata::service::delete_for_form(conn, id).await?;
     let res = entity::form::Entity::delete_by_id(id).exec(conn).await?;
     if res.rows_affected == 0 {
         return Err(CoreError::NotFound("form not found".into()));
