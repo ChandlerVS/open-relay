@@ -28,6 +28,15 @@ type StandardFieldsConfig = components["schemas"]["StandardFieldsConfig"];
 type StandardFieldConfig = components["schemas"]["StandardFieldConfig"];
 type CustomField = components["schemas"]["CustomField"];
 type BackendBinding = components["schemas"]["BackendBinding"];
+type MetadataEntry = components["schemas"]["MetadataEntry"];
+
+const EMAIL_DEDUP_KEY = "email_deduplication";
+
+/// Read the email-deduplication toggle off a form's metadata list. Defaults to
+/// off when the key is absent.
+function emailDedupFromMetadata(metadata: MetadataEntry[]): boolean {
+  return metadata.some((m) => m.key === EMAIL_DEDUP_KEY && m.value === true);
+}
 
 const OPEN_RELAY_KIND = "open-relay";
 const openRelayBinding = (): BackendBinding => ({
@@ -206,6 +215,7 @@ function CreateForm({
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [backends, setBackends] = useState<BackendBinding[]>([openRelayBinding()]);
   const [tags, setTags] = useState<string[]>([]);
+  const [emailDedup, setEmailDedup] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
@@ -228,6 +238,7 @@ function CreateForm({
             custom_fields: customFields,
             backends,
             tags,
+            metadata: [{ key: EMAIL_DEDUP_KEY, value: emailDedup }],
           },
           {
             onSuccess: (f) => onSaved(f),
@@ -268,6 +279,9 @@ function CreateForm({
       >
         <TagsEditor value={tags} onChange={setTags} />
       </Section>
+      <Section title="Deduplication">
+        <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
+      </Section>
       <DialogFooter>
         <Button
           type="button"
@@ -303,6 +317,9 @@ function EditForm({
   const [customFields, setCustomFields] = useState<CustomField[]>(form.custom_fields);
   const [backends, setBackends] = useState<BackendBinding[]>(form.backends);
   const [tags, setTags] = useState<string[]>(form.tags);
+  const [emailDedup, setEmailDedup] = useState(
+    emailDedupFromMetadata(form.metadata),
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
@@ -324,6 +341,7 @@ function EditForm({
           [...existingKeys].some((k) => !nextKeys.has(k));
         const tagsChanged =
           tags.join(",") !== form.tags.join(",");
+        const dedupChanged = emailDedup !== emailDedupFromMetadata(form.metadata);
         update.mutate(
           {
             id: form.id,
@@ -334,6 +352,9 @@ function EditForm({
               custom_fields: customFields,
               backends: backendsChanged ? backends : undefined,
               tags: tagsChanged ? tags : undefined,
+              metadata: dedupChanged
+                ? [{ key: EMAIL_DEDUP_KEY, value: emailDedup }]
+                : undefined,
             },
           },
           {
@@ -374,6 +395,9 @@ function EditForm({
         hint="Labels dispatched to backends with every submission. Press Enter or comma to add."
       >
         <TagsEditor value={tags} onChange={setTags} />
+      </Section>
+      <Section title="Deduplication">
+        <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
       </Section>
       <DialogFooter>
         <Button
@@ -597,6 +621,35 @@ function TagsEditor({
           }
         }}
       />
+    </div>
+  );
+}
+
+function DeduplicationToggle({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="border border-border rounded-md">
+      <label className="flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-accent/40">
+        <input
+          type="checkbox"
+          className="mt-1 h-4 w-4"
+          checked={value}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium">Deduplicate by email</div>
+          <div className="text-xs text-muted-foreground">
+            If an email was already submitted to this form, still accept the
+            submission and show success, but flag it as a duplicate and don't
+            deliver it to any backend.
+          </div>
+        </div>
+      </label>
     </div>
   );
 }

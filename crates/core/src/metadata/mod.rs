@@ -31,8 +31,12 @@ use crate::error::{CoreError, CoreResult};
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema, strum::EnumIter,
 )]
 pub enum MetadataKey {
-    /// Boolean toggle: reject a submission whose email already exists for the
-    /// form. Key + plumbing only — the dedup check itself is not implemented.
+    /// Boolean toggle: when a submission's email already exists on an earlier
+    /// submission to the same form, still accept and store it (the submitter
+    /// sees success) but flag the row as a duplicate
+    /// (`submission.is_duplicate`) and create no delivery rows, so it is never
+    /// dispatched to a backend. Enforced in
+    /// `crate::submissions::service::create_submission`.
     #[serde(rename = "email_deduplication")]
     EmailDeduplication,
 }

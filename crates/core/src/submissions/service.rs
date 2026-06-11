@@ -25,6 +25,7 @@ use crate::forms::{
     BackendBinding, CustomField, CustomFieldType, STANDARD_FIELD_KEYS, StandardFieldsConfig,
     service as forms_service,
 };
+use crate::metadata::{MetadataKey, service as metadata_service};
 
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
@@ -275,8 +276,10 @@ pub async fn create_submission<C: ConnectionTrait>(
         return Err(CoreError::BadRequest("submission rejected".into()));
     }
 
-    let standard_cfg = forms_service::dto_from_model(form.clone())?.standard_fields;
-    let custom_fields = forms_service::dto_from_model(form.clone())?.custom_fields;
+    // Read config straight off the JSON columns — no need to build a full
+    // `FormDto` (which would also fetch metadata) on the hot submission path.
+    let standard_cfg = forms_service::parse_standard_fields(&form.standard_fields)?;
+    let custom_fields = forms_service::parse_custom_fields(&form.custom_fields)?;
     let backends = forms_service::backends_from_model(form)?;
     if backends.is_empty() {
         return Err(CoreError::Internal(anyhow!(
@@ -287,9 +290,46 @@ pub async fn create_submission<C: ConnectionTrait>(
 
     let (standard, custom_data) = validate_and_split(payload, &standard_cfg, &custom_fields)?;
 
-    let inserted = insert_submission(conn, form.id, standard, custom_data).await?;
-    insert_deliveries(conn, inserted.id, &backends).await?;
+    // Email deduplication (opt-in per form): if the submitted email already
+    // exists on an earlier submission to this form, we still accept and store
+    // the submission (the caller sees success) but flag it and skip the
+    // delivery fan-out so it's never dispatched to a backend.
+    let is_duplicate = is_duplicate_email(conn, form.id, standard.get("email")).await?;
+
+    let inserted = insert_submission(conn, form.id, standard, custom_data, is_duplicate).await?;
+    if !is_duplicate {
+        insert_deliveries(conn, inserted.id, &backends).await?;
+    }
     Ok(inserted)
+}
+
+/// Whether this form has email deduplication enabled and `email` (already
+/// trimmed by `validate_and_split`) matches an existing submission to the same
+/// form. Returns `false` when dedup is off or no email was submitted.
+///
+/// Matching is case-insensitive: MySQL's default `utf8mb4` collation compares
+/// strings case-insensitively, so `email = ?` treats `A@B.co` and `a@b.co` as
+/// the same address — intentional for email dedup.
+async fn is_duplicate_email<C: ConnectionTrait>(
+    conn: &C,
+    form_id: i32,
+    email: Option<&String>,
+) -> CoreResult<bool> {
+    let Some(email) = email.filter(|e| !e.is_empty()) else {
+        return Ok(false);
+    };
+    if !metadata_service::get_bool(conn, form_id, MetadataKey::EmailDeduplication)
+        .await?
+        .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    let existing = entity::submission::Entity::find()
+        .filter(entity::submission::Column::FormId.eq(form_id))
+        .filter(entity::submission::Column::Email.eq(email.as_str()))
+        .one(conn)
+        .await?;
+    Ok(existing.is_some())
 }
 
 async fn insert_submission<C: ConnectionTrait>(
@@ -297,6 +337,7 @@ async fn insert_submission<C: ConnectionTrait>(
     form_id: i32,
     standard: StandardValues,
     custom_data: JsonValue,
+    is_duplicate: bool,
 ) -> CoreResult<entity::submission::Model> {
     let take = |s: &StandardValues, key: &str| s.get(key).cloned();
     let active = entity::submission::ActiveModel {
@@ -316,6 +357,7 @@ async fn insert_submission<C: ConnectionTrait>(
         postal_code: ActiveValue::Set(take(&standard, "postal_code")),
         country: ActiveValue::Set(take(&standard, "country")),
         custom_data: ActiveValue::Set(custom_data),
+        is_duplicate: ActiveValue::Set(Some(is_duplicate)),
         ..Default::default()
     };
     Ok(active.insert(conn).await?)
@@ -452,6 +494,7 @@ fn dto_from_model(
         postal_code: m.postal_code,
         country: m.country,
         custom_data: m.custom_data,
+        is_duplicate: m.is_duplicate.unwrap_or(false),
         created_at: m.created_at,
         deliveries,
     }

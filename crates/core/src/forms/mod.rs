@@ -19,6 +19,8 @@ pub mod service;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::metadata::MetadataEntry;
+
 /// Standard field keys recognised by the form. These map to the typed
 /// columns on `submission` rows once that resource lands; for now they're
 /// just config the renderer consumes.
@@ -212,6 +214,11 @@ pub struct NewForm {
     /// Defaults to empty.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Per-form metadata toggles (e.g. email deduplication). Each entry is
+    /// upserted on create; omit (or send an empty list) to leave metadata
+    /// unset. See [`crate::metadata`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Vec<MetadataEntry>>,
 }
 
 /// Outbound representation of a form. `owner_id` is exposed to admins; the
@@ -226,6 +233,9 @@ pub struct FormDto {
     pub custom_fields: Vec<CustomField>,
     pub backends: Vec<BackendBinding>,
     pub tags: Vec<String>,
+    /// Per-form metadata toggles (e.g. email deduplication). See
+    /// [`crate::metadata`].
+    pub metadata: Vec<MetadataEntry>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -246,6 +256,10 @@ pub struct UpdateForm {
     pub backends: Option<Vec<BackendBinding>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// `None` leaves metadata untouched. `Some` upserts each entry (so an
+    /// explicit `email_deduplication = false` turns the toggle off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Vec<MetadataEntry>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]

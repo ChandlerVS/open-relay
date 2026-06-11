@@ -87,7 +87,7 @@ pub async fn get_form(
     let form = service::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("form not found".into()))?;
-    let dto = service::dto_from_model(form)?;
+    let dto = service::dto_from_model(&state.db, form).await?;
     Ok(Json(dto))
 }
 
@@ -150,7 +150,7 @@ pub async fn create_form(
         .transaction::<_, FormDto, CoreError>(|tx| {
             Box::pin(async move {
                 let created = service::create_form(tx, &registry, owner_id, input).await?;
-                service::dto_from_model(created)
+                service::dto_from_model(tx, created).await
             })
         })
         .await
@@ -187,7 +187,7 @@ pub async fn update_form(
         .transaction::<_, FormDto, CoreError>(|tx| {
             Box::pin(async move {
                 let updated = service::update_form(tx, &registry, id, input).await?;
-                service::dto_from_model(updated)
+                service::dto_from_model(tx, updated).await
             })
         })
         .await

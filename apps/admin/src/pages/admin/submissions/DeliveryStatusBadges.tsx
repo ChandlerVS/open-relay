@@ -27,6 +27,20 @@ function isRetryable(status: string): boolean {
   );
 }
 
+/// Shown in place of delivery status for a submission that was accepted but
+/// flagged as a duplicate email — such rows are intentionally never dispatched,
+/// so they have no delivery rows.
+export function DuplicateBadge() {
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-500/10 text-amber-700 dark:text-amber-300"
+      title="Duplicate email — accepted but not delivered to any backend."
+    >
+      Duplicate
+    </span>
+  );
+}
+
 interface Props {
   deliveries: SubmissionDeliveryDto[];
   /// When true, retryable chips become selection toggles.

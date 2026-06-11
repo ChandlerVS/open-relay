@@ -2611,6 +2611,7 @@
           "custom_fields",
           "backends",
           "tags",
+          "metadata",
           "created_at",
           "updated_at"
         ],
@@ -2634,6 +2635,13 @@
           "id": {
             "type": "integer",
             "format": "int32"
+          },
+          "metadata": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataEntry"
+            },
+            "description": "Per-form metadata toggles (e.g. email deduplication). See\n[`crate::metadata`]."
           },
           "name": {
             "type": "string"
@@ -2834,6 +2842,37 @@
           }
         }
       },
+      "MetadataEntry": {
+        "type": "object",
+        "description": "A key/value pair for a form, used by list results.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/MetadataKey"
+          },
+          "value": {
+            "$ref": "#/components/schemas/MetadataValue"
+          }
+        }
+      },
+      "MetadataKey": {
+        "type": "string",
+        "description": "The catalogue of metadata keys. Wire/serialized form is the slug.",
+        "enum": [
+          "email_deduplication"
+        ]
+      },
+      "MetadataValue": {
+        "oneOf": [
+          {
+            "type": "boolean"
+          }
+        ],
+        "description": "A typed metadata value. The variant must match its key's\n[`MetadataKey::value_type`]; the service layer enforces this on write."
+      },
       "NewBackendInstance": {
         "type": "object",
         "required": [
@@ -2874,6 +2913,16 @@
               "$ref": "#/components/schemas/CustomField"
             }
           },
+          "metadata": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/MetadataEntry"
+            },
+            "description": "Per-form metadata toggles (e.g. email deduplication). Each entry is\nupserted on create; omit (or send an empty list) to leave metadata\nunset. See [`crate::metadata`]."
+          },
           "name": {
             "type": "string"
           },
@@ -2897,7 +2946,8 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Tags dispatched to backends alongside every submission from this form.\nDefaults to empty."
           }
         }
       },
@@ -3469,6 +3519,7 @@
           "id",
           "form_id",
           "custom_data",
+          "is_duplicate",
           "created_at",
           "deliveries"
         ],
@@ -3533,6 +3584,10 @@
           "id": {
             "type": "integer",
             "format": "int32"
+          },
+          "is_duplicate": {
+            "type": "boolean",
+            "description": "`true` when the submission was accepted but flagged as a duplicate email\n(deduplication was on for the form). Such rows have no deliveries by\ndesign — they are intentionally not dispatched to any backend."
           },
           "job_title": {
             "type": [
@@ -3660,6 +3715,16 @@
             "items": {
               "$ref": "#/components/schemas/CustomField"
             }
+          },
+          "metadata": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/MetadataEntry"
+            },
+            "description": "`None` leaves metadata untouched. `Some` upserts each entry (so an\nexplicit `email_deduplication = false` turns the toggle off)."
           },
           "name": {
             "type": [

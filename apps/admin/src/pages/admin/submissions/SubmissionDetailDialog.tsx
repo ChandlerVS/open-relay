@@ -7,7 +7,7 @@ import {
   Skeleton,
 } from "@open-relay/ui";
 import { useSubmission } from "../../../lib/submissions/useSubmissions";
-import { DeliveryStatusBadges } from "./DeliveryStatusBadges";
+import { DeliveryStatusBadges, DuplicateBadge } from "./DeliveryStatusBadges";
 
 interface Props {
   id: number | null;
@@ -69,7 +69,17 @@ export function SubmissionDetailDialog({
           <div className="space-y-6">
             <section>
               <h3 className="text-sm font-medium mb-2">Delivery</h3>
-              <DeliveryStatusBadges deliveries={data.deliveries} />
+              {data.is_duplicate ? (
+                <div className="space-y-1">
+                  <DuplicateBadge />
+                  <p className="text-xs text-muted-foreground">
+                    Accepted as a duplicate email — not delivered to any
+                    backend.
+                  </p>
+                </div>
+              ) : (
+                <DeliveryStatusBadges deliveries={data.deliveries} />
+              )}
             </section>
             <section>
               <h3 className="text-sm font-medium mb-2">Standard fields</h3>

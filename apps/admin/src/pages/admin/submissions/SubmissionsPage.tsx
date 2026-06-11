@@ -30,7 +30,7 @@ import {
   useRetryDeliveries,
 } from "../../../lib/submissions/useSubmissionMutations";
 import { SubmissionDetailDialog } from "./SubmissionDetailDialog";
-import { DeliveryStatusBadges } from "./DeliveryStatusBadges";
+import { DeliveryStatusBadges, DuplicateBadge } from "./DeliveryStatusBadges";
 
 const PAGE_SIZE = 25;
 
@@ -201,12 +201,16 @@ export function SubmissionsPage() {
                   <TableCell
                     onClick={canRetry ? (e) => e.stopPropagation() : undefined}
                   >
-                    <DeliveryStatusBadges
-                      deliveries={s.deliveries}
-                      selectable={canRetry}
-                      selectedIds={selected}
-                      onToggle={toggleDelivery}
-                    />
+                    {s.is_duplicate ? (
+                      <DuplicateBadge />
+                    ) : (
+                      <DeliveryStatusBadges
+                        deliveries={s.deliveries}
+                        selectable={canRetry}
+                        selectedIds={selected}
+                        onToggle={toggleDelivery}
+                      />
+                    )}
                   </TableCell>
                   <TableCell
                     className="text-right pr-2"

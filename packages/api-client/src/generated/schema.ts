@@ -825,6 +825,11 @@ export interface components {
             custom_fields: components["schemas"]["CustomField"][];
             /** Format: int32 */
             id: number;
+            /**
+             * @description Per-form metadata toggles (e.g. email deduplication). See
+             *     [`crate::metadata`].
+             */
+            metadata: components["schemas"]["MetadataEntry"][];
             name: string;
             /** Format: int32 */
             owner_id: number;
@@ -892,6 +897,21 @@ export interface components {
             roles: components["schemas"]["RoleSummary"][];
             user: components["schemas"]["UserDto"];
         };
+        /** @description A key/value pair for a form, used by list results. */
+        MetadataEntry: {
+            key: components["schemas"]["MetadataKey"];
+            value: components["schemas"]["MetadataValue"];
+        };
+        /**
+         * @description The catalogue of metadata keys. Wire/serialized form is the slug.
+         * @enum {string}
+         */
+        MetadataKey: "email_deduplication";
+        /**
+         * @description A typed metadata value. The variant must match its key's
+         *     [`MetadataKey::value_type`]; the service layer enforces this on write.
+         */
+        MetadataValue: boolean;
         NewBackendInstance: {
             config: unknown;
             kind: string;
@@ -910,9 +930,19 @@ export interface components {
              */
             backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][];
+            /**
+             * @description Per-form metadata toggles (e.g. email deduplication). Each entry is
+             *     upserted on create; omit (or send an empty list) to leave metadata
+             *     unset. See [`crate::metadata`].
+             */
+            metadata?: components["schemas"]["MetadataEntry"][] | null;
             name: string;
             slug?: string | null;
             standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
+            /**
+             * @description Tags dispatched to backends alongside every submission from this form.
+             *     Defaults to empty.
+             */
             tags?: string[];
         };
         NewRole: {
@@ -1142,6 +1172,12 @@ export interface components {
             form_id: number;
             /** Format: int32 */
             id: number;
+            /**
+             * @description `true` when the submission was accepted but flagged as a duplicate email
+             *     (deduplication was on for the form). Such rows have no deliveries by
+             *     design — they are intentionally not dispatched to any backend.
+             */
+            is_duplicate: boolean;
             job_title?: string | null;
             last_name?: string | null;
             message?: string | null;
@@ -1179,6 +1215,11 @@ export interface components {
         UpdateForm: {
             backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][] | null;
+            /**
+             * @description `None` leaves metadata untouched. `Some` upserts each entry (so an
+             *     explicit `email_deduplication = false` turns the toggle off).
+             */
+            metadata?: components["schemas"]["MetadataEntry"][] | null;
             name?: string | null;
             slug?: string | null;
             standard_fields?: null | components["schemas"]["StandardFieldsConfig"];

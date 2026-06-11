@@ -86,6 +86,10 @@ pub struct SubmissionDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub country: Option<String>,
     pub custom_data: serde_json::Value,
+    /// `true` when the submission was accepted but flagged as a duplicate email
+    /// (deduplication was on for the form). Such rows have no deliveries by
+    /// design — they are intentionally not dispatched to any backend.
+    pub is_duplicate: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub deliveries: Vec<SubmissionDeliveryDto>,
 }

@@ -41,6 +41,15 @@ pub struct Model {
     /// Custom field values, keyed by `CustomField.key`.
     #[sea_orm(column_type = "Json")]
     pub custom_data: Json,
+    /// Set when the submission matched an existing email for the form and email
+    /// deduplication (`MetadataKey::EmailDeduplication`) was enabled. Duplicates
+    /// are still stored (the audit log accepts them and the submitter sees
+    /// success) but get no `submission_delivery` rows — they are never
+    /// dispatched to any backend. Nullable for back-compat with rows created
+    /// before this column existed (and so the additive schema sync can add it
+    /// to populated tables); `NULL` is equivalent to `false`.
+    #[sea_orm(nullable)]
+    pub is_duplicate: Option<bool>,
     pub created_at: DateTime<Utc>,
 }
 

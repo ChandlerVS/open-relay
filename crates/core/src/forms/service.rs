@@ -18,6 +18,7 @@ use super::{
 };
 use crate::backend::BackendRegistry;
 use crate::error::{CoreError, CoreResult};
+use crate::metadata::service as metadata_service;
 
 const MAX_NAME_LEN: usize = 200;
 const MAX_SLUG_LEN: usize = 100;
@@ -299,12 +300,12 @@ fn normalize_custom_fields(mut fields: Vec<CustomField>) -> Vec<CustomField> {
     fields
 }
 
-fn parse_standard_fields(value: &sea_orm::JsonValue) -> CoreResult<StandardFieldsConfig> {
+pub fn parse_standard_fields(value: &sea_orm::JsonValue) -> CoreResult<StandardFieldsConfig> {
     serde_json::from_value(value.clone())
         .map_err(|e| CoreError::Internal(anyhow!("failed to parse standard_fields json: {e}")))
 }
 
-fn parse_custom_fields(value: &sea_orm::JsonValue) -> CoreResult<Vec<CustomField>> {
+pub fn parse_custom_fields(value: &sea_orm::JsonValue) -> CoreResult<Vec<CustomField>> {
     serde_json::from_value(value.clone())
         .map_err(|e| CoreError::Internal(anyhow!("failed to parse custom_fields json: {e}")))
 }
@@ -326,12 +327,17 @@ pub fn backends_from_model(m: &entity::form::Model) -> CoreResult<Vec<BackendBin
 }
 
 /// Convert a `form::Model` row into a full `FormDto`, parsing the JSON
-/// columns into their typed shapes.
-pub fn dto_from_model(m: entity::form::Model) -> CoreResult<FormDto> {
+/// columns into their typed shapes. Async because metadata lives in a separate
+/// table (`form_metadata`) and is fetched per form.
+pub async fn dto_from_model<C: ConnectionTrait>(
+    conn: &C,
+    m: entity::form::Model,
+) -> CoreResult<FormDto> {
     let standard_fields = parse_standard_fields(&m.standard_fields)?;
     let custom_fields = parse_custom_fields(&m.custom_fields)?;
     let backends = backends_from_model(&m)?;
     let tags = tags_from_model(&m)?;
+    let metadata = metadata_service::list(conn, m.id).await?;
     Ok(FormDto {
         id: m.id,
         owner_id: m.owner_id,
@@ -341,6 +347,7 @@ pub fn dto_from_model(m: entity::form::Model) -> CoreResult<FormDto> {
         custom_fields,
         backends,
         tags,
+        metadata,
         created_at: m.created_at,
         updated_at: m.updated_at,
     })
@@ -417,7 +424,26 @@ pub async fn create_form<C: ConnectionTrait>(
         tags: ActiveValue::Set(if tags.is_empty() { None } else { Some(json_or_internal(&tags)?) }),
         ..Default::default()
     };
-    Ok(model.insert(conn).await?)
+    let inserted = model.insert(conn).await?;
+    if let Some(entries) = input.metadata {
+        apply_metadata(conn, inserted.id, &entries).await?;
+    }
+    Ok(inserted)
+}
+
+/// Upsert each provided metadata entry for the form. Used by create/update so
+/// the form admin can toggle per-form options (e.g. email deduplication) in
+/// the same request that edits the form. Type validation happens in
+/// [`metadata_service::set`].
+async fn apply_metadata<C: ConnectionTrait>(
+    conn: &C,
+    form_id: i32,
+    entries: &[crate::metadata::MetadataEntry],
+) -> CoreResult<()> {
+    for entry in entries {
+        metadata_service::set(conn, form_id, entry.key, entry.value.clone()).await?;
+    }
+    Ok(())
 }
 
 pub async fn list_forms<C: ConnectionTrait>(conn: &C, q: &ListQuery) -> CoreResult<FormList> {
@@ -431,7 +457,7 @@ pub async fn list_forms<C: ConnectionTrait>(conn: &C, q: &ListQuery) -> CoreResu
         .await?;
     let mut items: Vec<FormDto> = Vec::with_capacity(rows.len());
     for r in rows {
-        items.push(dto_from_model(r)?);
+        items.push(dto_from_model(conn, r).await?);
     }
     let total = entity::form::Entity::find().count(conn).await?;
     Ok(FormList {
@@ -505,7 +531,13 @@ pub async fn update_form<C: ConnectionTrait>(
         active.tags = ActiveValue::Set(if tags.is_empty() { None } else { Some(json_or_internal(&tags)?) });
     }
 
-    Ok(active.update(conn).await?)
+    let updated = active.update(conn).await?;
+
+    if let Some(entries) = input.metadata {
+        apply_metadata(conn, updated.id, &entries).await?;
+    }
+
+    Ok(updated)
 }
 
 pub async fn delete_form<C: ConnectionTrait>(conn: &C, id: i32) -> CoreResult<()> {
