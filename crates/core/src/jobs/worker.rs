@@ -34,7 +34,8 @@ use crate::submissions::service::{
     STATUS_EXHAUSTED, STATUS_IN_PROGRESS, STATUS_PENDING, STATUS_PERMANENT_FAILURE,
     STATUS_SUCCEEDED, delivery_data,
 };
-use crate::forms::service::tags_from_model;
+use crate::forms::service::{source_params_from_model, tags_from_model};
+use crate::reps::service as reps_service;
 
 const IDLE_INTERVAL: Duration = Duration::from_secs(5);
 const BATCH_SIZE: u32 = 16;
@@ -211,29 +212,18 @@ async fn dispatch_one(
         }
     };
 
-    let tags = match entity::form::Entity::find_by_id(submission.form_id)
+    let (tags, assigned_to) = match entity::form::Entity::find_by_id(submission.form_id)
         .one(db)
         .await?
     {
-        Some(form) => match tags_from_model(&form) {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(
-                    delivery_id = row.id,
-                    form_id = submission.form_id,
-                    error = ?e,
-                    "form tags parse failed — continuing with empty tags"
-                );
-                Vec::new()
-            }
-        },
+        Some(form) => attribution_for(db, &submission, &form).await,
         None => {
             warn!(
                 delivery_id = row.id,
                 form_id = submission.form_id,
                 "form row missing — continuing with empty tags"
             );
-            Vec::new()
+            (Vec::new(), None)
         }
     };
 
@@ -327,6 +317,7 @@ async fn dispatch_one(
         form_id: submission.form_id,
         data: delivery_data(&submission),
         tags,
+        assigned_to,
     };
 
     match backend.deliver(&payload).await {
@@ -384,6 +375,53 @@ fn next_attempt_after(attempts: i32) -> DateTime<Utc> {
         _ => Duration::from_secs(24 * 60 * 60),
     };
     Utc::now() + chrono::Duration::from_std(delay).expect("delay in range")
+}
+
+/// Assemble the delivery tags + owner for a submission: the form's static tags,
+/// plus per-submission tags from captured source params (prefixed per the
+/// form's config) and the attributed sales rep (`rep:<key>`). When the rep
+/// carries a GoHighLevel user id, it becomes the contact owner. Parse failures
+/// degrade gracefully to whatever was assembled so far — a malformed config
+/// must never block a delivery.
+async fn attribution_for(
+    db: &DatabaseConnection,
+    submission: &entity::submission::Model,
+    form: &entity::form::Model,
+) -> (Vec<String>, Option<String>) {
+    let mut tags = tags_from_model(form).unwrap_or_default();
+
+    // Captured source params → tags, applying the configured prefix.
+    let prefixes: std::collections::HashMap<String, Option<String>> =
+        source_params_from_model(form)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|sp| (sp.param, sp.tag_prefix))
+            .collect();
+    if let Some(serde_json::Value::Object(captured)) = &submission.source_params {
+        for (param, value) in captured {
+            let Some(v) = value.as_str() else { continue };
+            let tag = match prefixes.get(param).and_then(|p| p.as_ref()) {
+                Some(prefix) => format!("{prefix}:{v}"),
+                None => v.to_string(),
+            };
+            tags.push(tag);
+        }
+    }
+
+    // Attributed rep → `rep:<key>` tag + GHL owner (if a user id is on record).
+    let mut assigned_to = None;
+    if let Some(rep_id) = submission.sales_rep_id {
+        match reps_service::find_by_id(db, rep_id).await {
+            Ok(Some(rep)) => {
+                tags.push(format!("rep:{}", rep.key));
+                assigned_to = rep.ghl_user_id;
+            }
+            Ok(None) => {}
+            Err(e) => warn!(rep_id, error = ?e, "rep lookup failed — skipping rep attribution"),
+        }
+    }
+
+    (tags, assigned_to)
 }
 
 async fn mark_succeeded(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {

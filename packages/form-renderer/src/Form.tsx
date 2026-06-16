@@ -13,6 +13,13 @@ export interface FormProps {
    * track OS changes live.
    */
   theme?: FormTheme;
+  /**
+   * Source context captured from the host page's URL query string (e.g. a QR
+   * code's `?rep=jane&event=mjbiz-2026`). Forwarded with the submission under
+   * the reserved `_source` key; the server keeps only the params it recognises
+   * (the rep + the form's configured source params) and drops the rest.
+   */
+  source?: Record<string, string>;
   /** Fired after a submission is accepted, with the new submission id. */
   onSubmitted?: (result: { id: number }) => void;
   /** Fired when submission fails, with a human-readable message. */
@@ -54,6 +61,7 @@ export function Form({
   formId,
   apiUrl,
   theme = "light",
+  source,
   onSubmitted,
   onError,
 }: FormProps) {
@@ -141,13 +149,17 @@ export function Form({
     setStatus("submitting");
     setError(null);
     const base = apiUrl.endsWith("/") ? apiUrl.slice(0, -1) : apiUrl;
+    const body =
+      source && Object.keys(source).length > 0
+        ? { ...values, _source: source }
+        : values;
     try {
       const res = await fetch(
         `${base}/public/forms/${encodeURIComponent(formId)}/submissions`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(values),
+          body: JSON.stringify(body),
         },
       );
       if (!res.ok) {

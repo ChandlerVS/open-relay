@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Plus } from "lucide-react";
 import type { components } from "@open-relay/api-client";
 import {
   Alert,
@@ -21,6 +22,7 @@ import {
 import type { FormDto } from "../../../lib/forms/useForms";
 import { STANDARD_FIELDS } from "../../../lib/forms/standardFields";
 import { useBackendsList } from "../../../lib/backends/useBackends";
+import { useRepsList } from "../../../lib/reps/useReps";
 import { StandardFieldsList } from "./StandardFieldsList";
 import { CustomFieldsEditor } from "./CustomFieldsEditor";
 
@@ -29,6 +31,7 @@ type StandardFieldConfig = components["schemas"]["StandardFieldConfig"];
 type CustomField = components["schemas"]["CustomField"];
 type BackendBinding = components["schemas"]["BackendBinding"];
 type MetadataEntry = components["schemas"]["MetadataEntry"];
+type SourceParam = components["schemas"]["SourceParam"];
 
 const EMAIL_DEDUP_KEY = "email_deduplication";
 
@@ -215,6 +218,8 @@ function CreateForm({
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [backends, setBackends] = useState<BackendBinding[]>([openRelayBinding()]);
   const [tags, setTags] = useState<string[]>([]);
+  const [reps, setReps] = useState<number[]>([]);
+  const [sourceParams, setSourceParams] = useState<SourceParam[]>([]);
   const [emailDedup, setEmailDedup] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
@@ -229,6 +234,11 @@ function CreateForm({
           setFormError(v.message ?? "Form has errors.");
           return;
         }
+        const spErr = validateSourceParams(sourceParams);
+        if (spErr) {
+          setFormError(spErr);
+          return;
+        }
         setFormError(null);
         create.mutate(
           {
@@ -238,6 +248,8 @@ function CreateForm({
             custom_fields: customFields,
             backends,
             tags,
+            reps,
+            source_params: cleanSourceParams(sourceParams),
             metadata: [{ key: EMAIL_DEDUP_KEY, value: emailDedup }],
           },
           {
@@ -272,6 +284,18 @@ function CreateForm({
         hint="Every submission fans out to each selected backend."
       >
         <DeliveryDestinations value={backends} onChange={setBackends} />
+      </Section>
+      <Section
+        title="Sales reps"
+        hint="Reps offered on this form. A QR link's ?rep=<key> attributes the lead to one of these (owner + rep tag in GoHighLevel)."
+      >
+        <RepsSelector value={reps} onChange={setReps} />
+      </Section>
+      <Section
+        title="Source parameters"
+        hint="Extra URL query params to capture as tags, e.g. an event name. A QR link adds ?<param>=<value>."
+      >
+        <SourceParamsEditor value={sourceParams} onChange={setSourceParams} />
       </Section>
       <Section
         title="Tags"
@@ -317,6 +341,10 @@ function EditForm({
   const [customFields, setCustomFields] = useState<CustomField[]>(form.custom_fields);
   const [backends, setBackends] = useState<BackendBinding[]>(form.backends);
   const [tags, setTags] = useState<string[]>(form.tags);
+  const [reps, setReps] = useState<number[]>(form.reps);
+  const [sourceParams, setSourceParams] = useState<SourceParam[]>(
+    form.source_params,
+  );
   const [emailDedup, setEmailDedup] = useState(
     emailDedupFromMetadata(form.metadata),
   );
@@ -333,6 +361,11 @@ function EditForm({
           setFormError(v.message ?? "Form has errors.");
           return;
         }
+        const spErr = validateSourceParams(sourceParams);
+        if (spErr) {
+          setFormError(spErr);
+          return;
+        }
         setFormError(null);
         const existingKeys = new Set(form.backends.map(bindingKey));
         const nextKeys = new Set(backends.map(bindingKey));
@@ -341,6 +374,11 @@ function EditForm({
           [...existingKeys].some((k) => !nextKeys.has(k));
         const tagsChanged =
           tags.join(",") !== form.tags.join(",");
+        const repsChanged =
+          [...reps].sort().join(",") !== [...form.reps].sort().join(",");
+        const cleanedParams = cleanSourceParams(sourceParams);
+        const sourceParamsChanged =
+          JSON.stringify(cleanedParams) !== JSON.stringify(form.source_params);
         const dedupChanged = emailDedup !== emailDedupFromMetadata(form.metadata);
         update.mutate(
           {
@@ -352,6 +390,8 @@ function EditForm({
               custom_fields: customFields,
               backends: backendsChanged ? backends : undefined,
               tags: tagsChanged ? tags : undefined,
+              reps: repsChanged ? reps : undefined,
+              source_params: sourceParamsChanged ? cleanedParams : undefined,
               metadata: dedupChanged
                 ? [{ key: EMAIL_DEDUP_KEY, value: emailDedup }]
                 : undefined,
@@ -389,6 +429,18 @@ function EditForm({
         hint="Every submission fans out to each selected backend."
       >
         <DeliveryDestinations value={backends} onChange={setBackends} />
+      </Section>
+      <Section
+        title="Sales reps"
+        hint="Reps offered on this form. A QR link's ?rep=<key> attributes the lead to one of these (owner + rep tag in GoHighLevel)."
+      >
+        <RepsSelector value={reps} onChange={setReps} />
+      </Section>
+      <Section
+        title="Source parameters"
+        hint="Extra URL query params to capture as tags, e.g. an event name. A QR link adds ?<param>=<value>."
+      >
+        <SourceParamsEditor value={sourceParams} onChange={setSourceParams} />
       </Section>
       <Section
         title="Tags"
@@ -650,6 +702,159 @@ function DeduplicationToggle({
           </div>
         </div>
       </label>
+    </div>
+  );
+}
+
+function RepsSelector({
+  value,
+  onChange,
+}: {
+  value: number[];
+  onChange: (next: number[]) => void;
+}) {
+  const { data, isLoading, isError, error, refetch } = useRepsList();
+  const selected = new Set(value);
+
+  const toggle = (id: number) => {
+    if (selected.has(id)) {
+      onChange(value.filter((v) => v !== id));
+    } else {
+      onChange([...value, id]);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {isError && (
+        <Alert variant="destructive">
+          <AlertTitle>Couldn't load reps</AlertTitle>
+          <AlertDescription>
+            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
+            <button
+              type="button"
+              className="underline font-medium"
+              onClick={() => refetch()}
+            >
+              Try again
+            </button>
+          </AlertDescription>
+        </Alert>
+      )}
+      <div className="border border-border rounded-md divide-y divide-border">
+        {(data?.items ?? []).map((r) => (
+          <label
+            key={r.id}
+            className="flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-accent/40"
+          >
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4"
+              checked={selected.has(r.id)}
+              onChange={() => toggle(r.id)}
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium">{r.name}</div>
+              <div className="text-xs text-muted-foreground">
+                <code className="rounded bg-muted px-1 py-0.5">?rep={r.key}</code>
+                {r.ghl_user_id ? " · GHL owner set" : " · no GHL owner id"}
+              </div>
+            </div>
+          </label>
+        ))}
+        {!isLoading && (data?.items?.length ?? 0) === 0 && (
+          <div className="px-3 py-2 text-xs text-muted-foreground">
+            No reps yet. Add reps in the Sales reps section, then attach them
+            here.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const RESERVED_PARAM = "rep";
+
+/** Trim rows, drop blank params, normalise an empty prefix to null. */
+function cleanSourceParams(params: SourceParam[]): SourceParam[] {
+  return params
+    .map((p) => ({
+      param: p.param.trim(),
+      tag_prefix: p.tag_prefix?.trim() ? p.tag_prefix.trim() : null,
+    }))
+    .filter((p) => p.param.length > 0);
+}
+
+/** Returns an error message, or null when the source params are valid. */
+function validateSourceParams(params: SourceParam[]): string | null {
+  const seen = new Set<string>();
+  for (const p of params) {
+    const param = p.param.trim();
+    if (!param) continue; // blank rows are dropped on save
+    if (/\s/.test(param)) return `Source param "${param}" cannot contain spaces.`;
+    if (param === RESERVED_PARAM) {
+      return `"rep" is reserved for rep attribution — use the Sales reps section.`;
+    }
+    if (seen.has(param)) return `Duplicate source param "${param}".`;
+    seen.add(param);
+  }
+  return null;
+}
+
+function SourceParamsEditor({
+  value,
+  onChange,
+}: {
+  value: SourceParam[];
+  onChange: (next: SourceParam[]) => void;
+}) {
+  const update = (i: number, patch: Partial<SourceParam>) => {
+    onChange(value.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
+  };
+  const remove = (i: number) => onChange(value.filter((_, idx) => idx !== i));
+  const add = () => onChange([...value, { param: "", tag_prefix: null }]);
+
+  return (
+    <div className="space-y-2">
+      {value.length > 0 && (
+        <div className="space-y-2">
+          {value.map((p, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Input
+                value={p.param}
+                placeholder="event"
+                aria-label="Param name"
+                onChange={(e) => update(i, { param: e.target.value })}
+              />
+              <Input
+                value={p.tag_prefix ?? ""}
+                placeholder="tag prefix (optional)"
+                aria-label="Tag prefix"
+                onChange={(e) => update(i, { tag_prefix: e.target.value })}
+              />
+              <button
+                type="button"
+                className="shrink-0 text-muted-foreground hover:text-foreground px-2 leading-none"
+                aria-label="Remove source param"
+                onClick={() => remove(i)}
+              >
+                &times;
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Button type="button" variant="outline" size="sm" onClick={add}>
+        <Plus className="h-4 w-4" />
+        Add source param
+      </Button>
+      {value.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          A captured value becomes a tag. With a prefix it's{" "}
+          <code className="rounded bg-muted px-1 py-0.5">prefix:value</code>;
+          without one, the value verbatim.
+        </p>
+      )}
     </div>
   );
 }

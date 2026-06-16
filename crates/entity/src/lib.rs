@@ -34,6 +34,7 @@ pub mod oauth_provider_config;
 pub mod refresh_token;
 pub mod role;
 pub mod role_permission;
+pub mod sales_rep;
 pub mod submission;
 pub mod submission_delivery;
 pub mod user;

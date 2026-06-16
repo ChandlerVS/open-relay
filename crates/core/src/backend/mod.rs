@@ -34,9 +34,15 @@ pub struct DeliveryPayload {
     /// keyed by field key. Backends should consume `data` rather than rely on
     /// any particular column layout.
     pub data: Value,
-    /// Tags configured on the form. Included so backends can attach labels
-    /// without an extra DB lookup.
+    /// Tags configured on the form, plus any per-submission tags derived from
+    /// the QR landing page (rep + captured source params). Included so backends
+    /// can attach labels without an extra DB lookup.
     pub tags: Vec<String>,
+    /// Owner to assign the delivered record to, when the submission was
+    /// attributed to a sales rep that carries a backend-specific user id (e.g.
+    /// a GoHighLevel `ghl_user_id`). Backends that don't model ownership ignore
+    /// it. `None` when the submission has no rep / the rep has no owner id.
+    pub assigned_to: Option<String>,
 }
 
 #[derive(Debug, Error)]

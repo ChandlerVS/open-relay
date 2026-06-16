@@ -193,6 +193,18 @@ pub struct CustomField {
     pub position: i32,
 }
 
+/// An extra URL query param captured from the QR landing page and emitted as a
+/// per-submission tag. The param's value is what gets tagged; `tag_prefix`, when
+/// set, is prepended as `"<prefix>:<value>"` (e.g. param `event` with prefix
+/// `event` → tag `event:mjbiz-2026`). The reserved `rep` param is handled
+/// separately (it resolves to a [`crate::reps`] entry, not a tag here).
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+pub struct SourceParam {
+    pub param: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_prefix: Option<String>,
+}
+
 /// Input shape for creating a form. `slug` defaults to a slugified `name`
 /// if `None`/empty. `standard_fields` defaults to [`StandardFieldsConfig::default`]
 /// if absent. `custom_fields` defaults to empty.
@@ -214,6 +226,13 @@ pub struct NewForm {
     /// Defaults to empty.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Sales reps (by [`crate::reps`] id) this form offers. A submission's
+    /// `?rep=<key>` is resolved against this set. Defaults to empty.
+    #[serde(default)]
+    pub reps: Vec<i32>,
+    /// Extra URL params to capture as per-submission tags. Defaults to empty.
+    #[serde(default)]
+    pub source_params: Vec<SourceParam>,
     /// Per-form metadata toggles (e.g. email deduplication). Each entry is
     /// upserted on create; omit (or send an empty list) to leave metadata
     /// unset. See [`crate::metadata`].
@@ -233,6 +252,10 @@ pub struct FormDto {
     pub custom_fields: Vec<CustomField>,
     pub backends: Vec<BackendBinding>,
     pub tags: Vec<String>,
+    /// Sales reps (by [`crate::reps`] id) this form offers.
+    pub reps: Vec<i32>,
+    /// Extra URL params captured as per-submission tags.
+    pub source_params: Vec<SourceParam>,
     /// Per-form metadata toggles (e.g. email deduplication). See
     /// [`crate::metadata`].
     pub metadata: Vec<MetadataEntry>,
@@ -256,6 +279,12 @@ pub struct UpdateForm {
     pub backends: Option<Vec<BackendBinding>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// `None` leaves reps untouched. `Some(vec![])` clears all associations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reps: Option<Vec<i32>>,
+    /// `None` leaves source params untouched. `Some(vec![])` clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_params: Option<Vec<SourceParam>>,
     /// `None` leaves metadata untouched. `Some` upserts each entry (so an
     /// explicit `email_deduplication = false` turns the toggle off).
     #[serde(default, skip_serializing_if = "Option::is_none")]

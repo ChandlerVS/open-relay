@@ -41,6 +41,16 @@ pub struct Model {
     /// `NULL` is equivalent to an empty list (back-compat).
     #[sea_orm(column_type = "Json", nullable)]
     pub tags: Option<Json>,
+    /// Sales reps this form offers, as a JSON array of `sales_rep.id` values.
+    /// A submission's `?rep=<key>` is resolved against this set. `NULL` /
+    /// missing is equivalent to an empty list. See `open_relay_core::forms`.
+    #[sea_orm(column_type = "Json", nullable)]
+    pub reps: Option<Json>,
+    /// Extra URL query params to capture from the QR landing page and emit as
+    /// per-submission tags. JSON array of `SourceParam` (`{ param, tag_prefix }`)
+    /// — see `open_relay_core::forms`. `NULL` is equivalent to an empty list.
+    #[sea_orm(column_type = "Json", nullable)]
+    pub source_params: Option<Json>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

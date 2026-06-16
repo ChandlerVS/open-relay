@@ -172,6 +172,11 @@ impl GoHighLevelBackend {
                 .collect();
             body.insert("tags".to_string(), Value::Array(tags));
         }
+        // Assign the contact owner when the submission was attributed to a rep
+        // carrying a GHL user id. `assignedTo` takes a LeadConnector user id.
+        if let Some(owner) = payload.assigned_to.as_ref().filter(|s| !s.trim().is_empty()) {
+            body.insert("assignedTo".to_string(), Value::String(owner.clone()));
+        }
         Value::Object(body)
     }
 }
@@ -249,6 +254,7 @@ mod tests {
             form_id: 1,
             data,
             tags: Vec::new(),
+            assigned_to: None,
         }
     }
 
@@ -344,6 +350,27 @@ mod tests {
         let body = backend().build_body(&payload(json!({ "first_name": "Ada" })));
         let obj = body.as_object().unwrap();
         assert!(obj.get("tags").is_none());
+    }
+
+    #[test]
+    fn body_includes_assigned_to_when_present() {
+        let mut p = payload(json!({ "first_name": "Ada" }));
+        p.assigned_to = Some("usr_jane123".to_string());
+        let body = backend().build_body(&p);
+        let obj = body.as_object().unwrap();
+        assert_eq!(obj["assignedTo"], "usr_jane123");
+    }
+
+    #[test]
+    fn body_omits_assigned_to_when_absent_or_blank() {
+        let obj = backend()
+            .build_body(&payload(json!({ "first_name": "Ada" })));
+        assert!(obj.as_object().unwrap().get("assignedTo").is_none());
+
+        let mut p = payload(json!({ "first_name": "Ada" }));
+        p.assigned_to = Some("   ".to_string());
+        let body = backend().build_body(&p);
+        assert!(body.as_object().unwrap().get("assignedTo").is_none());
     }
 
     #[test]

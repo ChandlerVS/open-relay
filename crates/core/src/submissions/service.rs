@@ -26,6 +26,7 @@ use crate::forms::{
     service as forms_service,
 };
 use crate::metadata::{MetadataKey, service as metadata_service};
+use crate::reps::service as reps_service;
 
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
@@ -33,8 +34,14 @@ const MAX_LIST_LIMIT: u32 = 200;
 /// fills it; a non-empty value means a bot, so we reject. Kept generic in the
 /// error so a bot can't learn the field name from the response.
 const HONEYPOT_KEY: &str = "_hp";
+/// Reserved payload key carrying the QR landing page's source context (the
+/// renderer forwards the page's URL query params here): `{ "rep": "jane",
+/// "event": "mjbiz-2026" }`. Pulled out before field validation.
+const SOURCE_KEY: &str = "_source";
 const MAX_STANDARD_FIELD_LEN: usize = 1000;
 const MAX_MESSAGE_LEN: usize = 10_000;
+/// Cap on a single captured source-param value (becomes a tag downstream).
+const MAX_SOURCE_VALUE_LEN: usize = 255;
 
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_IN_PROGRESS: &str = "in_progress";
@@ -266,15 +273,84 @@ fn honeypot_tripped(payload: &NewSubmissionPayload) -> bool {
     }
 }
 
+/// Flatten the reserved `_source` object into string key/values. Non-string
+/// scalars are stringified; nested objects/arrays/nulls are ignored. A missing
+/// or non-object `_source` yields an empty map.
+fn source_map_from(raw: Option<JsonValue>) -> HashMap<String, String> {
+    let Some(JsonValue::Object(obj)) = raw else {
+        return HashMap::new();
+    };
+    obj.into_iter()
+        .filter_map(|(k, v)| match v {
+            JsonValue::String(s) => Some((k, s)),
+            JsonValue::Number(n) => Some((k, n.to_string())),
+            JsonValue::Bool(b) => Some((k, b.to_string())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Attribution derived from the QR landing page's source params: the resolved
+/// rep id (if `?rep=<key>` matched one the form offers) and the subset of
+/// declared source params that were present, ready to store on the submission.
+struct Attribution {
+    sales_rep_id: Option<i32>,
+    source_params: Option<JsonValue>,
+}
+
+/// Resolve rep attribution + capture declared source params from `_source`.
+async fn resolve_attribution<C: ConnectionTrait>(
+    conn: &C,
+    form: &entity::form::Model,
+    source: &HashMap<String, String>,
+) -> CoreResult<Attribution> {
+    let sales_rep_id = match source.get(forms_service::REP_PARAM) {
+        Some(key) => {
+            let rep_ids = forms_service::reps_from_model(form)?;
+            reps_service::resolve_for_form(conn, &rep_ids, key)
+                .await?
+                .map(|r| r.id)
+        }
+        None => None,
+    };
+
+    let declared = forms_service::source_params_from_model(form)?;
+    let mut captured = JsonMap::new();
+    for sp in &declared {
+        if let Some(val) = source.get(&sp.param) {
+            let trimmed = val.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let value: String = trimmed.chars().take(MAX_SOURCE_VALUE_LEN).collect();
+            captured.insert(sp.param.clone(), JsonValue::String(value));
+        }
+    }
+    let source_params = if captured.is_empty() {
+        None
+    } else {
+        Some(JsonValue::Object(captured))
+    };
+
+    Ok(Attribution {
+        sales_rep_id,
+        source_params,
+    })
+}
+
 pub async fn create_submission<C: ConnectionTrait>(
     conn: &C,
     form: &entity::form::Model,
-    payload: NewSubmissionPayload,
+    mut payload: NewSubmissionPayload,
 ) -> CoreResult<entity::submission::Model> {
     // Honeypot: reject (generically) if the hidden field was filled in.
     if honeypot_tripped(&payload) {
         return Err(CoreError::BadRequest("submission rejected".into()));
     }
+
+    // Pull the reserved `_source` context (QR landing page query params) out of
+    // the payload before field validation so it isn't mistaken for a form field.
+    let source = source_map_from(payload.0.remove(SOURCE_KEY));
 
     // Read config straight off the JSON columns — no need to build a full
     // `FormDto` (which would also fetch metadata) on the hot submission path.
@@ -288,6 +364,8 @@ pub async fn create_submission<C: ConnectionTrait>(
         )));
     }
 
+    let attribution = resolve_attribution(conn, form, &source).await?;
+
     let (standard, custom_data) = validate_and_split(payload, &standard_cfg, &custom_fields)?;
 
     // Email deduplication (opt-in per form): if the submitted email already
@@ -296,7 +374,15 @@ pub async fn create_submission<C: ConnectionTrait>(
     // delivery fan-out so it's never dispatched to a backend.
     let is_duplicate = is_duplicate_email(conn, form.id, standard.get("email")).await?;
 
-    let inserted = insert_submission(conn, form.id, standard, custom_data, is_duplicate).await?;
+    let inserted = insert_submission(
+        conn,
+        form.id,
+        standard,
+        custom_data,
+        &attribution,
+        is_duplicate,
+    )
+    .await?;
     if !is_duplicate {
         insert_deliveries(conn, inserted.id, &backends).await?;
     }
@@ -337,6 +423,7 @@ async fn insert_submission<C: ConnectionTrait>(
     form_id: i32,
     standard: StandardValues,
     custom_data: JsonValue,
+    attribution: &Attribution,
     is_duplicate: bool,
 ) -> CoreResult<entity::submission::Model> {
     let take = |s: &StandardValues, key: &str| s.get(key).cloned();
@@ -357,6 +444,8 @@ async fn insert_submission<C: ConnectionTrait>(
         postal_code: ActiveValue::Set(take(&standard, "postal_code")),
         country: ActiveValue::Set(take(&standard, "country")),
         custom_data: ActiveValue::Set(custom_data),
+        sales_rep_id: ActiveValue::Set(attribution.sales_rep_id),
+        source_params: ActiveValue::Set(attribution.source_params.clone()),
         is_duplicate: ActiveValue::Set(Some(is_duplicate)),
         ..Default::default()
     };
@@ -494,6 +583,8 @@ fn dto_from_model(
         postal_code: m.postal_code,
         country: m.country,
         custom_data: m.custom_data,
+        sales_rep_id: m.sales_rep_id,
+        source_params: m.source_params,
         is_duplicate: m.is_duplicate.unwrap_or(false),
         created_at: m.created_at,
         deliveries,
@@ -767,6 +858,31 @@ mod tests {
             &fields,
         );
         assert!(matches!(bad, Err(CoreError::BadRequest(_))));
+    }
+
+    #[test]
+    fn source_map_flattens_scalars_and_ignores_nesting() {
+        let raw = serde_json::json!({
+            "rep": "jane",
+            "event": "mjbiz-2026",
+            "count": 3,
+            "flag": true,
+            "nested": { "a": 1 },
+            "list": [1, 2],
+        });
+        let m = source_map_from(Some(raw));
+        assert_eq!(m.get("rep").map(String::as_str), Some("jane"));
+        assert_eq!(m.get("event").map(String::as_str), Some("mjbiz-2026"));
+        assert_eq!(m.get("count").map(String::as_str), Some("3"));
+        assert_eq!(m.get("flag").map(String::as_str), Some("true"));
+        assert!(!m.contains_key("nested"));
+        assert!(!m.contains_key("list"));
+    }
+
+    #[test]
+    fn source_map_empty_for_non_object() {
+        assert!(source_map_from(None).is_empty());
+        assert!(source_map_from(Some(serde_json::json!("x"))).is_empty());
     }
 
     #[test]

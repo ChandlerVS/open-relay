@@ -7,6 +7,7 @@ import {
   Skeleton,
 } from "@open-relay/ui";
 import { useSubmission } from "../../../lib/submissions/useSubmissions";
+import { useRepsList } from "../../../lib/reps/useReps";
 import { DeliveryStatusBadges, DuplicateBadge } from "./DeliveryStatusBadges";
 
 interface Props {
@@ -40,6 +41,20 @@ export function SubmissionDetailDialog({
   formNameById,
 }: Props) {
   const { data, isLoading } = useSubmission(id);
+  const { data: reps } = useRepsList();
+  const repName =
+    data?.sales_rep_id != null
+      ? (reps?.items.find((r) => r.id === data.sales_rep_id)?.name ??
+        `Rep #${data.sales_rep_id}`)
+      : null;
+  const sourceParams =
+    data?.source_params &&
+    typeof data.source_params === "object" &&
+    !Array.isArray(data.source_params)
+      ? (data.source_params as Record<string, unknown>)
+      : null;
+  const hasAttribution =
+    repName != null || (sourceParams != null && Object.keys(sourceParams).length > 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -81,6 +96,26 @@ export function SubmissionDetailDialog({
                 <DeliveryStatusBadges deliveries={data.deliveries} />
               )}
             </section>
+            {hasAttribution && (
+              <section>
+                <h3 className="text-sm font-medium mb-2">Attribution</h3>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  {repName && (
+                    <div>
+                      <dt className="text-muted-foreground text-xs">Sales rep</dt>
+                      <dd className="break-words">{repName}</dd>
+                    </div>
+                  )}
+                  {sourceParams &&
+                    Object.entries(sourceParams).map(([key, value]) => (
+                      <div key={key}>
+                        <dt className="text-muted-foreground text-xs">{key}</dt>
+                        <dd className="break-words">{String(value)}</dd>
+                      </div>
+                    ))}
+                </dl>
+              </section>
+            )}
             <section>
               <h3 className="text-sm font-medium mb-2">Standard fields</h3>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">

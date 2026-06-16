@@ -1243,6 +1243,225 @@
         }
       }
     },
+    "/reps": {
+      "get": {
+        "tags": [
+          "reps"
+        ],
+        "operationId": "list_reps",
+        "responses": {
+          "200": {
+            "description": "Sales reps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "reps"
+        ],
+        "operationId": "create_rep",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRep"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Sales rep created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "409": {
+            "description": "Key already in use"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/reps/{id}": {
+      "get": {
+        "tags": [
+          "reps"
+        ],
+        "operationId": "get_rep",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sales rep id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sales rep",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Sales rep not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "reps"
+        ],
+        "operationId": "delete_rep",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sales rep id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Sales rep deleted"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Sales rep not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "reps"
+        ],
+        "operationId": "update_rep",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sales rep id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRep"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sales rep updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Sales rep not found"
+          },
+          "409": {
+            "description": "Key already in use"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/roles": {
       "get": {
         "tags": [
@@ -2611,6 +2830,8 @@
           "custom_fields",
           "backends",
           "tags",
+          "reps",
+          "source_params",
           "metadata",
           "created_at",
           "updated_at"
@@ -2650,8 +2871,23 @@
             "type": "integer",
             "format": "int32"
           },
+          "reps": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Sales reps (by [`crate::reps`] id) this form offers."
+          },
           "slug": {
             "type": "string"
+          },
+          "source_params": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceParam"
+            },
+            "description": "Extra URL params captured as per-submission tags."
           },
           "standard_fields": {
             "$ref": "#/components/schemas/StandardFieldsConfig"
@@ -2926,11 +3162,26 @@
           "name": {
             "type": "string"
           },
+          "reps": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Sales reps (by [`crate::reps`] id) this form offers. A submission's\n`?rep=<key>` is resolved against this set. Defaults to empty."
+          },
           "slug": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "source_params": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceParam"
+            },
+            "description": "Extra URL params to capture as per-submission tags. Defaults to empty."
           },
           "standard_fields": {
             "oneOf": [
@@ -2948,6 +3199,36 @@
               "type": "string"
             },
             "description": "Tags dispatched to backends alongside every submission from this form.\nDefaults to empty."
+          }
+        }
+      },
+      "NewRep": {
+        "type": "object",
+        "description": "Input for creating a rep. `key` defaults to a slugified `name` when omitted.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ghl_user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -3125,6 +3406,9 @@
           "backends:read",
           "backends:write",
           "backends:delete",
+          "reps:read",
+          "reps:write",
+          "reps:delete",
           "auth_config:write"
         ]
       },
@@ -3242,6 +3526,71 @@
           }
         }
       },
+      "RepDto": {
+        "type": "object",
+        "description": "Outbound representation of a sales rep.",
+        "required": [
+          "id",
+          "key",
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ghl_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GoHighLevel user id; when set, deliveries to a GHL backend assign the\ncontact to this owner."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "key": {
+            "type": "string",
+            "description": "URL-safe slug used as `?rep=<key>` on QR landing URLs."
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RepList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepDto"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "RetryDeliveriesRequest": {
         "type": "object",
         "description": "Request body for a manual delivery re-sync. Carries the `submission_delivery`\nrow ids the operator picked in the admin UI.",
@@ -3356,6 +3705,24 @@
         "properties": {
           "initialized": {
             "type": "boolean"
+          }
+        }
+      },
+      "SourceParam": {
+        "type": "object",
+        "description": "An extra URL query param captured from the QR landing page and emitted as a\nper-submission tag. The param's value is what gets tagged; `tag_prefix`, when\nset, is prepended as `\"<prefix>:<value>\"` (e.g. param `event` with prefix\n`event` → tag `event:mjbiz-2026`). The reserved `rep` param is handled\nseparately (it resolves to a [`crate::reps`] entry, not a tag here).",
+        "required": [
+          "param"
+        ],
+        "properties": {
+          "param": {
+            "type": "string"
+          },
+          "tag_prefix": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3619,6 +3986,17 @@
               "null"
             ]
           },
+          "sales_rep_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Sales rep this submission was attributed to (from the QR landing URL's\n`?rep=<key>`), or `None` if no rep matched."
+          },
+          "source_params": {
+            "description": "Source params captured from the QR landing URL (e.g.\n`{\"event\":\"mjbiz-2026\"}`), or `None` if none were captured."
+          },
           "state": {
             "type": [
               "string",
@@ -3732,11 +4110,32 @@
               "null"
             ]
           },
+          "reps": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "`None` leaves reps untouched. `Some(vec![])` clears all associations."
+          },
           "slug": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "source_params": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SourceParam"
+            },
+            "description": "`None` leaves source params untouched. `Some(vec![])` clears them."
           },
           "standard_fields": {
             "oneOf": [
@@ -3756,6 +4155,36 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "UpdateRep": {
+        "type": "object",
+        "description": "Partial update. `None` means \"leave the field alone\". For `email` /\n`ghl_user_id`, an explicit empty string clears the value.",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ghl_user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -4008,6 +4437,10 @@
     {
       "name": "backends",
       "description": "Configured delivery backends (e.g. GoHighLevel)."
+    },
+    {
+      "name": "reps",
+      "description": "Sales rep directory for QR-code attribution."
     },
     {
       "name": "submissions",

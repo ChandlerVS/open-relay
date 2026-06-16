@@ -404,6 +404,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_reps"];
+        put?: never;
+        post: operations["create_rep"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reps/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_rep"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_rep"];
+        options?: never;
+        head?: never;
+        patch: operations["update_rep"];
+        trace?: never;
+    };
     "/roles": {
         parameters: {
             query?: never;
@@ -833,7 +865,11 @@ export interface components {
             name: string;
             /** Format: int32 */
             owner_id: number;
+            /** @description Sales reps (by [`crate::reps`] id) this form offers. */
+            reps: number[];
             slug: string;
+            /** @description Extra URL params captured as per-submission tags. */
+            source_params: components["schemas"]["SourceParam"][];
             standard_fields: components["schemas"]["StandardFieldsConfig"];
             tags: string[];
             /** Format: date-time */
@@ -937,13 +973,27 @@ export interface components {
              */
             metadata?: components["schemas"]["MetadataEntry"][] | null;
             name: string;
+            /**
+             * @description Sales reps (by [`crate::reps`] id) this form offers. A submission's
+             *     `?rep=<key>` is resolved against this set. Defaults to empty.
+             */
+            reps?: number[];
             slug?: string | null;
+            /** @description Extra URL params to capture as per-submission tags. Defaults to empty. */
+            source_params?: components["schemas"]["SourceParam"][];
             standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
             /**
              * @description Tags dispatched to backends alongside every submission from this form.
              *     Defaults to empty.
              */
             tags?: string[];
+        };
+        /** @description Input for creating a rep. `key` defaults to a slugified `name` when omitted. */
+        NewRep: {
+            email?: string | null;
+            ghl_user_id?: string | null;
+            key?: string | null;
+            name: string;
         };
         NewRole: {
             description?: string | null;
@@ -1008,7 +1058,7 @@ export interface components {
             enabled: boolean;
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "auth_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "auth_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
@@ -1045,6 +1095,29 @@ export interface components {
         };
         RefreshRequest: {
             refresh_token: string;
+        };
+        /** @description Outbound representation of a sales rep. */
+        RepDto: {
+            /** Format: date-time */
+            created_at: string;
+            email?: string | null;
+            /**
+             * @description GoHighLevel user id; when set, deliveries to a GHL backend assign the
+             *     contact to this owner.
+             */
+            ghl_user_id?: string | null;
+            /** Format: int32 */
+            id: number;
+            /** @description URL-safe slug used as `?rep=<key>` on QR landing URLs. */
+            key: string;
+            name: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RepList: {
+            items: components["schemas"]["RepDto"][];
+            /** Format: int64 */
+            total: number;
         };
         /**
          * @description Request body for a manual delivery re-sync. Carries the `submission_delivery`
@@ -1091,6 +1164,17 @@ export interface components {
         };
         SetupStatus: {
             initialized: boolean;
+        };
+        /**
+         * @description An extra URL query param captured from the QR landing page and emitted as a
+         *     per-submission tag. The param's value is what gets tagged; `tag_prefix`, when
+         *     set, is prepended as `"<prefix>:<value>"` (e.g. param `event` with prefix
+         *     `event` → tag `event:mjbiz-2026`). The reserved `rep` param is handled
+         *     separately (it resolves to a [`crate::reps`] entry, not a tag here).
+         */
+        SourceParam: {
+            param: string;
+            tag_prefix?: string | null;
         };
         /**
          * @description Per-field toggle for a standard field. `label` overrides the renderer's
@@ -1183,6 +1267,17 @@ export interface components {
             message?: string | null;
             phone?: string | null;
             postal_code?: string | null;
+            /**
+             * Format: int32
+             * @description Sales rep this submission was attributed to (from the QR landing URL's
+             *     `?rep=<key>`), or `None` if no rep matched.
+             */
+            sales_rep_id?: number | null;
+            /**
+             * @description Source params captured from the QR landing URL (e.g.
+             *     `{"event":"mjbiz-2026"}`), or `None` if none were captured.
+             */
+            source_params?: unknown;
             state?: string | null;
             website?: string | null;
         };
@@ -1221,9 +1316,23 @@ export interface components {
              */
             metadata?: components["schemas"]["MetadataEntry"][] | null;
             name?: string | null;
+            /** @description `None` leaves reps untouched. `Some(vec![])` clears all associations. */
+            reps?: number[] | null;
             slug?: string | null;
+            /** @description `None` leaves source params untouched. `Some(vec![])` clears them. */
+            source_params?: components["schemas"]["SourceParam"][] | null;
             standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
             tags?: string[] | null;
+        };
+        /**
+         * @description Partial update. `None` means "leave the field alone". For `email` /
+         *     `ghl_user_id`, an explicit empty string clears the value.
+         */
+        UpdateRep: {
+            email?: string | null;
+            ghl_user_id?: string | null;
+            key?: string | null;
+            name?: string | null;
         };
         /**
          * @description Partial update. `None` means "leave alone". `description: Some("")`
@@ -2541,6 +2650,240 @@ export interface operations {
             };
             /** @description Form not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_reps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sales reps */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepList"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_rep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRep"];
+            };
+        };
+        responses: {
+            /** @description Sales rep created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Key already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_rep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Sales rep id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sales rep */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepDto"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Sales rep not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_rep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Sales rep id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sales rep deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Sales rep not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_rep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Sales rep id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRep"];
+            };
+        };
+        responses: {
+            /** @description Sales rep updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Sales rep not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Key already in use */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

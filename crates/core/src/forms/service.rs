@@ -13,12 +13,13 @@ use sea_orm::{
 
 use super::{
     BackendBinding, CustomField, CustomFieldType, FormDto, FormList, FormSelectOption, ListQuery,
-    NewForm, PublicFormDto, STANDARD_FIELD_KEYS, StandardFieldsConfig, UpdateForm,
+    NewForm, PublicFormDto, STANDARD_FIELD_KEYS, SourceParam, StandardFieldsConfig, UpdateForm,
     default_backends,
 };
 use crate::backend::BackendRegistry;
 use crate::error::{CoreError, CoreResult};
 use crate::metadata::service as metadata_service;
+use crate::reps::service as reps_service;
 
 const MAX_NAME_LEN: usize = 200;
 const MAX_SLUG_LEN: usize = 100;
@@ -26,8 +27,15 @@ const MAX_LABEL_LEN: usize = 200;
 const MAX_KEY_LEN: usize = 64;
 const MAX_CUSTOM_FIELDS: usize = 100;
 const MAX_TAG_LEN: usize = 255;
+const MAX_SOURCE_PARAMS: usize = 50;
+const MAX_PARAM_LEN: usize = 64;
+const MAX_TAG_PREFIX_LEN: usize = 64;
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
+
+/// Reserved query param resolved to a sales rep, not captured as a tag. Source
+/// params may not reuse this name.
+pub const REP_PARAM: &str = "rep";
 
 pub fn validate_name(name: &str) -> CoreResult<String> {
     let trimmed = name.trim();
@@ -215,6 +223,107 @@ pub fn tags_from_model(m: &entity::form::Model) -> CoreResult<Vec<String>> {
     }
 }
 
+/// Validate + normalize the rep ids a form offers: dedup (order-preserving) and
+/// reject any id that doesn't resolve to a [`crate::reps`] row.
+pub async fn validate_reps<C: ConnectionTrait>(conn: &C, ids: &[i32]) -> CoreResult<Vec<i32>> {
+    let mut seen = HashSet::with_capacity(ids.len());
+    let mut deduped: Vec<i32> = Vec::with_capacity(ids.len());
+    for &id in ids {
+        if seen.insert(id) {
+            deduped.push(id);
+        }
+    }
+    if deduped.is_empty() {
+        return Ok(deduped);
+    }
+    let existing: HashSet<i32> = reps_service::existing_ids(conn, &deduped)
+        .await?
+        .into_iter()
+        .collect();
+    for id in &deduped {
+        if !existing.contains(id) {
+            return Err(CoreError::BadRequest(format!("unknown sales rep: {id}")));
+        }
+    }
+    Ok(deduped)
+}
+
+/// Validate + normalize source params: trim, reject blanks, the reserved `rep`
+/// name, duplicates, oversize names/prefixes, and an excess count.
+pub fn validate_source_params(params: &[SourceParam]) -> CoreResult<Vec<SourceParam>> {
+    if params.len() > MAX_SOURCE_PARAMS {
+        return Err(CoreError::BadRequest(format!(
+            "no more than {MAX_SOURCE_PARAMS} source params allowed"
+        )));
+    }
+    let mut seen: HashSet<String> = HashSet::with_capacity(params.len());
+    let mut out: Vec<SourceParam> = Vec::with_capacity(params.len());
+    for p in params {
+        let param = p.param.trim();
+        if param.is_empty() {
+            return Err(CoreError::BadRequest("source param name must not be blank".into()));
+        }
+        if param.chars().count() > MAX_PARAM_LEN {
+            return Err(CoreError::BadRequest(format!(
+                "source param name exceeds {MAX_PARAM_LEN} characters"
+            )));
+        }
+        if param.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(CoreError::BadRequest(
+                "source param name must not contain whitespace or control characters".into(),
+            ));
+        }
+        if param == REP_PARAM {
+            return Err(CoreError::BadRequest(format!(
+                "'{REP_PARAM}' is reserved and can't be a source param"
+            )));
+        }
+        if !seen.insert(param.to_string()) {
+            return Err(CoreError::BadRequest(format!(
+                "duplicate source param: {param}"
+            )));
+        }
+        let tag_prefix = match &p.tag_prefix {
+            Some(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else if t.chars().count() > MAX_TAG_PREFIX_LEN {
+                    return Err(CoreError::BadRequest(format!(
+                        "source param tag prefix exceeds {MAX_TAG_PREFIX_LEN} characters"
+                    )));
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            None => None,
+        };
+        out.push(SourceParam {
+            param: param.to_string(),
+            tag_prefix,
+        });
+    }
+    Ok(out)
+}
+
+/// Parse the `reps` JSON column from a form model. `NULL` → empty vec.
+pub fn reps_from_model(m: &entity::form::Model) -> CoreResult<Vec<i32>> {
+    match &m.reps {
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| CoreError::Internal(anyhow!("failed to parse reps json: {e}"))),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Parse the `source_params` JSON column from a form model. `NULL` → empty vec.
+pub fn source_params_from_model(m: &entity::form::Model) -> CoreResult<Vec<SourceParam>> {
+    match &m.source_params {
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| CoreError::Internal(anyhow!("failed to parse source_params json: {e}"))),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// Reject empty bindings, duplicates, kinds the registry doesn't know about,
 /// or instance ids that don't resolve to a `backend_instance` row of the
 /// matching kind. Configurable kinds *must* carry an `instance_id`; static
@@ -337,6 +446,8 @@ pub async fn dto_from_model<C: ConnectionTrait>(
     let custom_fields = parse_custom_fields(&m.custom_fields)?;
     let backends = backends_from_model(&m)?;
     let tags = tags_from_model(&m)?;
+    let reps = reps_from_model(&m)?;
+    let source_params = source_params_from_model(&m)?;
     let metadata = metadata_service::list(conn, m.id).await?;
     Ok(FormDto {
         id: m.id,
@@ -347,6 +458,8 @@ pub async fn dto_from_model<C: ConnectionTrait>(
         custom_fields,
         backends,
         tags,
+        reps,
+        source_params,
         metadata,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -413,6 +526,8 @@ pub async fn create_form<C: ConnectionTrait>(
     validate_backends(conn, &backends, registry).await?;
 
     let tags = validate_tags(&input.tags)?;
+    let reps = validate_reps(conn, &input.reps).await?;
+    let source_params = validate_source_params(&input.source_params)?;
 
     let model = entity::form::ActiveModel {
         owner_id: ActiveValue::Set(owner_id),
@@ -422,6 +537,12 @@ pub async fn create_form<C: ConnectionTrait>(
         custom_fields: ActiveValue::Set(json_or_internal(&custom_fields)?),
         backends: ActiveValue::Set(Some(json_or_internal(&backends)?)),
         tags: ActiveValue::Set(if tags.is_empty() { None } else { Some(json_or_internal(&tags)?) }),
+        reps: ActiveValue::Set(if reps.is_empty() { None } else { Some(json_or_internal(&reps)?) }),
+        source_params: ActiveValue::Set(if source_params.is_empty() {
+            None
+        } else {
+            Some(json_or_internal(&source_params)?)
+        }),
         ..Default::default()
     };
     let inserted = model.insert(conn).await?;
@@ -529,6 +650,21 @@ pub async fn update_form<C: ConnectionTrait>(
     if let Some(t) = input.tags {
         let tags = validate_tags(&t)?;
         active.tags = ActiveValue::Set(if tags.is_empty() { None } else { Some(json_or_internal(&tags)?) });
+    }
+
+    if let Some(r) = input.reps {
+        let reps = validate_reps(conn, &r).await?;
+        active.reps =
+            ActiveValue::Set(if reps.is_empty() { None } else { Some(json_or_internal(&reps)?) });
+    }
+
+    if let Some(sp) = input.source_params {
+        let source_params = validate_source_params(&sp)?;
+        active.source_params = ActiveValue::Set(if source_params.is_empty() {
+            None
+        } else {
+            Some(json_or_internal(&source_params)?)
+        });
     }
 
     let updated = active.update(conn).await?;
@@ -677,6 +813,26 @@ mod tests {
             position: 0,
         }];
         assert!(validate_custom_fields(&fields).is_err());
+    }
+
+    #[test]
+    fn source_params_reject_reserved_rep_and_dedup() {
+        let sp = |p: &str| SourceParam {
+            param: p.into(),
+            tag_prefix: None,
+        };
+        // Reserved name is rejected.
+        assert!(validate_source_params(&[sp("rep")]).is_err());
+        // Duplicates are rejected.
+        assert!(validate_source_params(&[sp("event"), sp(" event ")]).is_err());
+        // Trims, keeps prefix.
+        let out = validate_source_params(&[SourceParam {
+            param: " event ".into(),
+            tag_prefix: Some("  evt  ".into()),
+        }])
+        .unwrap();
+        assert_eq!(out[0].param, "event");
+        assert_eq!(out[0].tag_prefix.as_deref(), Some("evt"));
     }
 
     #[test]

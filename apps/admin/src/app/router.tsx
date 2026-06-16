@@ -10,6 +10,7 @@ import { RolesPage } from "../pages/admin/roles/RolesPage";
 import { FormsPage } from "../pages/admin/forms/FormsPage";
 import { FormPreviewPage } from "../pages/admin/forms/FormPreviewPage";
 import { BackendsPage } from "../pages/admin/backends/BackendsPage";
+import { RepsPage } from "../pages/admin/reps/RepsPage";
 import { SubmissionsPage } from "../pages/admin/submissions/SubmissionsPage";
 import { AuthSettingsPage } from "../pages/admin/settings/AuthSettingsPage";
 import { ProfilePage } from "../pages/admin/profile/ProfilePage";
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
           { path: "forms", element: <FormsPage /> },
           { path: "forms/:id/preview", element: <FormPreviewPage /> },
           { path: "backends", element: <BackendsPage /> },
+          { path: "reps", element: <RepsPage /> },
           { path: "submissions", element: <SubmissionsPage /> },
           { path: "users", element: <UsersPage /> },
           { path: "roles", element: <RolesPage /> },

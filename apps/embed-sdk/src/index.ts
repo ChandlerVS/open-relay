@@ -19,9 +19,28 @@ import { mount } from "./mount";
 // To make the form match the host site, set the public `--or-*` custom
 // properties (colors, `--or-font`, `--or-radius`) on the host page — they
 // inherit across the Shadow DOM boundary. See packages/form-renderer/styles.css.
+//
+// The host page's URL query string is forwarded with the submission as
+// `source` — this is how a sales-rep QR code (`?rep=jane&event=mjbiz-2026`)
+// attributes the lead. The server keeps only the params it recognises.
 
 function readTheme(raw: string | null): FormTheme {
   return raw === "dark" || raw === "auto" ? raw : "light";
+}
+
+// Snapshot the current page's query params. Captured once at load (the embed is
+// rendered immediately), so a later client-side route change won't affect an
+// already-mounted form.
+function readSource(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    new URLSearchParams(window.location.search).forEach((value, key) => {
+      out[key] = value;
+    });
+  } catch {
+    // Malformed query string — fall through with whatever we collected.
+  }
+  return out;
 }
 
 const script = document.currentScript as HTMLScriptElement | null;
@@ -36,7 +55,7 @@ if (script) {
     const host = document.createElement("div");
     host.setAttribute("data-open-relay-host", formId);
     script.parentNode?.insertBefore(host, script.nextSibling);
-    mount(host, { formId, apiUrl, theme });
+    mount(host, { formId, apiUrl, theme, source: readSource() });
   } else {
     console.warn("[open-relay] missing data-form-id on <script> tag");
   }
