@@ -61,6 +61,46 @@ pub struct GoHighLevelConfig {
     pub private_integration_token: String,
 }
 
+/// Normalizes a user-entered country into the ISO 3166-1 alpha-2 code that
+/// GoHighLevel's contact API expects (e.g. `US`). Submitters routinely type a
+/// full name (`United States`) or the alpha-3 code (`USA`), both of which GHL
+/// rejects, failing the whole delivery.
+///
+/// The lookup is case-insensitive and ignores surrounding whitespace. An
+/// already-valid two-letter code passes straight through (upper-cased), and any
+/// value we don't recognize is returned untouched so we never silently drop a
+/// legitimate-but-unmapped country — better to forward it and let GHL decide.
+fn normalize_country(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let key = trimmed.to_ascii_uppercase();
+    let mapped = match key.as_str() {
+        "US" | "USA" | "U.S." | "U.S.A." | "UNITED STATES"
+        | "UNITED STATES OF AMERICA" | "AMERICA" => "US",
+        "CA" | "CAN" | "CANADA" => "CA",
+        "GB" | "UK" | "GBR" | "UNITED KINGDOM" | "GREAT BRITAIN" | "ENGLAND"
+        | "SCOTLAND" | "WALES" | "NORTHERN IRELAND" => "GB",
+        "AU" | "AUS" | "AUSTRALIA" => "AU",
+        "NZ" | "NZL" | "NEW ZEALAND" => "NZ",
+        "IE" | "IRL" | "IRELAND" => "IE",
+        "DE" | "DEU" | "GER" | "GERMANY" => "DE",
+        "FR" | "FRA" | "FRANCE" => "FR",
+        "ES" | "ESP" | "SPAIN" => "ES",
+        "IT" | "ITA" | "ITALY" => "IT",
+        "NL" | "NLD" | "NETHERLANDS" => "NL",
+        "MX" | "MEX" | "MEXICO" => "MX",
+        "IN" | "IND" | "INDIA" => "IN",
+        _ => {
+            // Already a two-letter code we don't have a name for: pass the
+            // upper-cased form. Otherwise forward the original value verbatim.
+            if key.len() == 2 && key.chars().all(|c| c.is_ascii_alphabetic()) {
+                return key;
+            }
+            return trimmed.to_string();
+        }
+    };
+    mapped.to_string()
+}
+
 /// Maps the OpenRelay standard key to the GHL camelCase counterpart for
 /// top-level body fields. Returns `None` for keys that should be routed
 /// into `customFields` instead.
@@ -152,6 +192,14 @@ impl GoHighLevelBackend {
                     continue;
                 }
                 if let Some(top) = top_level_key(key) {
+                    // GHL wants ISO alpha-2 country codes; normalize free-text
+                    // values like "USA" or "United States" before sending.
+                    if key == "country" {
+                        if let Value::String(raw) = value {
+                            body.insert(top.to_string(), Value::String(normalize_country(raw)));
+                            continue;
+                        }
+                    }
                     body.insert(top.to_string(), value.clone());
                 } else {
                     custom_fields.push(json!({
@@ -281,7 +329,7 @@ mod tests {
             "city": "London",
             "state": "England",
             "postal_code": "SW1",
-            "country": "UK",
+            "country": "United Kingdom",
         })));
         let obj = body.as_object().unwrap();
         assert_eq!(obj["locationId"], "loc_abc");
@@ -296,8 +344,27 @@ mod tests {
         assert_eq!(obj["city"], "London");
         assert_eq!(obj["state"], "England");
         assert_eq!(obj["postalCode"], "SW1");
-        assert_eq!(obj["country"], "UK");
+        assert_eq!(obj["country"], "GB");
         assert!(obj.get("customFields").is_none());
+    }
+
+    #[test]
+    fn country_is_normalized_to_iso_alpha2() {
+        // The reported bug: submitters type "USA", which GHL rejects.
+        for raw in ["USA", "usa", "United States", "  United States of America  ", "US"] {
+            let body = backend().build_body(&payload(json!({ "country": raw })));
+            assert_eq!(
+                body.as_object().unwrap()["country"],
+                "US",
+                "country {raw:?} should normalize to US"
+            );
+        }
+    }
+
+    #[test]
+    fn country_unknown_value_passes_through() {
+        let body = backend().build_body(&payload(json!({ "country": "Atlantis" })));
+        assert_eq!(body.as_object().unwrap()["country"], "Atlantis");
     }
 
     #[test]
