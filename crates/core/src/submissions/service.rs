@@ -835,6 +835,8 @@ mod tests {
             placeholder: None,
             help_text: None,
             position: 0,
+            width: Default::default(),
+            default_value: None,
         }];
         let (_std, custom) = validate_and_split(
             payload(&[
@@ -895,6 +897,8 @@ mod tests {
             placeholder: None,
             help_text: None,
             position: 0,
+            width: Default::default(),
+            default_value: None,
         }];
         let (_std, custom) = validate_and_split(
             payload(&[

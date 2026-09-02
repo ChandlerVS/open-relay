@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import type { components } from "@open-relay/api-client";
@@ -20,15 +21,9 @@ import {
   useUpdateForm,
 } from "../../../lib/forms/useFormMutations";
 import type { FormDto } from "../../../lib/forms/useForms";
-import { STANDARD_FIELDS } from "../../../lib/forms/standardFields";
 import { useBackendsList } from "../../../lib/backends/useBackends";
 import { useRepsList } from "../../../lib/reps/useReps";
-import { StandardFieldsList } from "./StandardFieldsList";
-import { CustomFieldsEditor } from "./CustomFieldsEditor";
 
-type StandardFieldsConfig = components["schemas"]["StandardFieldsConfig"];
-type StandardFieldConfig = components["schemas"]["StandardFieldConfig"];
-type CustomField = components["schemas"]["CustomField"];
 type BackendBinding = components["schemas"]["BackendBinding"];
 type MetadataEntry = components["schemas"]["MetadataEntry"];
 type SourceParam = components["schemas"]["SourceParam"];
@@ -58,34 +53,15 @@ export interface FormFormDialogProps {
   onSaved?: (form: FormDto) => void;
 }
 
-function defaultStandardFields(): StandardFieldsConfig {
-  // Starter config: name + email enabled+required, message enabled, rest off.
-  // Mirrors the server-side default so a freshly-created form behaves the
-  // same whether the admin tweaks defaults or sends them through unchanged.
-  const off: StandardFieldConfig = { enabled: false, required: false, label: null };
-  const onReq: StandardFieldConfig = { enabled: true, required: true, label: null };
-  const on: StandardFieldConfig = { enabled: true, required: false, label: null };
-  const cfg = Object.fromEntries(
-    STANDARD_FIELDS.map(({ key }) => {
-      if (key === "first_name" || key === "last_name" || key === "email") return [key, onReq];
-      if (key === "message") return [key, on];
-      return [key, off];
-    }),
-  ) as StandardFieldsConfig;
-  return cfg;
-}
 
 interface ValidationResult {
   ok: boolean;
   message?: string;
-  /** Per-custom-field index → error message, surfaced inline on the row. */
-  customFieldErrors?: Record<number, string | undefined>;
 }
 
 function validate(input: {
   name: string;
   slug: string;
-  customFields: CustomField[];
   backends: BackendBinding[];
 }): ValidationResult {
   if (!input.name.trim()) return { ok: false, message: "Name is required." };
@@ -103,53 +79,6 @@ function validate(input: {
     if (input.slug.includes("--")) {
       return { ok: false, message: "Slug cannot contain consecutive hyphens." };
     }
-  }
-  const customErrors: Record<number, string | undefined> = {};
-  const seenKeys = new Set<string>();
-  const standardKeys = new Set(STANDARD_FIELDS.map((f) => f.key));
-  for (let i = 0; i < input.customFields.length; i++) {
-    const f = input.customFields[i]!;
-    if (!f.label.trim()) {
-      customErrors[i] = "Label is required.";
-      continue;
-    }
-    if (!f.key.trim()) {
-      customErrors[i] = "Key is required.";
-      continue;
-    }
-    // Keys are format-agnostic so they can match a backend's field key/id
-    // (e.g. GoHighLevel) exactly — only whitespace and length are constrained.
-    if (/\s/.test(f.key)) {
-      customErrors[i] = "Key cannot contain whitespace.";
-      continue;
-    }
-    if (f.key.length > 64) {
-      customErrors[i] = "Key must be 64 characters or fewer.";
-      continue;
-    }
-    if (standardKeys.has(f.key)) {
-      customErrors[i] = `'${f.key}' is a standard field key — pick another.`;
-      continue;
-    }
-    if (seenKeys.has(f.key)) {
-      customErrors[i] = `Duplicate key '${f.key}'.`;
-      continue;
-    }
-    seenKeys.add(f.key);
-    if (f.type === "select") {
-      const opts = (f.options ?? []).map((o) => o.trim()).filter(Boolean);
-      if (opts.length === 0) {
-        customErrors[i] = "Select fields need at least one option.";
-        continue;
-      }
-    }
-  }
-  if (Object.keys(customErrors).length > 0) {
-    return {
-      ok: false,
-      message: "Fix the highlighted custom fields.",
-      customFieldErrors: customErrors,
-    };
   }
   if (input.backends.length === 0) {
     return {
@@ -212,24 +141,18 @@ function CreateForm({
   const create = useCreateForm();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [standardFields, setStandardFields] = useState<StandardFieldsConfig>(
-    defaultStandardFields(),
-  );
-  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [backends, setBackends] = useState<BackendBinding[]>([openRelayBinding()]);
   const [tags, setTags] = useState<string[]>([]);
   const [reps, setReps] = useState<number[]>([]);
   const [sourceParams, setSourceParams] = useState<SourceParam[]>([]);
   const [emailDedup, setEmailDedup] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        const v = validate({ name, slug, customFields, backends });
-        setCustomErrors(v.customFieldErrors ?? {});
+        const v = validate({ name, slug, backends });
         if (!v.ok) {
           setFormError(v.message ?? "Form has errors.");
           return;
@@ -244,8 +167,6 @@ function CreateForm({
           {
             name: name.trim(),
             slug: slug.trim() ? slug.trim() : null,
-            standard_fields: standardFields,
-            custom_fields: customFields,
             backends,
             tags,
             reps,
@@ -268,16 +189,15 @@ function CreateForm({
         </Alert>
       )}
       <BasicsSection name={name} slug={slug} onNameChange={setName} onSlugChange={setSlug} />
-      <Section title="Standard fields" hint="Enable the ones your backend cares about.">
-        <StandardFieldsList value={standardFields} onChange={setStandardFields} />
-      </Section>
-      <Section title="Custom fields" hint="Anything not in the standard set.">
+      <Section
+        title="Fields"
+        hint="A new form starts with name and email. Arrange the rest in the field builder once it's created."
+      >
         {hasGoHighLevel(backends) && <GoHighLevelKeyNotice />}
-        <CustomFieldsEditor
-          value={customFields}
-          onChange={setCustomFields}
-          errors={customErrors}
-        />
+        <p className="text-sm text-muted-foreground">
+          After saving you'll be taken to the field builder, where you can add,
+          reorder and configure fields.
+        </p>
       </Section>
       <Section
         title="Delivery destinations"
@@ -335,10 +255,6 @@ function EditForm({
   const update = useUpdateForm();
   const [name, setName] = useState(form.name);
   const [slug, setSlug] = useState(form.slug);
-  const [standardFields, setStandardFields] = useState<StandardFieldsConfig>(
-    form.standard_fields,
-  );
-  const [customFields, setCustomFields] = useState<CustomField[]>(form.custom_fields);
   const [backends, setBackends] = useState<BackendBinding[]>(form.backends);
   const [tags, setTags] = useState<string[]>(form.tags);
   const [reps, setReps] = useState<number[]>(form.reps);
@@ -349,14 +265,12 @@ function EditForm({
     emailDedupFromMetadata(form.metadata),
   );
   const [formError, setFormError] = useState<string | null>(null);
-  const [customErrors, setCustomErrors] = useState<Record<number, string | undefined>>({});
 
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        const v = validate({ name, slug, customFields, backends });
-        setCustomErrors(v.customFieldErrors ?? {});
+        const v = validate({ name, slug, backends });
         if (!v.ok) {
           setFormError(v.message ?? "Form has errors.");
           return;
@@ -386,8 +300,6 @@ function EditForm({
             input: {
               name: name.trim() !== form.name ? name.trim() : undefined,
               slug: slug.trim() !== form.slug ? slug.trim() : undefined,
-              standard_fields: standardFields,
-              custom_fields: customFields,
               backends: backendsChanged ? backends : undefined,
               tags: tagsChanged ? tags : undefined,
               reps: repsChanged ? reps : undefined,
@@ -413,16 +325,11 @@ function EditForm({
         </Alert>
       )}
       <BasicsSection name={name} slug={slug} onNameChange={setName} onSlugChange={setSlug} />
-      <Section title="Standard fields" hint="Enable the ones your backend cares about.">
-        <StandardFieldsList value={standardFields} onChange={setStandardFields} />
-      </Section>
-      <Section title="Custom fields" hint="Anything not in the standard set.">
+      <Section title="Fields" hint="Add, reorder and configure fields in the builder.">
         {hasGoHighLevel(backends) && <GoHighLevelKeyNotice />}
-        <CustomFieldsEditor
-          value={customFields}
-          onChange={setCustomFields}
-          errors={customErrors}
-        />
+        <Button type="button" variant="outline" size="sm" asChild>
+          <Link to={`/forms/${form.id}/build`}>Open field builder</Link>
+        </Button>
       </Section>
       <Section
         title="Delivery destinations"

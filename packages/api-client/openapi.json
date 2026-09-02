@@ -2467,6 +2467,13 @@
               "label"
             ],
             "properties": {
+              "default_value": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Value prefilled by the renderer. Never applied server-side: a\nsubmission that omits the key is still treated as absent."
+              },
               "help_text": {
                 "type": [
                   "string",
@@ -2489,10 +2496,14 @@
               "position": {
                 "type": "integer",
                 "format": "int32",
-                "description": "Render order, ascending. Service code re-sorts on write so callers\ncan submit in any order."
+                "description": "Render order, ascending. Service code re-sorts on write so callers\ncan submit in any order.\n\nAdvisory once a form has a `layout`: order then comes from the layout\narray and this is renumbered to match on write. Retained because\npre-layout API clients still send it."
               },
               "required": {
                 "type": "boolean"
+              },
+              "width": {
+                "$ref": "#/components/schemas/FieldWidth",
+                "description": "Fraction of the row this field occupies. Layout-only — invisible to\npre-layout embed bundles, which always render full width."
               }
             }
           }
@@ -2818,6 +2829,14 @@
           }
         }
       },
+      "FieldWidth": {
+        "type": "string",
+        "description": "Fraction of a row a field occupies when rendered. Layout-only.",
+        "enum": [
+          "full",
+          "half"
+        ]
+      },
       "FormDto": {
         "type": "object",
         "description": "Outbound representation of a form. `owner_id` is exposed to admins; the\npublic-facing endpoint uses [`PublicFormDto`] instead.",
@@ -2828,6 +2847,7 @@
           "slug",
           "standard_fields",
           "custom_fields",
+          "layout",
           "backends",
           "tags",
           "reps",
@@ -2856,6 +2876,13 @@
           "id": {
             "type": "integer",
             "format": "int32"
+          },
+          "layout": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FormElement"
+            },
+            "description": "Ordered layout. Always populated — derived from the legacy pair for\nrows written before the `layout` column existed."
           },
           "metadata": {
             "type": "array",
@@ -2903,6 +2930,115 @@
             "format": "date-time"
           }
         }
+      },
+      "FormElement": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "element"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/StandardElement"
+              },
+              "element": {
+                "type": "string",
+                "enum": [
+                  "standard"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "element"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/CustomField"
+              },
+              "element": {
+                "type": "string",
+                "enum": [
+                  "custom"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "element"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/HeadingElement"
+              },
+              "element": {
+                "type": "string",
+                "enum": [
+                  "heading"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "element"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/ParagraphElement"
+              },
+              "element": {
+                "type": "string",
+                "enum": [
+                  "paragraph"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "element"
+            ],
+            "properties": {
+              "element": {
+                "type": "string",
+                "enum": [
+                  "divider"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "element"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/PageBreakElement"
+              },
+              "element": {
+                "type": "string",
+                "enum": [
+                  "page_break"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One entry in a form's ordered layout.\n\nAdjacently tagged: `element` names the kind and `config` carries the body\n(`{\"element\":\"divider\"}`, `{\"element\":\"custom\",\"config\":{…}}`). Adjacent\nrather than internal tagging for two reasons: it permits\n`deny_unknown_fields` throughout — internal tagging and `serde(flatten)`\neach forbid it, so a typo'd key would otherwise save silently as an empty\nvalue — and it keeps a `Custom` element's `config` byte-identical to the\n`CustomField` JSON already stored in the `custom_fields` column, making the\nderivation and projection in `service` pure moves."
       },
       "FormList": {
         "type": "object",
@@ -2974,6 +3110,25 @@
             "type": "string"
           }
         }
+      },
+      "HeadingElement": {
+        "type": "object",
+        "description": "A static heading between fields.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rendered as `h{level}`. Clamped to 1..=6 on write.",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "Health": {
         "type": "object",
@@ -3148,6 +3303,16 @@
             "items": {
               "$ref": "#/components/schemas/CustomField"
             }
+          },
+          "layout": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FormElement"
+            },
+            "description": "Ordered layout. When present it is the source of truth and\n`standard_fields`/`custom_fields` are derived from it; sending both is\nrejected. Absent means \"derive a layout from the legacy pair\"."
           },
           "metadata": {
             "type": [
@@ -3387,6 +3552,32 @@
           }
         }
       },
+      "PageBreakElement": {
+        "type": "object",
+        "description": "Splits the form into steps. Everything after this break, up to the next one,\nis one page; `title` names *that* page, not the one before it.",
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ParagraphElement": {
+        "type": "object",
+        "description": "A block of static explanatory copy between fields.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "Permission": {
         "type": "string",
         "enum": [
@@ -3444,6 +3635,7 @@
           "slug",
           "standard_fields",
           "custom_fields",
+          "layout",
           "backends"
         ],
         "properties": {
@@ -3457,11 +3649,19 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CustomField"
-            }
+            },
+            "description": "See `standard_fields`."
           },
           "id": {
             "type": "integer",
             "format": "int32"
+          },
+          "layout": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FormElement"
+            },
+            "description": "Ordered layout — what current renderers consume."
           },
           "name": {
             "type": "string"
@@ -3470,7 +3670,8 @@
             "type": "string"
           },
           "standard_fields": {
-            "$ref": "#/components/schemas/StandardFieldsConfig"
+            "$ref": "#/components/schemas/StandardFieldsConfig",
+            "description": "Retained for embed bundles cached on host pages before `layout`\nexisted. Always a faithful projection of `layout`."
           }
         }
       },
@@ -3726,6 +3927,61 @@
           }
         }
       },
+      "StandardElement": {
+        "type": "object",
+        "description": "A standard field placed in a form's layout.\n\nPresence in the layout *is* \"enabled\" — there is no `enabled` flag, because\nan element that isn't in the list isn't rendered. `label` keeps the existing\noverride semantics from [`StandardFieldConfig`]; the remaining fields have\nno home in the legacy `standard_fields` column and are dropped by the\nprojection (see `service::legacy_from_layout`).",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "default_value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "help_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input_override": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StandardInputVariant"
+              }
+            ]
+          },
+          "key": {
+            "type": "string",
+            "description": "One of [`STANDARD_FIELD_KEYS`]."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Overrides the renderer's default copy when `Some` and non-empty."
+          },
+          "placeholder": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "width": {
+            "$ref": "#/components/schemas/FieldWidth"
+          }
+        },
+        "additionalProperties": false
+      },
       "StandardFieldConfig": {
         "type": "object",
         "description": "Per-field toggle for a standard field. `label` overrides the renderer's\ndefault copy when `Some` and non-empty.",
@@ -3750,7 +4006,7 @@
       },
       "StandardFieldsConfig": {
         "type": "object",
-        "description": "Configuration for the fixed set of standard fields. Each field's key in\nthe JSON must be one of [`STANDARD_FIELD_KEYS`]; unknown keys are\nrejected at validation time.",
+        "description": "Configuration for the fixed set of standard fields. Each field's key\nin the JSON must be one of [`STANDARD_FIELD_KEYS`]; unknown keys are\nrejected at validation time.",
         "required": [
           "first_name",
           "last_name",
@@ -3811,6 +4067,14 @@
             "$ref": "#/components/schemas/StandardFieldConfig"
           }
         }
+      },
+      "StandardInputVariant": {
+        "type": "string",
+        "description": "Overrides how a standard field is rendered, where the catalogue default\nisn't the only sensible choice.\n\nCurrently only meaningful for `country`: `Select` renders the ISO 3166-1\nlist and submits an alpha-2 code, which\n`crate::backend::gohighlevel::normalize_country` already passes through\nunchanged. `None` (what legacy derivation produces) keeps the catalogue\ndefault, so forms built before this existed keep their free-text input.",
+        "enum": [
+          "text",
+          "select"
+        ]
       },
       "SubmissionAcceptedDto": {
         "type": "object",
@@ -4093,6 +4357,16 @@
             "items": {
               "$ref": "#/components/schemas/CustomField"
             }
+          },
+          "layout": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FormElement"
+            },
+            "description": "Replaces the whole layout. Mutually exclusive with\n`standard_fields`/`custom_fields` — a request carrying both is a 400,\nbecause the layout fully determines those two and silently picking a\nwinner would be undetectable by the caller."
           },
           "metadata": {
             "type": [

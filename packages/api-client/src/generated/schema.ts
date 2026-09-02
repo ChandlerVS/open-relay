@@ -725,6 +725,11 @@ export interface components {
             new_password: string;
         };
         CustomField: components["schemas"]["CustomFieldType"] & {
+            /**
+             * @description Value prefilled by the renderer. Never applied server-side: a
+             *     submission that omits the key is still treated as absent.
+             */
+            default_value?: string | null;
             help_text?: string | null;
             /**
              * @description Identifier, unique within the form. Used verbatim as the submission key
@@ -739,9 +744,18 @@ export interface components {
              * Format: int32
              * @description Render order, ascending. Service code re-sorts on write so callers
              *     can submit in any order.
+             *
+             *     Advisory once a form has a `layout`: order then comes from the layout
+             *     array and this is renumbered to match on write. Retained because
+             *     pre-layout API clients still send it.
              */
             position?: number;
             required?: boolean;
+            /**
+             * @description Fraction of the row this field occupies. Layout-only — invisible to
+             *     pre-layout embed bundles, which always render full width.
+             */
+            width?: components["schemas"]["FieldWidth"];
         };
         /**
          * @description HTML input types we expose for custom fields.
@@ -847,6 +861,11 @@ export interface components {
             provider_display_name: string;
         };
         /**
+         * @description Fraction of a row a field occupies when rendered. Layout-only.
+         * @enum {string}
+         */
+        FieldWidth: "full" | "half";
+        /**
          * @description Outbound representation of a form. `owner_id` is exposed to admins; the
          *     public-facing endpoint uses [`PublicFormDto`] instead.
          */
@@ -857,6 +876,11 @@ export interface components {
             custom_fields: components["schemas"]["CustomField"][];
             /** Format: int32 */
             id: number;
+            /**
+             * @description Ordered layout. Always populated — derived from the legacy pair for
+             *     rows written before the `layout` column existed.
+             */
+            layout: components["schemas"]["FormElement"][];
             /**
              * @description Per-form metadata toggles (e.g. email deduplication). See
              *     [`crate::metadata`].
@@ -874,6 +898,42 @@ export interface components {
             tags: string[];
             /** Format: date-time */
             updated_at: string;
+        };
+        /**
+         * @description One entry in a form's ordered layout.
+         *
+         *     Adjacently tagged: `element` names the kind and `config` carries the body
+         *     (`{"element":"divider"}`, `{"element":"custom","config":{…}}`). Adjacent
+         *     rather than internal tagging for two reasons: it permits
+         *     `deny_unknown_fields` throughout — internal tagging and `serde(flatten)`
+         *     each forbid it, so a typo'd key would otherwise save silently as an empty
+         *     value — and it keeps a `Custom` element's `config` byte-identical to the
+         *     `CustomField` JSON already stored in the `custom_fields` column, making the
+         *     derivation and projection in `service` pure moves.
+         */
+        FormElement: {
+            config: components["schemas"]["StandardElement"];
+            /** @enum {string} */
+            element: "standard";
+        } | {
+            config: components["schemas"]["CustomField"];
+            /** @enum {string} */
+            element: "custom";
+        } | {
+            config: components["schemas"]["HeadingElement"];
+            /** @enum {string} */
+            element: "heading";
+        } | {
+            config: components["schemas"]["ParagraphElement"];
+            /** @enum {string} */
+            element: "paragraph";
+        } | {
+            /** @enum {string} */
+            element: "divider";
+        } | {
+            config: components["schemas"]["PageBreakElement"];
+            /** @enum {string} */
+            element: "page_break";
         };
         FormList: {
             items: components["schemas"]["FormDto"][];
@@ -896,6 +956,15 @@ export interface components {
             /** Format: int32 */
             form_id: number;
             form_name: string;
+        };
+        /** @description A static heading between fields. */
+        HeadingElement: {
+            /**
+             * Format: int32
+             * @description Rendered as `h{level}`. Clamped to 1..=6 on write.
+             */
+            level?: number;
+            text: string;
         };
         Health: {
             status: string;
@@ -966,6 +1035,12 @@ export interface components {
              */
             backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][];
+            /**
+             * @description Ordered layout. When present it is the source of truth and
+             *     `standard_fields`/`custom_fields` are derived from it; sending both is
+             *     rejected. Absent means "derive a layout from the legacy pair".
+             */
+            layout?: components["schemas"]["FormElement"][] | null;
             /**
              * @description Per-form metadata toggles (e.g. email deduplication). Each entry is
              *     upserted on create; omit (or send an empty list) to leave metadata
@@ -1057,6 +1132,17 @@ export interface components {
             display_name?: string | null;
             enabled: boolean;
         };
+        /**
+         * @description Splits the form into steps. Everything after this break, up to the next one,
+         *     is one page; `title` names *that* page, not the one before it.
+         */
+        PageBreakElement: {
+            title?: string | null;
+        };
+        /** @description A block of static explanatory copy between fields. */
+        ParagraphElement: {
+            text: string;
+        };
         /** @enum {string} */
         Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "auth_config:write";
         PermissionInfo: {
@@ -1071,11 +1157,18 @@ export interface components {
          */
         PublicFormDto: {
             backends: components["schemas"]["BackendBinding"][];
+            /** @description See `standard_fields`. */
             custom_fields: components["schemas"]["CustomField"][];
             /** Format: int32 */
             id: number;
+            /** @description Ordered layout — what current renderers consume. */
+            layout: components["schemas"]["FormElement"][];
             name: string;
             slug: string;
+            /**
+             * @description Retained for embed bundles cached on host pages before `layout`
+             *     existed. Always a faithful projection of `layout`.
+             */
             standard_fields: components["schemas"]["StandardFieldsConfig"];
         };
         /**
@@ -1177,6 +1270,27 @@ export interface components {
             tag_prefix?: string | null;
         };
         /**
+         * @description A standard field placed in a form's layout.
+         *
+         *     Presence in the layout *is* "enabled" — there is no `enabled` flag, because
+         *     an element that isn't in the list isn't rendered. `label` keeps the existing
+         *     override semantics from [`StandardFieldConfig`]; the remaining fields have
+         *     no home in the legacy `standard_fields` column and are dropped by the
+         *     projection (see `service::legacy_from_layout`).
+         */
+        StandardElement: {
+            default_value?: string | null;
+            help_text?: string | null;
+            input_override?: null | components["schemas"]["StandardInputVariant"];
+            /** @description One of [`STANDARD_FIELD_KEYS`]. */
+            key: string;
+            /** @description Overrides the renderer's default copy when `Some` and non-empty. */
+            label?: string | null;
+            placeholder?: string | null;
+            required?: boolean;
+            width?: components["schemas"]["FieldWidth"];
+        };
+        /**
          * @description Per-field toggle for a standard field. `label` overrides the renderer's
          *     default copy when `Some` and non-empty.
          */
@@ -1186,8 +1300,8 @@ export interface components {
             required: boolean;
         };
         /**
-         * @description Configuration for the fixed set of standard fields. Each field's key in
-         *     the JSON must be one of [`STANDARD_FIELD_KEYS`]; unknown keys are
+         * @description Configuration for the fixed set of standard fields. Each field's key
+         *     in the JSON must be one of [`STANDARD_FIELD_KEYS`]; unknown keys are
          *     rejected at validation time.
          */
         StandardFieldsConfig: {
@@ -1206,6 +1320,18 @@ export interface components {
             state: components["schemas"]["StandardFieldConfig"];
             website: components["schemas"]["StandardFieldConfig"];
         };
+        /**
+         * @description Overrides how a standard field is rendered, where the catalogue default
+         *     isn't the only sensible choice.
+         *
+         *     Currently only meaningful for `country`: `Select` renders the ISO 3166-1
+         *     list and submits an alpha-2 code, which
+         *     `crate::backend::gohighlevel::normalize_country` already passes through
+         *     unchanged. `None` (what legacy derivation produces) keeps the catalogue
+         *     default, so forms built before this existed keep their free-text input.
+         * @enum {string}
+         */
+        StandardInputVariant: "text" | "select";
         /**
          * @description Returned to the embed SDK on a successful POST. Deliberately minimal —
          *     the public caller already has the data it sent us; echoing it back wastes
@@ -1310,6 +1436,13 @@ export interface components {
         UpdateForm: {
             backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][] | null;
+            /**
+             * @description Replaces the whole layout. Mutually exclusive with
+             *     `standard_fields`/`custom_fields` — a request carrying both is a 400,
+             *     because the layout fully determines those two and silently picking a
+             *     winner would be undetectable by the caller.
+             */
+            layout?: components["schemas"]["FormElement"][] | null;
             /**
              * @description `None` leaves metadata untouched. `Some` upserts each entry (so an
              *     explicit `email_deduplication = false` turns the toggle off).
