@@ -21,25 +21,79 @@ use utoipa::ToSchema;
 
 use crate::metadata::MetadataEntry;
 
-/// Standard field keys recognised by the form. These map to the typed
-/// columns on `submission` rows once that resource lands; for now they're
-/// just config the renderer consumes.
-pub const STANDARD_FIELD_KEYS: &[&str] = &[
-    "first_name",
-    "last_name",
-    "email",
-    "phone",
-    "company",
-    "job_title",
-    "website",
-    "message",
-    "address_line_1",
-    "address_line_2",
-    "city",
-    "state",
-    "postal_code",
-    "country",
-];
+/// Declares the fixed standard-field set exactly once.
+///
+/// The key list, the [`StandardFieldsConfig`] struct, and the key-to-field
+/// lookups all expand from this single invocation, so adding a standard field
+/// here is one edit rather than four kept-in-sync copies. (The `submission`
+/// entity columns and the two TS catalogues still have to be updated
+/// separately — see `crates/entity/src/submission.rs` and
+/// `packages/form-renderer/src/standardFields.ts`.)
+macro_rules! declare_standard_fields {
+    ($($key:ident),+ $(,)?) => {
+        /// Standard field keys recognised by the form, in canonical render
+        /// order. These map to the typed columns on `submission` rows.
+        pub const STANDARD_FIELD_KEYS: &[&str] = &[$(stringify!($key)),+];
+
+        /// Configuration for the fixed set of standard fields. Each field's key
+        /// in the JSON must be one of [`STANDARD_FIELD_KEYS`]; unknown keys are
+        /// rejected at validation time.
+        #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+        pub struct StandardFieldsConfig {
+            $(pub $key: StandardFieldConfig,)+
+        }
+
+        impl StandardFieldsConfig {
+            /// Look a field up by wire key. `None` for a key that is not a
+            /// standard field.
+            pub fn get(&self, key: &str) -> Option<&StandardFieldConfig> {
+                match key {
+                    $(stringify!($key) => Some(&self.$key),)+
+                    _ => None,
+                }
+            }
+
+            pub fn get_mut(&mut self, key: &str) -> Option<&mut StandardFieldConfig> {
+                match key {
+                    $(stringify!($key) => Some(&mut self.$key),)+
+                    _ => None,
+                }
+            }
+
+            /// Iterate `(key, config)` pairs in [`STANDARD_FIELD_KEYS`] order.
+            pub fn iter(&self) -> impl Iterator<Item = (&'static str, &StandardFieldConfig)> {
+                [$((stringify!($key), &self.$key)),+].into_iter()
+            }
+
+            pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut StandardFieldConfig> {
+                [$(&mut self.$key),+].into_iter()
+            }
+
+            /// Every field off. The starting point for the projection built by
+            /// `service::legacy_from_layout`.
+            pub fn all_disabled() -> Self {
+                Self { $($key: StandardFieldConfig::default_disabled(),)+ }
+            }
+        }
+    };
+}
+
+declare_standard_fields!(
+    first_name,
+    last_name,
+    email,
+    phone,
+    company,
+    job_title,
+    website,
+    message,
+    address_line_1,
+    address_line_2,
+    city,
+    state,
+    postal_code,
+    country,
+);
 
 /// Per-field toggle for a standard field. `label` overrides the renderer's
 /// default copy when `Some` and non-empty.
@@ -68,26 +122,6 @@ impl StandardFieldConfig {
     }
 }
 
-/// Configuration for the fixed set of standard fields. Each field's key in
-/// the JSON must be one of [`STANDARD_FIELD_KEYS`]; unknown keys are
-/// rejected at validation time.
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-pub struct StandardFieldsConfig {
-    pub first_name: StandardFieldConfig,
-    pub last_name: StandardFieldConfig,
-    pub email: StandardFieldConfig,
-    pub phone: StandardFieldConfig,
-    pub company: StandardFieldConfig,
-    pub job_title: StandardFieldConfig,
-    pub website: StandardFieldConfig,
-    pub message: StandardFieldConfig,
-    pub address_line_1: StandardFieldConfig,
-    pub address_line_2: StandardFieldConfig,
-    pub city: StandardFieldConfig,
-    pub state: StandardFieldConfig,
-    pub postal_code: StandardFieldConfig,
-    pub country: StandardFieldConfig,
-}
 
 impl Default for StandardFieldsConfig {
     /// Sensible starting point: name + email enabled+required, everything
@@ -122,7 +156,7 @@ impl Default for StandardFieldsConfig {
 /// `Select` carries its options on the variant so the renderer can't see a
 /// select-typed field without options. `Checkbox` is a single boolean
 /// checkbox (multi-select uses `Select`).
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum CustomFieldType {
     Text,
@@ -171,7 +205,7 @@ pub fn default_backends() -> Vec<BackendBinding> {
     vec![BackendBinding::open_relay()]
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 pub struct CustomField {
     /// Identifier, unique within the form. Used verbatim as the submission key
     /// and as the lookup key a backend maps onto its destination field, so it
@@ -189,8 +223,165 @@ pub struct CustomField {
     pub help_text: Option<String>,
     /// Render order, ascending. Service code re-sorts on write so callers
     /// can submit in any order.
+    ///
+    /// Advisory once a form has a `layout`: order then comes from the layout
+    /// array and this is renumbered to match on write. Retained because
+    /// pre-layout API clients still send it.
     #[serde(default)]
     pub position: i32,
+    /// Fraction of the row this field occupies. Layout-only — invisible to
+    /// pre-layout embed bundles, which always render full width.
+    #[serde(default, skip_serializing_if = "FieldWidth::is_default")]
+    pub width: FieldWidth,
+    /// Value prefilled by the renderer. Never applied server-side: a
+    /// submission that omits the key is still treated as absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+}
+
+/// Fraction of a row a field occupies when rendered. Layout-only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldWidth {
+    #[default]
+    Full,
+    Half,
+}
+
+impl FieldWidth {
+    /// Lets `Full` stay off the wire so layout JSON written today matches what
+    /// a caller that never heard of widths would send.
+    pub fn is_default(&self) -> bool {
+        matches!(self, FieldWidth::Full)
+    }
+}
+
+/// Overrides how a standard field is rendered, where the catalogue default
+/// isn't the only sensible choice.
+///
+/// Currently only meaningful for `country`: `Select` renders the ISO 3166-1
+/// list and submits an alpha-2 code, which
+/// `crate::backend::gohighlevel::normalize_country` already passes through
+/// unchanged. `None` (what legacy derivation produces) keeps the catalogue
+/// default, so forms built before this existed keep their free-text input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StandardInputVariant {
+    Text,
+    Select,
+}
+
+/// A standard field placed in a form's layout.
+///
+/// Presence in the layout *is* "enabled" — there is no `enabled` flag, because
+/// an element that isn't in the list isn't rendered. `label` keeps the existing
+/// override semantics from [`StandardFieldConfig`]; the remaining fields have
+/// no home in the legacy `standard_fields` column and are dropped by the
+/// projection (see `service::legacy_from_layout`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StandardElement {
+    /// One of [`STANDARD_FIELD_KEYS`].
+    pub key: String,
+    #[serde(default)]
+    pub required: bool,
+    /// Overrides the renderer's default copy when `Some` and non-empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help_text: Option<String>,
+    #[serde(default, skip_serializing_if = "FieldWidth::is_default")]
+    pub width: FieldWidth,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_override: Option<StandardInputVariant>,
+}
+
+impl StandardElement {
+    /// The element a legacy `(key, StandardFieldConfig)` pair derives to.
+    pub fn from_legacy(key: &str, cfg: &StandardFieldConfig) -> Self {
+        Self {
+            key: key.to_string(),
+            required: cfg.required,
+            label: cfg.label.clone(),
+            placeholder: None,
+            help_text: None,
+            width: FieldWidth::Full,
+            default_value: None,
+            input_override: None,
+        }
+    }
+}
+
+/// A static heading between fields.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeadingElement {
+    pub text: String,
+    /// Rendered as `h{level}`. Clamped to 1..=6 on write.
+    #[serde(default = "default_heading_level")]
+    pub level: u8,
+}
+
+fn default_heading_level() -> u8 {
+    2
+}
+
+/// A block of static explanatory copy between fields.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParagraphElement {
+    pub text: String,
+}
+
+/// Splits the form into steps. Everything after this break, up to the next one,
+/// is one page; `title` names *that* page, not the one before it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PageBreakElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// One entry in a form's ordered layout.
+///
+/// Adjacently tagged: `element` names the kind and `config` carries the body
+/// (`{"element":"divider"}`, `{"element":"custom","config":{…}}`). Adjacent
+/// rather than internal tagging for two reasons: it permits
+/// `deny_unknown_fields` throughout — internal tagging and `serde(flatten)`
+/// each forbid it, so a typo'd key would otherwise save silently as an empty
+/// value — and it keeps a `Custom` element's `config` byte-identical to the
+/// `CustomField` JSON already stored in the `custom_fields` column, making the
+/// derivation and projection in `service` pure moves.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(
+    tag = "element",
+    content = "config",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum FormElement {
+    Standard(StandardElement),
+    Custom(CustomField),
+    Heading(HeadingElement),
+    Paragraph(ParagraphElement),
+    Divider,
+    PageBreak(PageBreakElement),
+}
+
+impl FormElement {
+    /// The submission key this element contributes, if any. Decoration
+    /// elements contribute nothing.
+    pub fn field_key(&self) -> Option<&str> {
+        match self {
+            FormElement::Standard(s) => Some(&s.key),
+            FormElement::Custom(c) => Some(&c.key),
+            _ => None,
+        }
+    }
 }
 
 /// An extra URL query param captured from the QR landing page and emitted as a
@@ -217,6 +408,11 @@ pub struct NewForm {
     pub standard_fields: Option<StandardFieldsConfig>,
     #[serde(default)]
     pub custom_fields: Vec<CustomField>,
+    /// Ordered layout. When present it is the source of truth and
+    /// `standard_fields`/`custom_fields` are derived from it; sending both is
+    /// rejected. Absent means "derive a layout from the legacy pair".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Vec<FormElement>>,
     /// Backends to deliver submissions to. Defaults to `[open-relay]` if
     /// omitted. An empty vec is rejected — a form must have at least one
     /// backend or submissions go nowhere.
@@ -250,6 +446,9 @@ pub struct FormDto {
     pub slug: String,
     pub standard_fields: StandardFieldsConfig,
     pub custom_fields: Vec<CustomField>,
+    /// Ordered layout. Always populated — derived from the legacy pair for
+    /// rows written before the `layout` column existed.
+    pub layout: Vec<FormElement>,
     pub backends: Vec<BackendBinding>,
     pub tags: Vec<String>,
     /// Sales reps (by [`crate::reps`] id) this form offers.
@@ -275,6 +474,12 @@ pub struct UpdateForm {
     pub standard_fields: Option<StandardFieldsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_fields: Option<Vec<CustomField>>,
+    /// Replaces the whole layout. Mutually exclusive with
+    /// `standard_fields`/`custom_fields` — a request carrying both is a 400,
+    /// because the layout fully determines those two and silently picking a
+    /// winner would be undetectable by the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Vec<FormElement>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backends: Option<Vec<BackendBinding>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,8 +526,13 @@ pub struct PublicFormDto {
     pub id: i32,
     pub name: String,
     pub slug: String,
+    /// Retained for embed bundles cached on host pages before `layout`
+    /// existed. Always a faithful projection of `layout`.
     pub standard_fields: StandardFieldsConfig,
+    /// See `standard_fields`.
     pub custom_fields: Vec<CustomField>,
+    /// Ordered layout — what current renderers consume.
+    pub layout: Vec<FormElement>,
     pub backends: Vec<BackendBinding>,
 }
 

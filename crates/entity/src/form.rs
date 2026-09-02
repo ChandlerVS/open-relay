@@ -3,8 +3,8 @@
 //! See `crates/entity/src/lib.rs` for the entity-first pattern this follows.
 //! Schema is synced into MySQL at server boot; do not edit by hand from the DB.
 //!
-//! `standard_fields` and `custom_fields` are JSON columns whose typed shapes
-//! (`StandardFieldsConfig`, `Vec<CustomField>`) live in
+//! `standard_fields`, `custom_fields` and `layout` are JSON columns whose typed
+//! shapes (`StandardFieldsConfig`, `Vec<CustomField>`, `Vec<FormElement>`) live in
 //! `open_relay_core::forms` — keeping the typed wire/domain layer out of the
 //! entity crate so it stays a thin SeaORM surface.
 
@@ -28,6 +28,20 @@ pub struct Model {
     pub standard_fields: Json,
     #[sea_orm(column_type = "Json")]
     pub custom_fields: Json,
+    /// Ordered list of `FormElement` entries (see
+    /// `open_relay_core::forms`) — the unified field layout, and the source of
+    /// truth for a form's shape once written.
+    ///
+    /// `standard_fields` and `custom_fields` above are kept as a derived
+    /// projection of this, because embed bundles cached on third-party host
+    /// pages before this column existed read those two and can't be upgraded.
+    ///
+    /// `NULL` means "written before this column existed": the read path in
+    /// `open_relay_core::forms::service::layout_from_model` derives a layout
+    /// from the legacy pair in the exact order the old renderer used, so those
+    /// rows keep rendering identically with no backfill.
+    #[sea_orm(column_type = "Json", nullable)]
+    pub layout: Option<Json>,
     /// Ordered list of `BackendBinding` entries (see
     /// `open_relay_core::forms`). Each entry queues one delivery row per
     /// submission. Nullable for back-compat with rows created before this

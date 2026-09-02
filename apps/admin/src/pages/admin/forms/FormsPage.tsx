@@ -156,6 +156,7 @@ export function FormsPage() {
                       canWrite={canWrite}
                       canDelete={canDelete}
                       onPreview={() => navigate(`/forms/${f.id}/preview`)}
+                      onBuild={() => navigate(`/forms/${f.id}/build`)}
                       onEdit={() => setEditing(f)}
                       onDelete={() => {
                         setDeleteError(null);
@@ -256,6 +257,7 @@ interface RowMenuProps {
   canWrite: boolean;
   canDelete: boolean;
   onPreview: () => void;
+  onBuild: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }
@@ -264,6 +266,7 @@ function RowMenu({
   canWrite,
   canDelete,
   onPreview,
+  onBuild,
   onEdit,
   onDelete,
 }: RowMenuProps) {
@@ -276,6 +279,7 @@ function RowMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={onPreview}>Preview / Test</DropdownMenuItem>
+        {canWrite && <DropdownMenuItem onSelect={onBuild}>Edit fields</DropdownMenuItem>}
         {(canWrite || canDelete) && <DropdownMenuSeparator />}
         {canWrite && <DropdownMenuItem onSelect={onEdit}>Edit</DropdownMenuItem>}
         {canWrite && canDelete && <DropdownMenuSeparator />}

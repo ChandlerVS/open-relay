@@ -9,6 +9,7 @@ import { UsersPage } from "../pages/admin/users/UsersPage";
 import { RolesPage } from "../pages/admin/roles/RolesPage";
 import { FormsPage } from "../pages/admin/forms/FormsPage";
 import { FormPreviewPage } from "../pages/admin/forms/FormPreviewPage";
+import { FormBuilderPage } from "../pages/admin/forms/builder/FormBuilderPage";
 import { BackendsPage } from "../pages/admin/backends/BackendsPage";
 import { RepsPage } from "../pages/admin/reps/RepsPage";
 import { SubmissionsPage } from "../pages/admin/submissions/SubmissionsPage";
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
           { index: true, element: <DashboardPage /> },
           { path: "forms", element: <FormsPage /> },
           { path: "forms/:id/preview", element: <FormPreviewPage /> },
+          { path: "forms/:id/build", element: <FormBuilderPage /> },
           { path: "backends", element: <BackendsPage /> },
           { path: "reps", element: <RepsPage /> },
           { path: "submissions", element: <SubmissionsPage /> },
