@@ -42,6 +42,7 @@ fn new_form(slug: &str, action: PostSubmissionAction) -> NewForm {
         reps: vec![],
         source_params: vec![],
         post_submission_action: action,
+        progress_indicator: Default::default(),
         metadata: None,
     }
 }
@@ -112,7 +113,9 @@ async fn post_submission_action_survives_a_round_trip() {
     .await
     .expect("update to a redirect");
     assert_eq!(
-        service::public_dto_from_model(updated).unwrap().post_submission_action,
+        service::public_dto_from_model(updated)
+            .unwrap()
+            .post_submission_action,
         PostSubmissionAction::Redirect(RedirectAction {
             url: "https://example.com/thanks?a=1".into(),
         }),
@@ -178,7 +181,10 @@ async fn post_submission_action_survives_a_round_trip() {
         &db,
         &reg,
         created.id,
-        UpdateForm { name: Some("Renamed".into()), ..Default::default() },
+        UpdateForm {
+            name: Some("Renamed".into()),
+            ..Default::default()
+        },
     )
     .await
     .expect("rename");
@@ -190,5 +196,7 @@ async fn post_submission_action_survives_a_round_trip() {
         "an unrelated PATCH must not reset the action"
     );
 
-    service::delete_form(&db, created.id).await.expect("cleanup");
+    service::delete_form(&db, created.id)
+        .await
+        .expect("cleanup");
 }

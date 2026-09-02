@@ -155,6 +155,47 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test post_submission_action -- --ignored
 ```
 
+### Multi-step forms: `PageBreak` splits, `progress_indicator` decorates
+
+A form is multi-step when its `layout` contains `FormElement::PageBreak`. The list
+stays **flat** — breaks are separators, not nested pages — so stepping is purely
+client-side and `submissions::service` is entirely page-blind. `validate_layout`
+(`crates/core/src/forms/service.rs`) rejects only the degenerate positions: a leading
+break, a trailing one, two in a row, and more than `MAX_PAGES` (20) pages.
+
+`splitIntoPages` (`packages/form-renderer/src/layout.ts`) turns the layout into pages;
+`Form.tsx` mounts **only the current page's fields**, which is what makes per-step
+validation free — the browser's native constraint check can only see what's in the
+DOM, so Next gates on this step alone. Next and Submit are both `type="submit"` for
+that reason; Back is `type="button"` so it bypasses validation.
+
+`form.progress_indicator` is a nullable JSON column holding a `ProgressIndicator`
+(`{ style: bar | steps | none, show_percent }`). Two things about it are not obvious:
+
+1. **`NULL` decodes to the bar, which is *not* the pre-column behaviour.** Forms
+   written before the column drew a `Step N of M` line. This is a deliberate exception
+   to the stance taken by `post_submission_action` above — the bar is the intended
+   default presentation, and the property that actually matters (no backfill; a `NULL`
+   always decodes to something valid) still holds. Both write paths still collapse the
+   default back to `NULL`, so "never configured" and "reverted" remain the same row.
+2. **An embed bundle cached on a third-party page can never honour this setting.** It
+   predates the field, ignores it, and keeps drawing the step text forever. So `none`
+   hides the indicator on *current* bundles only — never treat it as a guarantee that
+   step counts aren't shown.
+
+The percentage counts *completed* steps (`pageIndex / pages.length`), so step 1 of 4
+reads 0% and the last step reads 75%; `aria-valuetext` carries the "Step N of M"
+wording the bare number loses. A page break's `title` renders above the fields under
+**every** style, including `none` — it names the step and has nowhere else to go.
+
+`crates/core/tests/progress_indicator.rs` guards the round trip, `#[ignore]`d like the
+others:
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test progress_indicator -- --ignored
+```
+
 ### Backend delivery is a registry of trait objects
 
 `open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.

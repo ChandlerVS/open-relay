@@ -35,4 +35,6 @@ export type {
   PostSubmissionAction,
   MessageAction,
   RedirectAction,
+  ProgressIndicator,
+  ProgressStyle,
 } from "./schema";

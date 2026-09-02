@@ -5,6 +5,7 @@ import type {
   CustomField,
   FormElement,
   PostSubmissionAction,
+  ProgressStyle,
   PublicFormDto,
   StandardElement,
 } from "./schema";
@@ -169,6 +170,12 @@ export function Form({
     [schema],
   );
 
+  // How this form shows progress. An absent value — an older server, or a
+  // form never configured — means the default bar, matching the server's
+  // `ProgressIndicator::default()`.
+  const progressStyle: ProgressStyle = schema?.progress_indicator?.style ?? "bar";
+  const showPercent = schema?.progress_indicator?.show_percent ?? true;
+
   // Redirect as an effect, not inside `submit`, so React has committed the
   // "submitted" state before the page goes away.
   useEffect(() => {
@@ -234,6 +241,10 @@ export function Form({
 
   const page = pages[safePageIndex];
   const isLastPage = safePageIndex >= pages.length - 1;
+  // Completed steps, not the current one: step 1 of 4 is 0%, step 4 is 75%.
+  // Derived from `safePageIndex` so a layout shrinking under the builder
+  // preview can't produce a fill wider than the track.
+  const percent = Math.round((safePageIndex / Math.max(pages.length, 1)) * 100);
 
   const submit = async () => {
     setStatus("submitting");
@@ -297,11 +308,18 @@ export function Form({
       }}
     >
       <h2 className="or-form__title">{schema.name}</h2>
-      {pages.length > 1 && (
+      {pages.length > 1 && (progressStyle === "steps" || page?.title) && (
         <div className="or-form__steps">
-          <span className="or-form__step-count">
-            Step {safePageIndex + 1} of {pages.length}
-          </span>
+          {/*
+            The count is style-dependent, but a page break's title names the
+            step and is the only place it can appear — so it renders under
+            every style, including "none".
+          */}
+          {progressStyle === "steps" && (
+            <span className="or-form__step-count">
+              Step {safePageIndex + 1} of {pages.length}
+            </span>
+          )}
           {page?.title && <span className="or-form__step-title">{page.title}</span>}
         </div>
       )}
@@ -373,6 +391,28 @@ export function Form({
           </button>
         )}
       </div>
+      {pages.length > 1 && progressStyle === "bar" && (
+        <div className="or-form__progress">
+          {/*
+            `role="progressbar"` sits on the track, not this wrapper, so the
+            fill and the label aren't swallowed as its children. The percentage
+            counts *completed* steps, so step 1 of 4 reads 0% — aria-valuetext
+            carries the step wording that the bare number loses.
+          */}
+          <div
+            className="or-form__progress-track"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+            aria-valuetext={`Step ${safePageIndex + 1} of ${pages.length}`}
+          >
+            {/* Dynamic, so it can't live in the stylesheet. */}
+            <div className="or-form__progress-fill" style={{ width: `${percent}%` }} />
+          </div>
+          {showPercent && <span className="or-form__progress-label">{percent}%</span>}
+        </div>
+      )}
     </form>
   );
 }

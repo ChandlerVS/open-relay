@@ -105,6 +105,19 @@ export type PostSubmissionAction =
   | { action: "message"; config: MessageAction }
   | { action: "redirect"; config: RedirectAction };
 
+/**
+ * How a multi-step form shows the visitor their progress. Mirrors
+ * `open_relay_core::forms::ProgressStyle`. Ignored by single-page forms.
+ */
+export type ProgressStyle = "bar" | "steps" | "none";
+
+/** Mirrors `open_relay_core::forms::ProgressIndicator`. */
+export interface ProgressIndicator {
+  style?: ProgressStyle;
+  /** Draw the numeric percentage next to the bar. Only read for `"bar"`. */
+  show_percent?: boolean;
+}
+
 export interface PublicFormDto {
   id: number;
   name: string;
@@ -127,4 +140,9 @@ export interface PublicFormDto {
    * its server still renders — an absent value means the default message.
    */
   post_submission_action?: PostSubmissionAction;
+  /**
+   * How to show progress through a multi-step form. Optional so a bundle newer
+   * than its server still renders — an absent value means the default bar.
+   */
+  progress_indicator?: ProgressIndicator;
 }

@@ -17,6 +17,8 @@
  *   --or-color-accent-hover      submit hover (defaults to a mix of accent)
  *   --or-color-accent-text       submit text
  *   --or-color-error             errors / required marks
+ *   --or-color-progress          multi-step progress fill (defaults to accent)
+ *   --or-color-progress-track    progress track behind the fill (defaults to border)
  *
  * A public override applies in both light and dark mode. For mode-specific
  * values, scope them with your own `@media (prefers-color-scheme: dark)` on
@@ -52,6 +54,8 @@
     color-mix(in srgb, var(--or-submit-bg) 88%, #000)
   );
   --or-submit-fg: var(--or-color-accent-text, #fff);
+  --or-progress-fill: var(--or-color-progress, var(--or-submit-bg));
+  --or-progress-track: var(--or-color-progress-track, var(--or-border));
 
   padding: 1rem;
   border: 1px solid var(--or-border);
@@ -76,6 +80,10 @@
     color-mix(in srgb, var(--or-submit-bg) 88%, #fff)
   );
   --or-submit-fg: var(--or-color-accent-text, #111827);
+  --or-progress-fill: var(--or-color-progress, var(--or-submit-bg));
+  /* A touch lighter than --or-border, which is near-invisible on the dark
+     surface once it's a solid 6px bar rather than a hairline. */
+  --or-progress-track: var(--or-color-progress-track, #4b5563);
 }
 
 .or-form--loading,
@@ -209,10 +217,51 @@
   font: inherit;
   font-weight: 500;
   cursor: pointer;
-  border-radius: 0.375rem;
+  border-radius: var(--or-radius, 0.5rem);
   border: 1px solid var(--or-border, #d4d4d8);
   background: transparent;
   color: inherit;
+}
+
+.or-form__back:hover {
+  background: color-mix(in srgb, var(--or-fg) 8%, transparent);
+}
+
+.or-form__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 1rem;
+}
+
+.or-form__progress-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--or-progress-track);
+  /* Clips the fill's own rounding at 0% and keeps it inside the track. */
+  overflow: hidden;
+}
+
+.or-form__progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--or-progress-fill);
+  /* The first step is 0% by design, so give the fill a sliver of width to
+     read as a bar-at-the-start rather than an empty box. */
+  min-width: 2px;
+  transition: width 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .or-form__progress-fill {
+    transition: none;
+  }
+}
+
+.or-form__progress-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--or-muted);
 }
 
 .or-field {

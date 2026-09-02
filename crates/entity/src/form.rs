@@ -72,6 +72,15 @@ pub struct Model {
     /// existed. There is deliberately no backfill.
     #[sea_orm(column_type = "Json", nullable)]
     pub post_submission_action: Option<Json>,
+    /// How a multi-step form shows the visitor their progress — a
+    /// `ProgressIndicator` (see `open_relay_core::forms`) as JSON. `NULL` means
+    /// the default: a progress bar with its percentage. Unlike the column
+    /// above, that is *not* what forms written before this column did (they
+    /// drew a `Step N of M` line) — the bar is the intended default
+    /// presentation. There is still no backfill; `NULL` simply decodes to the
+    /// default.
+    #[sea_orm(column_type = "Json", nullable)]
+    pub progress_indicator: Option<Json>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -13,9 +13,9 @@ use sea_orm::{
 
 use super::{
     BackendBinding, CustomField, CustomFieldType, FormDto, FormElement, FormList, FormSelectOption,
-    ListQuery, MessageAction, NewForm, PostSubmissionAction, PublicFormDto, RedirectAction,
-    STANDARD_FIELD_KEYS, SourceParam, StandardElement, StandardFieldsConfig, StandardInputVariant,
-    UpdateForm, default_backends,
+    ListQuery, MessageAction, NewForm, PostSubmissionAction, ProgressIndicator, PublicFormDto,
+    RedirectAction, STANDARD_FIELD_KEYS, SourceParam, StandardElement, StandardFieldsConfig,
+    StandardInputVariant, UpdateForm, default_backends,
 };
 use crate::backend::BackendRegistry;
 use crate::error::{CoreError, CoreResult};
@@ -428,6 +428,17 @@ pub fn post_submission_action_from_model(
             CoreError::Internal(anyhow!("failed to parse post_submission_action json: {e}"))
         }),
         None => Ok(PostSubmissionAction::default()),
+    }
+}
+
+/// Parse the `progress_indicator` JSON column from a form model. `NULL` → the
+/// default (a bar showing its percentage).
+pub fn progress_indicator_from_model(m: &entity::form::Model) -> CoreResult<ProgressIndicator> {
+    match &m.progress_indicator {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            CoreError::Internal(anyhow!("failed to parse progress_indicator json: {e}"))
+        }),
+        None => Ok(ProgressIndicator::default()),
     }
 }
 
@@ -930,6 +941,7 @@ pub async fn dto_from_model<C: ConnectionTrait>(
     let reps = reps_from_model(&m)?;
     let source_params = source_params_from_model(&m)?;
     let post_submission_action = post_submission_action_from_model(&m)?;
+    let progress_indicator = progress_indicator_from_model(&m)?;
     let metadata = metadata_service::list(conn, m.id).await?;
     Ok(FormDto {
         id: m.id,
@@ -944,6 +956,7 @@ pub async fn dto_from_model<C: ConnectionTrait>(
         reps,
         source_params,
         post_submission_action,
+        progress_indicator,
         metadata,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -956,6 +969,7 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
     let layout = layout_from_model(&m)?;
     let backends = backends_from_model(&m)?;
     let post_submission_action = post_submission_action_from_model(&m)?;
+    let progress_indicator = progress_indicator_from_model(&m)?;
     Ok(PublicFormDto {
         id: m.id,
         name: m.name,
@@ -965,6 +979,7 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
         layout,
         backends,
         post_submission_action,
+        progress_indicator,
     })
 }
 
@@ -1055,6 +1070,15 @@ pub async fn create_form<C: ConnectionTrait>(
                 None
             } else {
                 Some(json_or_internal(&post_submission_action)?)
+            },
+        ),
+        // Likewise the default indicator, so "never configured" and "configured
+        // back to the default" are the same row.
+        progress_indicator: ActiveValue::Set(
+            if input.progress_indicator == ProgressIndicator::default() {
+                None
+            } else {
+                Some(json_or_internal(&input.progress_indicator)?)
             },
         ),
         ..Default::default()
@@ -1211,6 +1235,14 @@ pub async fn update_form<C: ConnectionTrait>(
         );
     }
 
+    if let Some(p) = input.progress_indicator {
+        active.progress_indicator = ActiveValue::Set(if p == ProgressIndicator::default() {
+            None
+        } else {
+            Some(json_or_internal(&p)?)
+        });
+    }
+
     let updated = active.update(conn).await?;
 
     if let Some(entries) = input.metadata {
@@ -1261,6 +1293,7 @@ pub async fn backfill_default_backends<C: ConnectionTrait>(conn: &C) -> CoreResu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::forms::ProgressStyle;
 
     use crate::forms::{
         FieldWidth, HeadingElement, PageBreakElement, ParagraphElement, StandardFieldConfig,
@@ -1838,6 +1871,45 @@ mod tests {
             default_value: None,
         }];
         assert!(validate_custom_fields(&fields).is_err());
+    }
+
+    // ---- progress indicator ----------------------------------------------
+
+    #[test]
+    fn default_progress_indicator_is_a_bar_with_its_percentage() {
+        let d = ProgressIndicator::default();
+        assert_eq!(d.style, ProgressStyle::Bar);
+        assert!(d.show_percent);
+    }
+
+    #[test]
+    fn progress_indicator_round_trips_through_json() {
+        let p = ProgressIndicator {
+            style: ProgressStyle::Steps,
+            show_percent: false,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#"{"style":"steps","show_percent":false}"#);
+        assert_eq!(serde_json::from_str::<ProgressIndicator>(&json).unwrap(), p);
+    }
+
+    #[test]
+    fn partial_progress_indicator_fills_in_the_defaults() {
+        // `#[serde(default)]` on the struct, not just the fields, so a client
+        // that only sets the style doesn't have to know about show_percent.
+        let p: ProgressIndicator = serde_json::from_str(r#"{"style":"none"}"#).unwrap();
+        assert_eq!(p.style, ProgressStyle::None);
+        assert!(p.show_percent);
+        assert_eq!(
+            serde_json::from_str::<ProgressIndicator>("{}").unwrap(),
+            ProgressIndicator::default()
+        );
+    }
+
+    #[test]
+    fn unknown_progress_indicator_keys_and_styles_are_rejected() {
+        assert!(serde_json::from_str::<ProgressIndicator>(r#"{"styl":"bar"}"#).is_err());
+        assert!(serde_json::from_str::<ProgressIndicator>(r#"{"style":"pie"}"#).is_err());
     }
 
     // ---- post-submission action ------------------------------------------

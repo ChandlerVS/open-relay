@@ -2853,6 +2853,7 @@
           "reps",
           "source_params",
           "post_submission_action",
+          "progress_indicator",
           "metadata",
           "created_at",
           "updated_at"
@@ -2902,6 +2903,10 @@
           "post_submission_action": {
             "$ref": "#/components/schemas/PostSubmissionAction",
             "description": "What the visitor sees once the form is submitted."
+          },
+          "progress_indicator": {
+            "$ref": "#/components/schemas/ProgressIndicator",
+            "description": "How a multi-step form shows progress."
           },
           "reps": {
             "type": "array",
@@ -3361,6 +3366,10 @@
             "$ref": "#/components/schemas/PostSubmissionAction",
             "description": "What the visitor sees once the form is submitted. Defaults to the\nbuilt-in thank-you message."
           },
+          "progress_indicator": {
+            "$ref": "#/components/schemas/ProgressIndicator",
+            "description": "How a multi-step form shows progress. Defaults to the bar with its\npercentage. Ignored by single-page forms."
+          },
           "reps": {
             "type": "array",
             "items": {
@@ -3705,6 +3714,35 @@
         ],
         "description": "What the renderer does once a submission is accepted.\n\nAdjacently tagged like [`FormElement`] — `action` discriminates, `config`\ncarries the body — so `deny_unknown_fields` applies to every arm and a\ntypo'd key in a save is a 400 rather than a silently dropped setting.\n\nThere are two variants but three admin-facing choices: \"show a message\" and\n\"show a message with a submit-another button\" are the same terminal state\ndiffering only by [`MessageAction::allow_resubmit`], so the confirmation\ncopy lives in exactly one struct.\n\n[`Self::default`] is the message action with no overrides, which is what a\n`NULL` `form.post_submission_action` column decodes to — i.e. the behaviour\nevery form had before this existed."
       },
+      "ProgressIndicator": {
+        "type": "object",
+        "description": "Presentation of a multi-step form's progress, stored on `form`.\n\n[`Self::default`] is the bar with its percentage shown, which is what a\n`NULL` `form.progress_indicator` column decodes to. Note this is *not* the\npre-column behaviour — forms written before it rendered [`ProgressStyle::Steps`]\n— a deliberate exception to the no-backfill convention used by\n[`PostSubmissionAction`]: the bar is the intended default presentation, and\nnothing needs migrating for a `NULL` to keep decoding.",
+        "properties": {
+          "show_percent": {
+            "type": "boolean",
+            "description": "Draw the numeric percentage next to the bar. Only read for\n[`ProgressStyle::Bar`].",
+            "default": true
+          },
+          "style": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProgressStyle"
+              }
+            ],
+            "default": "bar"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProgressStyle": {
+        "type": "string",
+        "description": "How a multi-step form tells the visitor where they are. A form with no\n[`FormElement::PageBreak`] is single-page, so renderers ignore this entirely.",
+        "enum": [
+          "bar",
+          "steps",
+          "none"
+        ]
+      },
       "PublicFormDto": {
         "type": "object",
         "description": "Public, unauthenticated view of a form — the shape consumed by the embed\nSDK / form renderer. Strips `owner_id` and audit timestamps.",
@@ -3716,7 +3754,8 @@
           "custom_fields",
           "layout",
           "backends",
-          "post_submission_action"
+          "post_submission_action",
+          "progress_indicator"
         ],
         "properties": {
           "backends": {
@@ -3749,6 +3788,10 @@
           "post_submission_action": {
             "$ref": "#/components/schemas/PostSubmissionAction",
             "description": "What the renderer does once a submission is accepted. Always populated;\na bundle too old to know the field just ignores it."
+          },
+          "progress_indicator": {
+            "$ref": "#/components/schemas/ProgressIndicator",
+            "description": "How the renderer shows progress through a multi-step form. Always\npopulated; a bundle too old to know the field just ignores it and keeps\ndrawing the `Step N of M` line."
           },
           "slug": {
             "type": "string"
@@ -4490,6 +4533,17 @@
               {
                 "$ref": "#/components/schemas/PostSubmissionAction",
                 "description": "`None` leaves the post-submission action untouched. Sending the default\naction (a `message` with no overrides) resets the column to `NULL`."
+              }
+            ]
+          },
+          "progress_indicator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProgressIndicator",
+                "description": "`None` leaves the progress indicator untouched. Sending the default\n(a bar with its percentage) resets the column to `NULL`."
               }
             ]
           },

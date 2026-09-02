@@ -113,6 +113,10 @@ export function FormBuilderPage() {
       // rather than the built-in default. It's edited in the settings dialog,
       // not here, so it just rides along from the loaded form.
       post_submission_action: form.post_submission_action,
+      // Same deal, and note the renderer's field is optional for forward
+      // compatibility — omitting it here compiles fine and silently previews
+      // the default bar instead of the form's real setting.
+      progress_indicator: form.progress_indicator,
     };
   }, [form, items]);
 

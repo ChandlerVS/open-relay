@@ -32,6 +32,7 @@ type BackendBinding = components["schemas"]["BackendBinding"];
 type MetadataEntry = components["schemas"]["MetadataEntry"];
 type SourceParam = components["schemas"]["SourceParam"];
 type PostSubmissionAction = components["schemas"]["PostSubmissionAction"];
+type ProgressIndicator = components["schemas"]["ProgressIndicator"];
 
 const EMAIL_DEDUP_KEY = "email_deduplication";
 
@@ -153,6 +154,9 @@ function CreateForm({
   const [postSubmission, setPostSubmission] = useState<PostSubmissionAction>(
     defaultPostSubmissionAction,
   );
+  const [progress, setProgress] = useState<ProgressIndicator>(
+    defaultProgressIndicator,
+  );
   const [emailDedup, setEmailDedup] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -185,6 +189,7 @@ function CreateForm({
             reps,
             source_params: cleanSourceParams(sourceParams),
             post_submission_action: cleanPostSubmission(postSubmission),
+            progress_indicator: progress,
             metadata: [{ key: EMAIL_DEDUP_KEY, value: emailDedup }],
           },
           {
@@ -243,6 +248,12 @@ function CreateForm({
       >
         <PostSubmissionEditor value={postSubmission} onChange={setPostSubmission} />
       </Section>
+      <Section
+        title="Multi-step progress"
+        hint="Only applies to forms with page breaks. Add them in the builder."
+      >
+        <ProgressIndicatorEditor value={progress} onChange={setProgress} />
+      </Section>
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
       </Section>
@@ -283,6 +294,9 @@ function EditForm({
   );
   const [postSubmission, setPostSubmission] = useState<PostSubmissionAction>(
     form.post_submission_action,
+  );
+  const [progress, setProgress] = useState<ProgressIndicator>(
+    form.progress_indicator,
   );
   const [emailDedup, setEmailDedup] = useState(
     emailDedupFromMetadata(form.metadata),
@@ -325,6 +339,8 @@ function EditForm({
         const postSubmissionChanged =
           JSON.stringify(cleanedAction) !==
           JSON.stringify(cleanPostSubmission(form.post_submission_action));
+        const progressChanged =
+          JSON.stringify(progress) !== JSON.stringify(form.progress_indicator);
         const dedupChanged = emailDedup !== emailDedupFromMetadata(form.metadata);
         update.mutate(
           {
@@ -339,6 +355,7 @@ function EditForm({
               post_submission_action: postSubmissionChanged
                 ? cleanedAction
                 : undefined,
+              progress_indicator: progressChanged ? progress : undefined,
               metadata: dedupChanged
                 ? [{ key: EMAIL_DEDUP_KEY, value: emailDedup }]
                 : undefined,
@@ -395,6 +412,12 @@ function EditForm({
         hint="What the visitor sees once the form is submitted."
       >
         <PostSubmissionEditor value={postSubmission} onChange={setPostSubmission} />
+      </Section>
+      <Section
+        title="Multi-step progress"
+        hint="Only applies to forms with page breaks. Add them in the builder."
+      >
+        <ProgressIndicatorEditor value={progress} onChange={setProgress} />
       </Section>
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
@@ -734,6 +757,15 @@ function defaultPostSubmissionAction(): PostSubmissionAction {
   return { action: "message", config: { allow_resubmit: false } };
 }
 
+/**
+ * The indicator a brand-new form starts with. This matches the server's
+ * `ProgressIndicator::default()`, so `create_form` stores it as `NULL` rather
+ * than a JSON body — same collapse as the post-submission action.
+ */
+function defaultProgressIndicator(): ProgressIndicator {
+  return { style: "bar", show_percent: true };
+}
+
 function choiceOf(action: PostSubmissionAction): PostSubmissionChoice {
   if (action.action === "redirect") return "redirect";
   return action.config.allow_resubmit ? "message_resubmit" : "message";
@@ -991,6 +1023,67 @@ function SourceParamsEditor({
           <code className="rounded bg-muted px-1 py-0.5">prefix:value</code>;
           without one, the value verbatim.
         </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Three styles, plus a percentage toggle that only means anything under the
+ * bar. There is nothing to validate or trim here — the wire type is a closed
+ * enum and a boolean — so unlike the post-submission editor this has no
+ * `validate`/`clean` pair.
+ */
+function ProgressIndicatorEditor({
+  value,
+  onChange,
+}: {
+  value: ProgressIndicator;
+  onChange: (next: ProgressIndicator) => void;
+}) {
+  const style = value.style ?? "bar";
+
+  const option = (
+    key: NonNullable<ProgressIndicator["style"]>,
+    title: string,
+    description: string,
+  ) => (
+    <label className={RADIO_ROW}>
+      <input
+        type="radio"
+        name="progress-indicator"
+        className="mt-1 h-4 w-4"
+        checked={style === key}
+        onChange={() => onChange({ ...value, style: key })}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="text-xs text-muted-foreground">{description}</div>
+      </div>
+    </label>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="border border-border rounded-md">
+        {option(
+          "bar",
+          "Progress bar",
+          "A bar under the Back/Next buttons. Fills as steps are completed, so the first step reads 0%.",
+        )}
+        {option("steps", "Step count", "A plain “Step 2 of 4” line above the fields.")}
+        {option("none", "Nothing", "No indicator. A page break's title still shows.")}
+      </div>
+      {style === "bar" && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-primary"
+            checked={value.show_percent ?? true}
+            onChange={(e) => onChange({ ...value, show_percent: e.target.checked })}
+          />
+          Show the percentage next to the bar
+        </label>
       )}
     </div>
   );

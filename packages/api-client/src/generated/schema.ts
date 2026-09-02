@@ -891,6 +891,8 @@ export interface components {
             owner_id: number;
             /** @description What the visitor sees once the form is submitted. */
             post_submission_action: components["schemas"]["PostSubmissionAction"];
+            /** @description How a multi-step form shows progress. */
+            progress_indicator: components["schemas"]["ProgressIndicator"];
             /** @description Sales reps (by [`crate::reps`] id) this form offers. */
             reps: number[];
             slug: string;
@@ -1069,6 +1071,11 @@ export interface components {
              */
             post_submission_action?: components["schemas"]["PostSubmissionAction"];
             /**
+             * @description How a multi-step form shows progress. Defaults to the bar with its
+             *     percentage. Ignored by single-page forms.
+             */
+            progress_indicator?: components["schemas"]["ProgressIndicator"];
+            /**
              * @description Sales reps (by [`crate::reps`] id) this form offers. A submission's
              *     `?rep=<key>` is resolved against this set. Defaults to empty.
              */
@@ -1199,6 +1206,32 @@ export interface components {
             config: components["schemas"]["RedirectAction"];
         };
         /**
+         * @description Presentation of a multi-step form's progress, stored on `form`.
+         *
+         *     [`Self::default`] is the bar with its percentage shown, which is what a
+         *     `NULL` `form.progress_indicator` column decodes to. Note this is *not* the
+         *     pre-column behaviour — forms written before it rendered [`ProgressStyle::Steps`]
+         *     — a deliberate exception to the no-backfill convention used by
+         *     [`PostSubmissionAction`]: the bar is the intended default presentation, and
+         *     nothing needs migrating for a `NULL` to keep decoding.
+         */
+        ProgressIndicator: {
+            /**
+             * @description Draw the numeric percentage next to the bar. Only read for
+             *     [`ProgressStyle::Bar`].
+             * @default true
+             */
+            show_percent: boolean;
+            /** @default bar */
+            style: components["schemas"]["ProgressStyle"];
+        };
+        /**
+         * @description How a multi-step form tells the visitor where they are. A form with no
+         *     [`FormElement::PageBreak`] is single-page, so renderers ignore this entirely.
+         * @enum {string}
+         */
+        ProgressStyle: "bar" | "steps" | "none";
+        /**
          * @description Public, unauthenticated view of a form — the shape consumed by the embed
          *     SDK / form renderer. Strips `owner_id` and audit timestamps.
          */
@@ -1216,6 +1249,12 @@ export interface components {
              *     a bundle too old to know the field just ignores it.
              */
             post_submission_action: components["schemas"]["PostSubmissionAction"];
+            /**
+             * @description How the renderer shows progress through a multi-step form. Always
+             *     populated; a bundle too old to know the field just ignores it and keeps
+             *     drawing the `Step N of M` line.
+             */
+            progress_indicator: components["schemas"]["ProgressIndicator"];
             slug: string;
             /**
              * @description Retained for embed bundles cached on host pages before `layout`
@@ -1512,6 +1551,7 @@ export interface components {
             metadata?: components["schemas"]["MetadataEntry"][] | null;
             name?: string | null;
             post_submission_action?: null | components["schemas"]["PostSubmissionAction"];
+            progress_indicator?: null | components["schemas"]["ProgressIndicator"];
             /** @description `None` leaves reps untouched. `Some(vec![])` clears all associations. */
             reps?: number[] | null;
             slug?: string | null;

@@ -430,6 +430,47 @@ impl Default for PostSubmissionAction {
     }
 }
 
+/// How a multi-step form tells the visitor where they are. A form with no
+/// [`FormElement::PageBreak`] is single-page, so renderers ignore this entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressStyle {
+    /// A track-and-fill bar beneath the Back/Next row, with an optional
+    /// percentage. The default.
+    #[default]
+    Bar,
+    /// A plain `Step N of M` line above the fields.
+    Steps,
+    /// No indicator. A page break's `title` still renders.
+    None,
+}
+
+/// Presentation of a multi-step form's progress, stored on `form`.
+///
+/// [`Self::default`] is the bar with its percentage shown, which is what a
+/// `NULL` `form.progress_indicator` column decodes to. Note this is *not* the
+/// pre-column behaviour — forms written before it rendered [`ProgressStyle::Steps`]
+/// — a deliberate exception to the no-backfill convention used by
+/// [`PostSubmissionAction`]: the bar is the intended default presentation, and
+/// nothing needs migrating for a `NULL` to keep decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProgressIndicator {
+    pub style: ProgressStyle,
+    /// Draw the numeric percentage next to the bar. Only read for
+    /// [`ProgressStyle::Bar`].
+    pub show_percent: bool,
+}
+
+impl Default for ProgressIndicator {
+    fn default() -> Self {
+        Self {
+            style: ProgressStyle::Bar,
+            show_percent: true,
+        }
+    }
+}
+
 /// Body of [`PostSubmissionAction::Message`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -495,6 +536,10 @@ pub struct NewForm {
     /// built-in thank-you message.
     #[serde(default)]
     pub post_submission_action: PostSubmissionAction,
+    /// How a multi-step form shows progress. Defaults to the bar with its
+    /// percentage. Ignored by single-page forms.
+    #[serde(default)]
+    pub progress_indicator: ProgressIndicator,
     /// Per-form metadata toggles (e.g. email deduplication). Each entry is
     /// upserted on create; omit (or send an empty list) to leave metadata
     /// unset. See [`crate::metadata`].
@@ -523,6 +568,8 @@ pub struct FormDto {
     pub source_params: Vec<SourceParam>,
     /// What the visitor sees once the form is submitted.
     pub post_submission_action: PostSubmissionAction,
+    /// How a multi-step form shows progress.
+    pub progress_indicator: ProgressIndicator,
     /// Per-form metadata toggles (e.g. email deduplication). See
     /// [`crate::metadata`].
     pub metadata: Vec<MetadataEntry>,
@@ -562,6 +609,10 @@ pub struct UpdateForm {
     /// action (a `message` with no overrides) resets the column to `NULL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_submission_action: Option<PostSubmissionAction>,
+    /// `None` leaves the progress indicator untouched. Sending the default
+    /// (a bar with its percentage) resets the column to `NULL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_indicator: Option<ProgressIndicator>,
     /// `None` leaves metadata untouched. `Some` upserts each entry (so an
     /// explicit `email_deduplication = false` turns the toggle off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -609,6 +660,10 @@ pub struct PublicFormDto {
     /// What the renderer does once a submission is accepted. Always populated;
     /// a bundle too old to know the field just ignores it.
     pub post_submission_action: PostSubmissionAction,
+    /// How the renderer shows progress through a multi-step form. Always
+    /// populated; a bundle too old to know the field just ignores it and keeps
+    /// drawing the `Step N of M` line.
+    pub progress_indicator: ProgressIndicator,
 }
 
 /// A ready-to-paste embed snippet for a form, returned to admins so they can

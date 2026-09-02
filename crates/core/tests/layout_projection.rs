@@ -71,8 +71,13 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
         standard("first_name", true),
         FormElement::Custom(custom("how_heard")),
         standard("email", true),
-        FormElement::Heading(HeadingElement { text: "More".into(), level: 2 }),
-        FormElement::PageBreak(PageBreakElement { title: Some("Step 2".into()) }),
+        FormElement::Heading(HeadingElement {
+            text: "More".into(),
+            level: 2,
+        }),
+        FormElement::PageBreak(PageBreakElement {
+            title: Some("Step 2".into()),
+        }),
         standard("country", false),
         FormElement::Custom(custom("notes")),
     ];
@@ -92,6 +97,7 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
             reps: vec![],
             source_params: vec![],
             post_submission_action: Default::default(),
+            progress_indicator: Default::default(),
             metadata: None,
         },
     )
@@ -106,7 +112,9 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
     assert!(sf.country.enabled && !sf.country.required);
     assert!(!sf.phone.enabled, "untouched keys stay disabled");
     assert_eq!(
-        cf.iter().map(|c| (c.key.as_str(), c.position)).collect::<Vec<_>>(),
+        cf.iter()
+            .map(|c| (c.key.as_str(), c.position))
+            .collect::<Vec<_>>(),
         vec![("how_heard", 0), ("notes", 1)],
         "custom positions are dense and follow layout order"
     );
@@ -141,7 +149,11 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
             _ => None,
         })
         .collect();
-    assert_eq!(stored_positions, vec![0, 1], "positions renumber from layout order");
+    assert_eq!(
+        stored_positions,
+        vec![0, 1],
+        "positions renumber from layout order"
+    );
 
     // 3. A legacy-only PATCH must not flatten the hand-ordered layout.
     let mut legacy_sf = public.standard_fields.clone();
@@ -162,7 +174,14 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
     let keys: Vec<&str> = after.iter().filter_map(|e| e.field_key()).collect();
     assert_eq!(
         keys,
-        vec!["first_name", "how_heard", "email", "phone", "country", "notes"],
+        vec![
+            "first_name",
+            "how_heard",
+            "email",
+            "phone",
+            "country",
+            "notes"
+        ],
         "interleaving survives, and the new standard lands at its catalogue position"
     );
     assert!(
@@ -190,6 +209,8 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
     if std::env::var("KEEP_FIXTURE").is_ok() {
         eprintln!("KEEP_FIXTURE: form id={} slug={}", created.id, slug);
     } else {
-        service::delete_form(&db, created.id).await.expect("cleanup");
+        service::delete_form(&db, created.id)
+            .await
+            .expect("cleanup");
     }
 }
