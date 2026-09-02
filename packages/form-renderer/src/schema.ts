@@ -78,6 +78,33 @@ export type FormElement =
   | { element: "divider" }
   | { element: "page_break"; config: PageBreakElement };
 
+/**
+ * Body of a `message` post-submission action. Every field is optional; an
+ * absent one falls back to the renderer's built-in default.
+ */
+export interface MessageAction {
+  /** Plain text. Newlines are preserved; nothing is parsed as markup. */
+  message?: string | null;
+  /** Show a button that resets the form in place for another submission. */
+  allow_resubmit?: boolean;
+  resubmit_label?: string | null;
+}
+
+/** Body of a `redirect` post-submission action. */
+export interface RedirectAction {
+  /** Absolute http(s) URL. Re-checked here before navigating — see `Form.tsx`. */
+  url: string;
+}
+
+/**
+ * What the renderer does once a submission is accepted. Adjacently tagged to
+ * match `open_relay_core::forms::PostSubmissionAction` — `action`
+ * discriminates, `config` carries the body.
+ */
+export type PostSubmissionAction =
+  | { action: "message"; config: MessageAction }
+  | { action: "redirect"; config: RedirectAction };
+
 export interface PublicFormDto {
   id: number;
   name: string;
@@ -95,4 +122,9 @@ export interface PublicFormDto {
    * `resolveLayout` derives one from the legacy pair when it's missing.
    */
   layout?: FormElement[];
+  /**
+   * What happens after a successful submission. Optional so a bundle newer than
+   * its server still renders — an absent value means the default message.
+   */
+  post_submission_action?: PostSubmissionAction;
 }

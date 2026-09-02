@@ -396,6 +396,68 @@ pub struct SourceParam {
     pub tag_prefix: Option<String>,
 }
 
+/// What the renderer does once a submission is accepted.
+///
+/// Adjacently tagged like [`FormElement`] — `action` discriminates, `config`
+/// carries the body — so `deny_unknown_fields` applies to every arm and a
+/// typo'd key in a save is a 400 rather than a silently dropped setting.
+///
+/// There are two variants but three admin-facing choices: "show a message" and
+/// "show a message with a submit-another button" are the same terminal state
+/// differing only by [`MessageAction::allow_resubmit`], so the confirmation
+/// copy lives in exactly one struct.
+///
+/// [`Self::default`] is the message action with no overrides, which is what a
+/// `NULL` `form.post_submission_action` column decodes to — i.e. the behaviour
+/// every form had before this existed.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(
+    tag = "action",
+    content = "config",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum PostSubmissionAction {
+    /// Replace the form with a confirmation message.
+    Message(MessageAction),
+    /// Navigate the host page to a URL.
+    Redirect(RedirectAction),
+}
+
+impl Default for PostSubmissionAction {
+    fn default() -> Self {
+        Self::Message(MessageAction::default())
+    }
+}
+
+/// Body of [`PostSubmissionAction::Message`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MessageAction {
+    /// Confirmation copy. Plain text — newlines are preserved by the renderer,
+    /// nothing is parsed as markup. `None` falls back to the renderer's
+    /// built-in default message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Offer a button that resets the form in place for another submission.
+    #[serde(default)]
+    pub allow_resubmit: bool,
+    /// Label for that button. `None` falls back to the renderer's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resubmit_label: Option<String>,
+}
+
+/// Body of [`PostSubmissionAction::Redirect`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RedirectAction {
+    /// Absolute `http(s)` URL. Scheme-checked on every write by
+    /// [`crate::forms::service::validate_post_submission_action`] — the embed
+    /// runs inline in third-party pages, so a `javascript:` value here would be
+    /// script execution on someone else's site.
+    pub url: String,
+}
+
 /// Input shape for creating a form. `slug` defaults to a slugified `name`
 /// if `None`/empty. `standard_fields` defaults to [`StandardFieldsConfig::default`]
 /// if absent. `custom_fields` defaults to empty.
@@ -429,6 +491,10 @@ pub struct NewForm {
     /// Extra URL params to capture as per-submission tags. Defaults to empty.
     #[serde(default)]
     pub source_params: Vec<SourceParam>,
+    /// What the visitor sees once the form is submitted. Defaults to the
+    /// built-in thank-you message.
+    #[serde(default)]
+    pub post_submission_action: PostSubmissionAction,
     /// Per-form metadata toggles (e.g. email deduplication). Each entry is
     /// upserted on create; omit (or send an empty list) to leave metadata
     /// unset. See [`crate::metadata`].
@@ -455,6 +521,8 @@ pub struct FormDto {
     pub reps: Vec<i32>,
     /// Extra URL params captured as per-submission tags.
     pub source_params: Vec<SourceParam>,
+    /// What the visitor sees once the form is submitted.
+    pub post_submission_action: PostSubmissionAction,
     /// Per-form metadata toggles (e.g. email deduplication). See
     /// [`crate::metadata`].
     pub metadata: Vec<MetadataEntry>,
@@ -490,6 +558,10 @@ pub struct UpdateForm {
     /// `None` leaves source params untouched. `Some(vec![])` clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_params: Option<Vec<SourceParam>>,
+    /// `None` leaves the post-submission action untouched. Sending the default
+    /// action (a `message` with no overrides) resets the column to `NULL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_submission_action: Option<PostSubmissionAction>,
     /// `None` leaves metadata untouched. `Some` upserts each entry (so an
     /// explicit `email_deduplication = false` turns the toggle off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -534,6 +606,9 @@ pub struct PublicFormDto {
     /// Ordered layout — what current renderers consume.
     pub layout: Vec<FormElement>,
     pub backends: Vec<BackendBinding>,
+    /// What the renderer does once a submission is accepted. Always populated;
+    /// a bundle too old to know the field just ignores it.
+    pub post_submission_action: PostSubmissionAction,
 }
 
 /// A ready-to-paste embed snippet for a form, returned to admins so they can

@@ -65,6 +65,13 @@ pub struct Model {
     /// — see `open_relay_core::forms`. `NULL` is equivalent to an empty list.
     #[sea_orm(column_type = "Json", nullable)]
     pub source_params: Option<Json>,
+    /// What the renderer does once a submission is accepted — a
+    /// `PostSubmissionAction` (see `open_relay_core::forms`), stored as its
+    /// adjacently-tagged JSON form. `NULL` means the default: the built-in
+    /// thank-you message, i.e. exactly what every form did before this column
+    /// existed. There is deliberately no backfill.
+    #[sea_orm(column_type = "Json", nullable)]
+    pub post_submission_action: Option<Json>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

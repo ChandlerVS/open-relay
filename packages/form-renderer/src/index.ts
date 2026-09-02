@@ -1,4 +1,10 @@
-export { Form, type FormProps, type FormTheme } from "./Form";
+export {
+  Form,
+  DEFAULT_THANKS,
+  DEFAULT_RESUBMIT_LABEL,
+  type FormProps,
+  type FormTheme,
+} from "./Form";
 export { ShadowForm } from "./ShadowForm";
 export {
   STANDARD_FIELDS,
@@ -26,4 +32,7 @@ export type {
   PageBreakElement,
   FieldWidth,
   StandardInputVariant,
+  PostSubmissionAction,
+  MessageAction,
+  RedirectAction,
 } from "./schema";

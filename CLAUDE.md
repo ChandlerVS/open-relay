@@ -118,6 +118,43 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test layout_projection -- --ignored
 ```
 
+### Post-submission action: the default is `NULL`, and the URL check is load-bearing
+
+`form.post_submission_action` is a nullable JSON column holding a
+`PostSubmissionAction` (`crates/core/src/forms/mod.rs`) — adjacently tagged like
+`FormElement`, so `deny_unknown_fields` applies to every arm. Two things about it are
+not obvious from the code:
+
+1. **`NULL` is the default, and the default writes back as `NULL`.** Both create and
+   update compare against `PostSubmissionAction::default()` and store `None` when they
+   match, so "never configured" and "configured, then reverted" are the same row. That
+   equivalence is what lets forms written before the column existed keep rendering the
+   original thank-you copy with no backfill — the same no-backfill stance as `layout`.
+2. **`validate_redirect_url` is a security boundary, not a tidy-up.** The embed SDK runs
+   inline in third-party host pages (shadow DOM isolates CSS, not navigation), and the
+   renderer hands this value straight to `window.location.assign`. Absolute `http(s)`
+   only: a `javascript:`/`data:` scheme, a scheme-relative `//host`, or embedded
+   whitespace (which browsers strip during URL parsing, letting `java\nscript:` re-form
+   into a live scheme) is a hard 400. `packages/form-renderer/src/Form.tsx` re-checks the
+   same rule before navigating, because the API response is untrusted input on a page we
+   don't own.
+
+There are two admin-facing choices for a message — with and without a "submit another"
+button — but one wire variant; they differ only by `MessageAction::allow_resubmit`.
+Message copy is plain text rendered with `white-space: pre-line`, never parsed as markup.
+
+Preview surfaces must never navigate: the builder preview passes `previewMode`, and
+`FormPreviewPage` (which submits for real) passes `suppressRedirect`. Both render a
+"would redirect to …" panel instead.
+
+`crates/core/tests/post_submission_action.rs` guards the round trip and is `#[ignore]`d
+like the layout test:
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test post_submission_action -- --ignored
+```
+
 ### Backend delivery is a registry of trait objects
 
 `open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.

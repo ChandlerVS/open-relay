@@ -2852,6 +2852,7 @@
           "tags",
           "reps",
           "source_params",
+          "post_submission_action",
           "metadata",
           "created_at",
           "updated_at"
@@ -2897,6 +2898,10 @@
           "owner_id": {
             "type": "integer",
             "format": "int32"
+          },
+          "post_submission_action": {
+            "$ref": "#/components/schemas/PostSubmissionAction",
+            "description": "What the visitor sees once the form is submitted."
           },
           "reps": {
             "type": "array",
@@ -3233,6 +3238,31 @@
           }
         }
       },
+      "MessageAction": {
+        "type": "object",
+        "description": "Body of [`PostSubmissionAction::Message`].",
+        "properties": {
+          "allow_resubmit": {
+            "type": "boolean",
+            "description": "Offer a button that resets the form in place for another submission."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Confirmation copy. Plain text — newlines are preserved by the renderer,\nnothing is parsed as markup. `None` falls back to the renderer's\nbuilt-in default message."
+          },
+          "resubmit_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Label for that button. `None` falls back to the renderer's default."
+          }
+        },
+        "additionalProperties": false
+      },
       "MetadataEntry": {
         "type": "object",
         "description": "A key/value pair for a form, used by list results.",
@@ -3326,6 +3356,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "post_submission_action": {
+            "$ref": "#/components/schemas/PostSubmissionAction",
+            "description": "What the visitor sees once the form is submitted. Defaults to the\nbuilt-in thank-you message."
           },
           "reps": {
             "type": "array",
@@ -3626,6 +3660,51 @@
           }
         }
       },
+      "PostSubmissionAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Replace the form with a confirmation message.",
+            "required": [
+              "config",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "message"
+                ]
+              },
+              "config": {
+                "$ref": "#/components/schemas/MessageAction",
+                "description": "Replace the form with a confirmation message."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Navigate the host page to a URL.",
+            "required": [
+              "config",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "redirect"
+                ]
+              },
+              "config": {
+                "$ref": "#/components/schemas/RedirectAction",
+                "description": "Navigate the host page to a URL."
+              }
+            }
+          }
+        ],
+        "description": "What the renderer does once a submission is accepted.\n\nAdjacently tagged like [`FormElement`] — `action` discriminates, `config`\ncarries the body — so `deny_unknown_fields` applies to every arm and a\ntypo'd key in a save is a 400 rather than a silently dropped setting.\n\nThere are two variants but three admin-facing choices: \"show a message\" and\n\"show a message with a submit-another button\" are the same terminal state\ndiffering only by [`MessageAction::allow_resubmit`], so the confirmation\ncopy lives in exactly one struct.\n\n[`Self::default`] is the message action with no overrides, which is what a\n`NULL` `form.post_submission_action` column decodes to — i.e. the behaviour\nevery form had before this existed."
+      },
       "PublicFormDto": {
         "type": "object",
         "description": "Public, unauthenticated view of a form — the shape consumed by the embed\nSDK / form renderer. Strips `owner_id` and audit timestamps.",
@@ -3636,7 +3715,8 @@
           "standard_fields",
           "custom_fields",
           "layout",
-          "backends"
+          "backends",
+          "post_submission_action"
         ],
         "properties": {
           "backends": {
@@ -3665,6 +3745,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "post_submission_action": {
+            "$ref": "#/components/schemas/PostSubmissionAction",
+            "description": "What the renderer does once a submission is accepted. Always populated;\na bundle too old to know the field just ignores it."
           },
           "slug": {
             "type": "string"
@@ -3715,6 +3799,20 @@
             ]
           }
         }
+      },
+      "RedirectAction": {
+        "type": "object",
+        "description": "Body of [`PostSubmissionAction::Redirect`].",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Absolute `http(s)` URL. Scheme-checked on every write by\n[`crate::forms::service::validate_post_submission_action`] — the embed\nruns inline in third-party pages, so a `javascript:` value here would be\nscript execution on someone else's site."
+          }
+        },
+        "additionalProperties": false
       },
       "RefreshRequest": {
         "type": "object",
@@ -4382,6 +4480,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "post_submission_action": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PostSubmissionAction",
+                "description": "`None` leaves the post-submission action untouched. Sending the default\naction (a `message` with no overrides) resets the column to `NULL`."
+              }
             ]
           },
           "reps": {

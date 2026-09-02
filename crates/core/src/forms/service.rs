@@ -13,8 +13,9 @@ use sea_orm::{
 
 use super::{
     BackendBinding, CustomField, CustomFieldType, FormDto, FormElement, FormList, FormSelectOption,
-    ListQuery, NewForm, PublicFormDto, STANDARD_FIELD_KEYS, SourceParam, StandardElement,
-    StandardFieldsConfig, StandardInputVariant, UpdateForm, default_backends,
+    ListQuery, MessageAction, NewForm, PostSubmissionAction, PublicFormDto, RedirectAction,
+    STANDARD_FIELD_KEYS, SourceParam, StandardElement, StandardFieldsConfig, StandardInputVariant,
+    UpdateForm, default_backends,
 };
 use crate::backend::BackendRegistry;
 use crate::error::{CoreError, CoreResult};
@@ -33,6 +34,8 @@ const MAX_TAG_LEN: usize = 255;
 const MAX_SOURCE_PARAMS: usize = 50;
 const MAX_PARAM_LEN: usize = 64;
 const MAX_TAG_PREFIX_LEN: usize = 64;
+const MAX_POST_SUBMISSION_MESSAGE_LEN: usize = 2000;
+const MAX_REDIRECT_URL_LEN: usize = 2048;
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
 
@@ -324,6 +327,107 @@ pub fn source_params_from_model(m: &entity::form::Model) -> CoreResult<Vec<Sourc
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| CoreError::Internal(anyhow!("failed to parse source_params json: {e}"))),
         None => Ok(Vec::new()),
+    }
+}
+
+/// Validate + normalize a post-submission action.
+///
+/// Message copy and the resubmit label are trimmed, and an empty one becomes
+/// `None` so a cleared textarea falls back to the renderer's built-in default
+/// rather than rendering a blank confirmation panel.
+pub fn validate_post_submission_action(
+    action: &PostSubmissionAction,
+) -> CoreResult<PostSubmissionAction> {
+    match action {
+        PostSubmissionAction::Message(m) => Ok(PostSubmissionAction::Message(MessageAction {
+            message: trimmed_within(
+                m.message.as_deref(),
+                MAX_POST_SUBMISSION_MESSAGE_LEN,
+                "thank-you message",
+            )?,
+            allow_resubmit: m.allow_resubmit,
+            resubmit_label: trimmed_within(
+                m.resubmit_label.as_deref(),
+                MAX_LABEL_LEN,
+                "submit-another button label",
+            )?,
+        })),
+        PostSubmissionAction::Redirect(r) => Ok(PostSubmissionAction::Redirect(RedirectAction {
+            url: validate_redirect_url(&r.url)?,
+        })),
+    }
+}
+
+/// Trim an optional string, mapping empty to `None` and rejecting oversize.
+fn trimmed_within(value: Option<&str>, max: usize, label: &str) -> CoreResult<Option<String>> {
+    let Some(raw) = value else { return Ok(None) };
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    if t.chars().count() > max {
+        return Err(CoreError::BadRequest(format!(
+            "{label} exceeds {max} characters"
+        )));
+    }
+    Ok(Some(t.to_string()))
+}
+
+/// Require an absolute `http(s)` URL.
+///
+/// This is the only thing between a form admin and script execution on someone
+/// else's site: the embed SDK runs inline in the host document, so the renderer
+/// hands this value straight to `window.location.assign`. A bad scheme is a
+/// hard 400, never a silent normalization.
+///
+/// Deliberately hand-rolled rather than pulling in a URL parser — we only need
+/// to *reject*, and the checks below are stricter than a parser's would be.
+fn validate_redirect_url(raw: &str) -> CoreResult<String> {
+    let url = raw.trim();
+    if url.is_empty() {
+        return Err(CoreError::BadRequest("redirect url is required".into()));
+    }
+    if url.len() > MAX_REDIRECT_URL_LEN {
+        return Err(CoreError::BadRequest(format!(
+            "redirect url exceeds {MAX_REDIRECT_URL_LEN} characters"
+        )));
+    }
+    // Whitespace and control characters are stripped or collapsed by browsers
+    // during URL parsing, so `java\nscript:...` would pass a naive scheme check
+    // and then re-form into a live scheme. Reject them outright, before it.
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(CoreError::BadRequest(
+            "redirect url must not contain whitespace or control characters".into(),
+        ));
+    }
+    let lower = url.to_ascii_lowercase();
+    // Also rejects scheme-relative "//evil.example", which would otherwise
+    // inherit the host page's scheme and navigate off-site.
+    let rest = match lower.strip_prefix("http://") {
+        Some(r) => r,
+        None => lower.strip_prefix("https://").ok_or_else(|| {
+            CoreError::BadRequest("redirect url must be an absolute http(s) URL".into())
+        })?,
+    };
+    // An empty authority ("https:///path") resolves against the current origin.
+    if rest.is_empty() || rest.starts_with(['/', '?', '#']) {
+        return Err(CoreError::BadRequest(
+            "redirect url must include a host".into(),
+        ));
+    }
+    Ok(url.to_string())
+}
+
+/// Parse the `post_submission_action` JSON column from a form model. `NULL` →
+/// the default (built-in thank-you message), i.e. pre-feature behaviour.
+pub fn post_submission_action_from_model(
+    m: &entity::form::Model,
+) -> CoreResult<PostSubmissionAction> {
+    match &m.post_submission_action {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            CoreError::Internal(anyhow!("failed to parse post_submission_action json: {e}"))
+        }),
+        None => Ok(PostSubmissionAction::default()),
     }
 }
 
@@ -825,6 +929,7 @@ pub async fn dto_from_model<C: ConnectionTrait>(
     let tags = tags_from_model(&m)?;
     let reps = reps_from_model(&m)?;
     let source_params = source_params_from_model(&m)?;
+    let post_submission_action = post_submission_action_from_model(&m)?;
     let metadata = metadata_service::list(conn, m.id).await?;
     Ok(FormDto {
         id: m.id,
@@ -838,6 +943,7 @@ pub async fn dto_from_model<C: ConnectionTrait>(
         tags,
         reps,
         source_params,
+        post_submission_action,
         metadata,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -849,6 +955,7 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
     let custom_fields = parse_custom_fields(&m.custom_fields)?;
     let layout = layout_from_model(&m)?;
     let backends = backends_from_model(&m)?;
+    let post_submission_action = post_submission_action_from_model(&m)?;
     Ok(PublicFormDto {
         id: m.id,
         name: m.name,
@@ -857,6 +964,7 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
         custom_fields,
         layout,
         backends,
+        post_submission_action,
     })
 }
 
@@ -923,6 +1031,7 @@ pub async fn create_form<C: ConnectionTrait>(
     let tags = validate_tags(&input.tags)?;
     let reps = validate_reps(conn, &input.reps).await?;
     let source_params = validate_source_params(&input.source_params)?;
+    let post_submission_action = validate_post_submission_action(&input.post_submission_action)?;
 
     let model = entity::form::ActiveModel {
         owner_id: ActiveValue::Set(owner_id),
@@ -939,6 +1048,15 @@ pub async fn create_form<C: ConnectionTrait>(
         } else {
             Some(json_or_internal(&source_params)?)
         }),
+        // The default action is stored as NULL so an untouched form stays
+        // indistinguishable from one written before the column existed.
+        post_submission_action: ActiveValue::Set(
+            if post_submission_action == PostSubmissionAction::default() {
+                None
+            } else {
+                Some(json_or_internal(&post_submission_action)?)
+            },
+        ),
         ..Default::default()
     };
     let inserted = model.insert(conn).await?;
@@ -1080,6 +1198,17 @@ pub async fn update_form<C: ConnectionTrait>(
         } else {
             Some(json_or_internal(&source_params)?)
         });
+    }
+
+    if let Some(a) = input.post_submission_action {
+        let action = validate_post_submission_action(&a)?;
+        active.post_submission_action = ActiveValue::Set(
+            if action == PostSubmissionAction::default() {
+                None
+            } else {
+                Some(json_or_internal(&action)?)
+            },
+        );
     }
 
     let updated = active.update(conn).await?;
@@ -1709,5 +1838,142 @@ mod tests {
             default_value: None,
         }];
         assert!(validate_custom_fields(&fields).is_err());
+    }
+
+    // ---- post-submission action ------------------------------------------
+
+    #[test]
+    fn post_submission_action_round_trips_through_json() {
+        let action = PostSubmissionAction::Message(MessageAction {
+            message: Some("Thanks!".into()),
+            allow_resubmit: true,
+            resubmit_label: Some("Add another".into()),
+        });
+        let json = serde_json::to_string(&action).unwrap();
+        assert_eq!(
+            json,
+            r#"{"action":"message","config":{"message":"Thanks!","allow_resubmit":true,"resubmit_label":"Add another"}}"#
+        );
+        let back: PostSubmissionAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, action);
+    }
+
+    #[test]
+    fn default_post_submission_action_is_an_empty_message() {
+        assert_eq!(
+            PostSubmissionAction::default(),
+            PostSubmissionAction::Message(MessageAction::default())
+        );
+        // Optional fields are skipped, so the default is the smallest possible
+        // body — this is the value create/update compare against to store NULL.
+        let json = serde_json::to_string(&PostSubmissionAction::default()).unwrap();
+        assert_eq!(json, r#"{"action":"message","config":{"allow_resubmit":false}}"#);
+    }
+
+    #[test]
+    fn unknown_post_submission_action_tag_is_rejected() {
+        let err =
+            serde_json::from_str::<PostSubmissionAction>(r#"{"action":"close_tab","config":{}}"#);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn typo_in_post_submission_config_is_rejected_not_silently_dropped() {
+        // Without deny_unknown_fields this would persist as a message action
+        // with no message, i.e. the admin's copy would vanish undetectably.
+        let err = serde_json::from_str::<PostSubmissionAction>(
+            r#"{"action":"message","config":{"mesage":"Thanks!"}}"#,
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn message_and_label_are_trimmed_and_blanks_become_none() {
+        let out = validate_post_submission_action(&PostSubmissionAction::Message(MessageAction {
+            message: Some("  Thanks!  ".into()),
+            allow_resubmit: true,
+            resubmit_label: Some("   ".into()),
+        }))
+        .unwrap();
+        let PostSubmissionAction::Message(m) = out else {
+            panic!("expected a message action")
+        };
+        assert_eq!(m.message.as_deref(), Some("Thanks!"));
+        assert!(m.allow_resubmit);
+        assert_eq!(m.resubmit_label, None);
+    }
+
+    #[test]
+    fn oversize_message_is_rejected() {
+        let long = "x".repeat(MAX_POST_SUBMISSION_MESSAGE_LEN + 1);
+        assert!(
+            validate_post_submission_action(&PostSubmissionAction::Message(MessageAction {
+                message: Some(long),
+                allow_resubmit: false,
+                resubmit_label: None,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn redirect_url_accepts_absolute_http_and_https() {
+        for url in [
+            "https://example.com/thanks",
+            "http://example.com",
+            "HTTPS://Example.com/Thanks?a=1#b",
+        ] {
+            let out = validate_redirect_url(url).unwrap_or_else(|e| panic!("{url}: {e:?}"));
+            // Case is preserved — only the scheme check lowercases.
+            assert_eq!(out, url);
+        }
+        assert_eq!(validate_redirect_url("  https://example.com  ").unwrap(), "https://example.com");
+    }
+
+    #[test]
+    fn redirect_url_rejects_anything_that_is_not_absolute_http() {
+        // Every one of these would be script execution or an unintended
+        // navigation on a third-party host page.
+        for url in [
+            "",
+            "   ",
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            "java\nscript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "//evil.example/thanks",
+            "/thanks",
+            "thanks",
+            "https:///thanks",
+            "https://",
+            "https://exa mple.com",
+        ] {
+            assert!(
+                validate_redirect_url(url).is_err(),
+                "expected {url:?} to be rejected"
+            );
+        }
+        assert!(validate_redirect_url(&format!("https://e.com/{}", "x".repeat(MAX_REDIRECT_URL_LEN))).is_err());
+    }
+
+    #[test]
+    fn redirect_action_is_validated_through_the_public_entry_point() {
+        assert!(
+            validate_post_submission_action(&PostSubmissionAction::Redirect(RedirectAction {
+                url: "javascript:alert(1)".into(),
+            }))
+            .is_err()
+        );
+        let out = validate_post_submission_action(&PostSubmissionAction::Redirect(RedirectAction {
+            url: " https://example.com/thanks ".into(),
+        }))
+        .unwrap();
+        assert_eq!(
+            out,
+            PostSubmissionAction::Redirect(RedirectAction {
+                url: "https://example.com/thanks".into(),
+            })
+        );
     }
 }

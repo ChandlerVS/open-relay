@@ -75,6 +75,9 @@ export function FormPreviewPage() {
               formId={String(formId)}
               apiUrl={api.baseUrl}
               theme={theme}
+              // Submissions here are real, but a redirect action would navigate
+              // the admin out of the SPA and lose the result panel below.
+              suppressRedirect
               onSubmitted={({ id }) => setResult({ kind: "submitted", id })}
               onError={(message) => setResult({ kind: "error", message })}
             />
