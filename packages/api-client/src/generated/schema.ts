@@ -889,6 +889,8 @@ export interface components {
             name: string;
             /** Format: int32 */
             owner_id: number;
+            /** @description What the visitor sees once the form is submitted. */
+            post_submission_action: components["schemas"]["PostSubmissionAction"];
             /** @description Sales reps (by [`crate::reps`] id) this form offers. */
             reps: number[];
             slug: string;
@@ -1002,6 +1004,19 @@ export interface components {
             roles: components["schemas"]["RoleSummary"][];
             user: components["schemas"]["UserDto"];
         };
+        /** @description Body of [`PostSubmissionAction::Message`]. */
+        MessageAction: {
+            /** @description Offer a button that resets the form in place for another submission. */
+            allow_resubmit?: boolean;
+            /**
+             * @description Confirmation copy. Plain text — newlines are preserved by the renderer,
+             *     nothing is parsed as markup. `None` falls back to the renderer's
+             *     built-in default message.
+             */
+            message?: string | null;
+            /** @description Label for that button. `None` falls back to the renderer's default. */
+            resubmit_label?: string | null;
+        };
         /** @description A key/value pair for a form, used by list results. */
         MetadataEntry: {
             key: components["schemas"]["MetadataKey"];
@@ -1048,6 +1063,11 @@ export interface components {
              */
             metadata?: components["schemas"]["MetadataEntry"][] | null;
             name: string;
+            /**
+             * @description What the visitor sees once the form is submitted. Defaults to the
+             *     built-in thank-you message.
+             */
+            post_submission_action?: components["schemas"]["PostSubmissionAction"];
             /**
              * @description Sales reps (by [`crate::reps`] id) this form offers. A submission's
              *     `?rep=<key>` is resolved against this set. Defaults to empty.
@@ -1152,6 +1172,33 @@ export interface components {
             resource: string;
         };
         /**
+         * @description What the renderer does once a submission is accepted.
+         *
+         *     Adjacently tagged like [`FormElement`] — `action` discriminates, `config`
+         *     carries the body — so `deny_unknown_fields` applies to every arm and a
+         *     typo'd key in a save is a 400 rather than a silently dropped setting.
+         *
+         *     There are two variants but three admin-facing choices: "show a message" and
+         *     "show a message with a submit-another button" are the same terminal state
+         *     differing only by [`MessageAction::allow_resubmit`], so the confirmation
+         *     copy lives in exactly one struct.
+         *
+         *     [`Self::default`] is the message action with no overrides, which is what a
+         *     `NULL` `form.post_submission_action` column decodes to — i.e. the behaviour
+         *     every form had before this existed.
+         */
+        PostSubmissionAction: {
+            /** @enum {string} */
+            action: "message";
+            /** @description Replace the form with a confirmation message. */
+            config: components["schemas"]["MessageAction"];
+        } | {
+            /** @enum {string} */
+            action: "redirect";
+            /** @description Navigate the host page to a URL. */
+            config: components["schemas"]["RedirectAction"];
+        };
+        /**
          * @description Public, unauthenticated view of a form — the shape consumed by the embed
          *     SDK / form renderer. Strips `owner_id` and audit timestamps.
          */
@@ -1164,6 +1211,11 @@ export interface components {
             /** @description Ordered layout — what current renderers consume. */
             layout: components["schemas"]["FormElement"][];
             name: string;
+            /**
+             * @description What the renderer does once a submission is accepted. Always populated;
+             *     a bundle too old to know the field just ignores it.
+             */
+            post_submission_action: components["schemas"]["PostSubmissionAction"];
             slug: string;
             /**
              * @description Retained for embed bundles cached on host pages before `layout`
@@ -1185,6 +1237,16 @@ export interface components {
             /** Format: int32 */
             id: number;
             name?: string | null;
+        };
+        /** @description Body of [`PostSubmissionAction::Redirect`]. */
+        RedirectAction: {
+            /**
+             * @description Absolute `http(s)` URL. Scheme-checked on every write by
+             *     [`crate::forms::service::validate_post_submission_action`] — the embed
+             *     runs inline in third-party pages, so a `javascript:` value here would be
+             *     script execution on someone else's site.
+             */
+            url: string;
         };
         RefreshRequest: {
             refresh_token: string;
@@ -1449,6 +1511,7 @@ export interface components {
              */
             metadata?: components["schemas"]["MetadataEntry"][] | null;
             name?: string | null;
+            post_submission_action?: null | components["schemas"]["PostSubmissionAction"];
             /** @description `None` leaves reps untouched. `Some(vec![])` clears all associations. */
             reps?: number[] | null;
             slug?: string | null;

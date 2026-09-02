@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { COUNTRIES, STANDARD_FIELDS } from "./standardFields";
 import { resolveLayout, splitIntoPages } from "./layout";
-import type { CustomField, FormElement, PublicFormDto, StandardElement } from "./schema";
+import type {
+  CustomField,
+  FormElement,
+  PostSubmissionAction,
+  PublicFormDto,
+  StandardElement,
+} from "./schema";
 
 export type FormTheme = "light" | "dark" | "auto";
 
@@ -20,6 +26,13 @@ export interface FormProps {
    * backend deliveries.
    */
   previewMode?: boolean;
+  /**
+   * Honor a `redirect` post-submission action by rendering a description of
+   * where it would go, instead of navigating. `previewMode` already implies
+   * this; the separate flag is for the admin preview page, which submits for
+   * real but must not navigate the admin out of its own SPA.
+   */
+  suppressRedirect?: boolean;
   /**
    * Color theme. "light" (the default) is a static light palette. Pass "dark"
    * to force dark, or "auto" to opt into the host's `prefers-color-scheme` and
@@ -75,6 +88,7 @@ export function Form({
   apiUrl,
   schema: schemaProp,
   previewMode = false,
+  suppressRedirect = false,
   theme = "light",
   source,
   onSubmitted,
@@ -125,19 +139,48 @@ export function Form({
     [schema],
   );
 
-  // Prefill from each field's default_value, without clobbering anything the
-  // visitor has already typed.
-  useEffect(() => {
-    if (!schema) return;
+  // Each field's default_value, keyed by field key. Shared by the initial
+  // prefill and by the "submit another" reset — a reset that just cleared
+  // `values` would silently drop every configured default, because the prefill
+  // effect below only runs when the schema changes.
+  const defaultValues = useMemo(() => {
     const defaults: Record<string, string> = {};
+    if (!schema) return defaults;
     for (const el of resolveLayout(schema)) {
       if (el.element !== "standard" && el.element !== "custom") continue;
       const dv = el.config.default_value;
       if (dv) defaults[el.config.key] = dv;
     }
-    if (Object.keys(defaults).length === 0) return;
-    setValues((v) => ({ ...defaults, ...v }));
+    return defaults;
   }, [schema]);
+
+  // Prefill without clobbering anything the visitor has already typed.
+  useEffect(() => {
+    if (Object.keys(defaultValues).length === 0) return;
+    setValues((v) => ({ ...defaultValues, ...v }));
+  }, [defaultValues]);
+
+  // What to do once a submission lands. A server too old to know the field, or
+  // a form that never configured one, gets the built-in message.
+  // Memoized because it is an effect dependency and the fallback is a fresh
+  // object literal on every render.
+  const action: PostSubmissionAction = useMemo(
+    () => schema?.post_submission_action ?? { action: "message", config: {} },
+    [schema],
+  );
+
+  // Redirect as an effect, not inside `submit`, so React has committed the
+  // "submitted" state before the page goes away.
+  useEffect(() => {
+    if (status !== "submitted") return;
+    if (previewMode || suppressRedirect) return;
+    if (action.action !== "redirect") return;
+    // The server validates this on write, but the response is still untrusted
+    // input to a third-party host page, so re-check the scheme before handing
+    // it to the browser.
+    if (!isHttpUrl(action.config.url)) return;
+    window.location.assign(action.config.url);
+  }, [status, action, previewMode, suppressRedirect]);
 
   // A layout can shrink between renders (the builder preview edits live), so
   // never leave the step cursor past the end.
@@ -172,7 +215,16 @@ export function Form({
         data-theme={resolvedTheme}
         className="or-form or-form--submitted"
       >
-        Thanks — we've received your submission.
+        <SubmittedPanel
+          action={action}
+          navigates={!previewMode && !suppressRedirect}
+          onSubmitAnother={() => {
+            setValues(defaultValues);
+            setPageIndex(0);
+            setError(null);
+            setStatus("ready");
+          }}
+        />
       </div>
     );
   }
@@ -326,6 +378,76 @@ export function Form({
 }
 
 /** Stable-ish React key: field elements key by their submission key, decoration by index. */
+/**
+ * Copy used when a form's post-submission action leaves the field blank.
+ * Exported because the admin builder shows these as input placeholders — the
+ * renderer is the source of truth for what a blank actually renders as, and
+ * two copies would drift.
+ */
+export const DEFAULT_THANKS = "Thanks — we've received your submission.";
+export const DEFAULT_RESUBMIT_LABEL = "Submit another response";
+
+/**
+ * Absolute http(s) only. Mirrors `service::validate_redirect_url` on the
+ * server; duplicated here because this value reaches `window.location` on a
+ * page we don't own.
+ */
+function isHttpUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (trimmed !== url || url === "") return false;
+  if (/[\s\u0000-\u001f\u007f]/.test(url)) return false;
+  const lower = url.toLowerCase();
+  const rest = lower.startsWith("https://")
+    ? lower.slice(8)
+    : lower.startsWith("http://")
+      ? lower.slice(7)
+      : null;
+  if (rest === null || rest === "") return false;
+  return !/^[/?#]/.test(rest);
+}
+
+/**
+ * The terminal state of a form. Message copy is rendered as a text node with
+ * `white-space: pre-line` — never as markup, because this draws inside
+ * third-party host pages.
+ */
+function SubmittedPanel({
+  action,
+  navigates,
+  onSubmitAnother,
+}: {
+  action: PostSubmissionAction;
+  navigates: boolean;
+  onSubmitAnother: () => void;
+}) {
+  if (action.action === "redirect") {
+    // `navigates` false means a preview: say where it would have gone rather
+    // than pulling the admin off their own page.
+    return navigates && isHttpUrl(action.config.url) ? (
+      <p className="or-form__thanks-text">Redirecting…</p>
+    ) : (
+      <div className="or-form__thanks">
+        <p className="or-form__thanks-text">Submitted.</p>
+        <p className="or-form__thanks-note">
+          Would redirect to {action.config.url}
+        </p>
+      </div>
+    );
+  }
+
+  const { message, allow_resubmit, resubmit_label } = action.config;
+  return (
+    <div className="or-form__thanks">
+      <p className="or-form__thanks-text">{message ?? DEFAULT_THANKS}</p>
+      {allow_resubmit && (
+        <button type="button" className="or-form__again" onClick={onSubmitAnother}>
+          {resubmit_label ?? DEFAULT_RESUBMIT_LABEL}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function elementKey(el: FormElement, index: number): string {
   if (el.element === "standard" || el.element === "custom") return el.config.key;
   return `${el.element}-${index}`;

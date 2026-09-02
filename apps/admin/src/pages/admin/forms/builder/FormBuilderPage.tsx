@@ -109,6 +109,10 @@ export function FormBuilderPage() {
       standard_fields: form.standard_fields as PublicFormDto["standard_fields"],
       custom_fields: [],
       layout: stripIds(items) as PublicFormDto["layout"],
+      // Carried through so the preview shows the configured confirmation
+      // rather than the built-in default. It's edited in the settings dialog,
+      // not here, so it just rides along from the loaded form.
+      post_submission_action: form.post_submission_action,
     };
   }, [form, items]);
 

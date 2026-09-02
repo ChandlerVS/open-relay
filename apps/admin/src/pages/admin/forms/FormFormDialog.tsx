@@ -3,6 +3,10 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import type { components } from "@open-relay/api-client";
 import {
+  DEFAULT_RESUBMIT_LABEL,
+  DEFAULT_THANKS,
+} from "@open-relay/form-renderer";
+import {
   Alert,
   AlertDescription,
   AlertTitle,
@@ -27,6 +31,7 @@ import { useRepsList } from "../../../lib/reps/useReps";
 type BackendBinding = components["schemas"]["BackendBinding"];
 type MetadataEntry = components["schemas"]["MetadataEntry"];
 type SourceParam = components["schemas"]["SourceParam"];
+type PostSubmissionAction = components["schemas"]["PostSubmissionAction"];
 
 const EMAIL_DEDUP_KEY = "email_deduplication";
 
@@ -145,6 +150,9 @@ function CreateForm({
   const [tags, setTags] = useState<string[]>([]);
   const [reps, setReps] = useState<number[]>([]);
   const [sourceParams, setSourceParams] = useState<SourceParam[]>([]);
+  const [postSubmission, setPostSubmission] = useState<PostSubmissionAction>(
+    defaultPostSubmissionAction,
+  );
   const [emailDedup, setEmailDedup] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -162,6 +170,11 @@ function CreateForm({
           setFormError(spErr);
           return;
         }
+        const psErr = validatePostSubmission(postSubmission);
+        if (psErr) {
+          setFormError(psErr);
+          return;
+        }
         setFormError(null);
         create.mutate(
           {
@@ -171,6 +184,7 @@ function CreateForm({
             tags,
             reps,
             source_params: cleanSourceParams(sourceParams),
+            post_submission_action: cleanPostSubmission(postSubmission),
             metadata: [{ key: EMAIL_DEDUP_KEY, value: emailDedup }],
           },
           {
@@ -223,6 +237,12 @@ function CreateForm({
       >
         <TagsEditor value={tags} onChange={setTags} />
       </Section>
+      <Section
+        title="After submission"
+        hint="What the visitor sees once the form is submitted."
+      >
+        <PostSubmissionEditor value={postSubmission} onChange={setPostSubmission} />
+      </Section>
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
       </Section>
@@ -261,6 +281,9 @@ function EditForm({
   const [sourceParams, setSourceParams] = useState<SourceParam[]>(
     form.source_params,
   );
+  const [postSubmission, setPostSubmission] = useState<PostSubmissionAction>(
+    form.post_submission_action,
+  );
   const [emailDedup, setEmailDedup] = useState(
     emailDedupFromMetadata(form.metadata),
   );
@@ -280,6 +303,11 @@ function EditForm({
           setFormError(spErr);
           return;
         }
+        const psErr = validatePostSubmission(postSubmission);
+        if (psErr) {
+          setFormError(psErr);
+          return;
+        }
         setFormError(null);
         const existingKeys = new Set(form.backends.map(bindingKey));
         const nextKeys = new Set(backends.map(bindingKey));
@@ -293,6 +321,10 @@ function EditForm({
         const cleanedParams = cleanSourceParams(sourceParams);
         const sourceParamsChanged =
           JSON.stringify(cleanedParams) !== JSON.stringify(form.source_params);
+        const cleanedAction = cleanPostSubmission(postSubmission);
+        const postSubmissionChanged =
+          JSON.stringify(cleanedAction) !==
+          JSON.stringify(cleanPostSubmission(form.post_submission_action));
         const dedupChanged = emailDedup !== emailDedupFromMetadata(form.metadata);
         update.mutate(
           {
@@ -304,6 +336,9 @@ function EditForm({
               tags: tagsChanged ? tags : undefined,
               reps: repsChanged ? reps : undefined,
               source_params: sourceParamsChanged ? cleanedParams : undefined,
+              post_submission_action: postSubmissionChanged
+                ? cleanedAction
+                : undefined,
               metadata: dedupChanged
                 ? [{ key: EMAIL_DEDUP_KEY, value: emailDedup }]
                 : undefined,
@@ -354,6 +389,12 @@ function EditForm({
         hint="Labels dispatched to backends with every submission. Press Enter or comma to add."
       >
         <TagsEditor value={tags} onChange={setTags} />
+      </Section>
+      <Section
+        title="After submission"
+        hint="What the visitor sees once the form is submitted."
+      >
+        <PostSubmissionEditor value={postSubmission} onChange={setPostSubmission} />
       </Section>
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
@@ -683,6 +724,49 @@ function RepsSelector({
 const RESERVED_PARAM = "rep";
 
 /** Trim rows, drop blank params, normalise an empty prefix to null. */
+/**
+ * The three admin-facing choices map onto two wire variants — "message" and
+ * "message with a submit-another button" differ only by `allow_resubmit`.
+ */
+type PostSubmissionChoice = "message" | "message_resubmit" | "redirect";
+
+function defaultPostSubmissionAction(): PostSubmissionAction {
+  return { action: "message", config: { allow_resubmit: false } };
+}
+
+function choiceOf(action: PostSubmissionAction): PostSubmissionChoice {
+  if (action.action === "redirect") return "redirect";
+  return action.config.allow_resubmit ? "message_resubmit" : "message";
+}
+
+/** Returns an error message, or null when the action is valid. */
+function validatePostSubmission(action: PostSubmissionAction): string | null {
+  if (action.action !== "redirect") return null;
+  const url = action.config.url.trim();
+  if (!url) return "Enter the URL to redirect to after submission.";
+  if (!/^https?:\/\/[^/?#\s]/i.test(url)) {
+    return "The redirect URL must be an absolute http(s) URL, e.g. https://example.com/thanks.";
+  }
+  return null;
+}
+
+/** Trim free text so an all-whitespace entry saves as "use the default". */
+function cleanPostSubmission(action: PostSubmissionAction): PostSubmissionAction {
+  if (action.action === "redirect") {
+    return { action: "redirect", config: { url: action.config.url.trim() } };
+  }
+  const message = action.config.message?.trim();
+  const label = action.config.resubmit_label?.trim();
+  return {
+    action: "message",
+    config: {
+      message: message ? message : null,
+      allow_resubmit: action.config.allow_resubmit ?? false,
+      resubmit_label: label ? label : null,
+    },
+  };
+}
+
 function cleanSourceParams(params: SourceParam[]): SourceParam[] {
   return params
     .map((p) => ({
@@ -706,6 +790,152 @@ function validateSourceParams(params: SourceParam[]): string | null {
     seen.add(param);
   }
   return null;
+}
+
+const RADIO_ROW =
+  "flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-accent/40 border-b border-border last:border-b-0";
+const TEXT_INPUT =
+  "w-full rounded border border-border bg-background px-2 py-1.5 text-sm";
+
+function PostSubmissionEditor({
+  value,
+  onChange,
+}: {
+  value: PostSubmissionAction;
+  onChange: (next: PostSubmissionAction) => void;
+}) {
+  const choice = choiceOf(value);
+  const message = value.action === "message" ? value.config : null;
+  const url = value.action === "redirect" ? value.config.url : "";
+
+  // Switching between the two message choices, or away to redirect and back,
+  // must not discard copy the admin already typed — so the message body is
+  // held here rather than only inside the wire value.
+  const [draft, setDraft] = useState(() => ({
+    message: message?.message ?? "",
+    resubmit_label: message?.resubmit_label ?? "",
+    url,
+  }));
+
+  const select = (next: PostSubmissionChoice) => {
+    if (next === "redirect") {
+      onChange({ action: "redirect", config: { url: draft.url } });
+      return;
+    }
+    onChange({
+      action: "message",
+      config: {
+        message: draft.message ? draft.message : null,
+        allow_resubmit: next === "message_resubmit",
+        resubmit_label: draft.resubmit_label ? draft.resubmit_label : null,
+      },
+    });
+  };
+
+  const patchMessage = (patch: { message?: string; resubmit_label?: string }) => {
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    onChange({
+      action: "message",
+      config: {
+        message: next.message ? next.message : null,
+        allow_resubmit: choice === "message_resubmit",
+        resubmit_label: next.resubmit_label ? next.resubmit_label : null,
+      },
+    });
+  };
+
+  const patchUrl = (next: string) => {
+    setDraft({ ...draft, url: next });
+    onChange({ action: "redirect", config: { url: next } });
+  };
+
+  const option = (
+    key: PostSubmissionChoice,
+    title: string,
+    description: string,
+  ) => (
+    <label className={RADIO_ROW}>
+      <input
+        type="radio"
+        name="post-submission-action"
+        className="mt-1 h-4 w-4"
+        checked={choice === key}
+        onChange={() => select(key)}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="text-xs text-muted-foreground">{description}</div>
+      </div>
+    </label>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="border border-border rounded-md">
+        {option(
+          "message",
+          "Show a thank-you message",
+          "The form is replaced by a confirmation message.",
+        )}
+        {option(
+          "message_resubmit",
+          'Thank-you message with "submit another"',
+          "Adds a button that clears the form for another response — useful at a kiosk or trade-show stand.",
+        )}
+        {option(
+          "redirect",
+          "Redirect to a URL",
+          "Sends the visitor to your own thank-you page, where your conversion tracking lives.",
+        )}
+      </div>
+
+      {choice !== "redirect" && (
+        <>
+          <FormField
+            id="post-submission-message"
+            label="Message"
+            hint="Plain text; line breaks are kept. Leave blank to use the default."
+          >
+            <textarea
+              rows={3}
+              className={TEXT_INPUT}
+              placeholder={DEFAULT_THANKS}
+              value={draft.message}
+              onChange={(e) => patchMessage({ message: e.target.value })}
+            />
+          </FormField>
+          {choice === "message_resubmit" && (
+            <FormField
+              id="post-submission-resubmit-label"
+              label="Button label"
+              hint={`Leave blank to use "${DEFAULT_RESUBMIT_LABEL}".`}
+            >
+              <Input
+                placeholder={DEFAULT_RESUBMIT_LABEL}
+                value={draft.resubmit_label}
+                onChange={(e) => patchMessage({ resubmit_label: e.target.value })}
+              />
+            </FormField>
+          )}
+        </>
+      )}
+
+      {choice === "redirect" && (
+        <FormField
+          id="post-submission-url"
+          label="Redirect URL"
+          hint="Must be an absolute http(s) URL. The visitor is sent here as-is — nothing is appended."
+        >
+          <Input
+            placeholder="https://example.com/thanks"
+            value={draft.url}
+            onChange={(e) => patchUrl(e.target.value)}
+          />
+        </FormField>
+      )}
+    </div>
+  );
 }
 
 function SourceParamsEditor({

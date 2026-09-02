@@ -91,6 +91,7 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
             tags: vec![],
             reps: vec![],
             source_params: vec![],
+            post_submission_action: Default::default(),
             metadata: None,
         },
     )
