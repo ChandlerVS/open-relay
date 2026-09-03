@@ -23,7 +23,7 @@ use super::{
 use crate::error::{CoreError, CoreResult};
 use crate::forms::{
     BackendBinding, CustomField, CustomFieldType, STANDARD_FIELD_KEYS, StandardFieldsConfig,
-    service as forms_service,
+    service as forms_service, visibility,
 };
 use crate::metadata::{MetadataKey, service as metadata_service};
 use crate::reps::service as reps_service;
@@ -56,10 +56,18 @@ type StandardValues = HashMap<&'static str, String>;
 /// Validate the payload against the form, returning the extracted standard
 /// values + the remaining (custom) data. Returns `BadRequest` on missing
 /// required fields, oversized strings, or type mismatches.
+///
+/// `hidden` names the fields the form's visibility rules say shouldn't have been
+/// answered (see [`crate::forms::visibility`]). Each is dropped from the payload
+/// and exempted from `required` — dropped rather than merely exempted, because a
+/// visitor who fills a block and then flips the controlling answer would
+/// otherwise deliver contradictory data, and an embed bundle cached before rules
+/// existed submits every field regardless.
 fn validate_and_split(
     payload: NewSubmissionPayload,
     standard_cfg: &StandardFieldsConfig,
     custom_fields: &[CustomField],
+    hidden: &HashSet<String>,
 ) -> CoreResult<(StandardValues, JsonValue)> {
     let mut input = payload.0;
     let mut standard: StandardValues = HashMap::new();
@@ -85,7 +93,7 @@ fn validate_and_split(
     for &key in STANDARD_FIELD_KEYS {
         let cfg = cfg_for(key);
         let raw = input.remove(key);
-        if !cfg.enabled {
+        if !cfg.enabled || hidden.contains(key) {
             continue;
         }
         let trimmed = match raw {
@@ -130,6 +138,9 @@ fn validate_and_split(
     let custom_keys: HashSet<&str> = custom_fields.iter().map(|f| f.key.as_str()).collect();
     for f in custom_fields {
         let raw = input.remove(&f.key);
+        if hidden.contains(&f.key) {
+            continue;
+        }
         let value = coerce_custom(f, raw)?;
         if value.is_null() && f.required {
             return Err(CoreError::BadRequest(format!(
@@ -225,7 +236,9 @@ fn coerce_custom(field: &CustomField, raw: Option<JsonValue>) -> CoreResult<Json
                 json_kind(&other)
             ))),
         },
-        CustomFieldType::Select { options } => match raw {
+        // A radio group is a select with different chrome: same option set, same
+        // membership check, so the two share an arm rather than drifting.
+        CustomFieldType::Select { options } | CustomFieldType::Radio { options } => match raw {
             JsonValue::String(s) => {
                 let trimmed = s.trim();
                 if trimmed.is_empty() {
@@ -354,8 +367,40 @@ pub async fn create_submission<C: ConnectionTrait>(
 
     // Read config straight off the JSON columns — no need to build a full
     // `FormDto` (which would also fetch metadata) on the hot submission path.
-    let standard_cfg = forms_service::parse_standard_fields(&form.standard_fields)?;
-    let custom_fields = forms_service::parse_custom_fields(&form.custom_fields)?;
+    //
+    // When there's a layout, parse *that* and project the pair out of it rather
+    // than parsing all three columns: the legacy columns are that projection by
+    // construction (every write path recomputes them via `legacy_from_layout`),
+    // so this is one JSON parse instead of two and the rules come along for
+    // free. A NULL layout means a row written before the column existed, which
+    // by definition carries no rules.
+    let (layout, standard_cfg, custom_fields) = match &form.layout {
+        Some(v) => {
+            let layout = forms_service::parse_layout(v)?;
+            let (sf, cf) = forms_service::legacy_from_layout(&layout);
+            (Some(layout), sf, cf)
+        }
+        None => (
+            None,
+            forms_service::parse_standard_fields(&form.standard_fields)?,
+            forms_service::parse_custom_fields(&form.custom_fields)?,
+        ),
+    };
+
+    // Evaluated against the payload *after* `_source` was pulled out, so a
+    // reserved key can never be mistaken for a controlling field.
+    //
+    // The renderer already prunes hidden keys before posting, and re-deriving
+    // the same verdict here is not redundant: a visible controller is never
+    // pruned, so every value this pass needs is present, and a hidden one is
+    // decided by this pass rather than by its key being absent — so both sides
+    // agree without either trusting the other. Cached bundles and non-renderer
+    // clients, which prune nothing, get the same treatment.
+    let hidden = match &layout {
+        Some(l) => visibility::hidden_field_keys(l, &payload.0),
+        None => HashSet::new(),
+    };
+
     let backends = forms_service::backends_from_model(form)?;
     if backends.is_empty() {
         return Err(CoreError::Internal(anyhow!(
@@ -366,9 +411,12 @@ pub async fn create_submission<C: ConnectionTrait>(
 
     let attribution = resolve_attribution(conn, form, &source).await?;
 
-    let (standard, custom_data) = validate_and_split(payload, &standard_cfg, &custom_fields)?;
-
+    let (standard, custom_data) =
+        validate_and_split(payload, &standard_cfg, &custom_fields, &hidden)?;
     // Email deduplication (opt-in per form): if the submitted email already
+    // NOTE: a conditionally-hidden `email` is pruned above and so is absent from
+    // `standard` — dedup simply doesn't apply to that submission, which is the
+    // right reading of "this form didn't ask for an email this time".
     // exists on an earlier submission to this form, we still accept and store
     // the submission (the caller sees success) but flag it and skip the
     // delivery fan-out so it's never dispatched to a backend.
@@ -787,6 +835,12 @@ mod tests {
         }
     }
 
+    /// No conditional fields in play — the default for tests that aren't about
+    /// visibility.
+    fn nothing_hidden() -> HashSet<String> {
+        HashSet::new()
+    }
+
     fn payload(pairs: &[(&str, JsonValue)]) -> NewSubmissionPayload {
         NewSubmissionPayload(
             pairs
@@ -802,6 +856,7 @@ mod tests {
             payload(&[("email", JsonValue::String("a@b.co".into()))]),
             &cfg(),
             &[],
+            &nothing_hidden(),
         );
         assert!(matches!(res, Err(CoreError::BadRequest(_))));
     }
@@ -816,6 +871,7 @@ mod tests {
             ]),
             &cfg(),
             &[],
+            &nothing_hidden(),
         )
         .unwrap();
         assert_eq!(std.get("first_name"), Some(&"Ada".to_string()));
@@ -837,6 +893,7 @@ mod tests {
             position: 0,
             width: Default::default(),
             default_value: None,
+            visible_when: None,
         }];
         let (_std, custom) = validate_and_split(
             payload(&[
@@ -846,6 +903,7 @@ mod tests {
             ]),
             &cfg(),
             &fields,
+            &nothing_hidden(),
         )
         .unwrap();
         assert_eq!(custom["color"], JsonValue::String("red".into()));
@@ -858,6 +916,7 @@ mod tests {
             ]),
             &cfg(),
             &fields,
+            &nothing_hidden(),
         );
         assert!(matches!(bad, Err(CoreError::BadRequest(_))));
     }
@@ -899,6 +958,7 @@ mod tests {
             position: 0,
             width: Default::default(),
             default_value: None,
+            visible_when: None,
         }];
         let (_std, custom) = validate_and_split(
             payload(&[
@@ -908,8 +968,140 @@ mod tests {
             ]),
             &cfg(),
             &fields,
+            &nothing_hidden(),
         )
         .unwrap();
         assert_eq!(custom["subscribe"], JsonValue::Bool(true));
     }
+
+    // ---- conditional visibility -----------------------------------------
+
+    #[test]
+    fn a_hidden_required_standard_field_is_not_demanded() {
+        // `city` is required on the form but its rule says it shouldn't have
+        // been shown. Without the exemption this is a 400 the visitor can do
+        // nothing about, because the renderer correctly never drew the field.
+        let mut cfg = cfg();
+        cfg.city = enabled_required();
+        let hidden = HashSet::from(["city".to_string()]);
+        let (std, _) = validate_and_split(
+            payload(&[
+                ("first_name", JsonValue::String("A".into())),
+                ("last_name", JsonValue::String("B".into())),
+                ("email", JsonValue::String("a@b.co".into())),
+            ]),
+            &cfg,
+            &[],
+            &hidden,
+        )
+        .expect("a hidden field must not be required");
+        assert!(!std.contains_key("city"));
+
+        // Still required when it is visible.
+        assert!(
+            validate_and_split(
+                payload(&[
+                    ("first_name", JsonValue::String("A".into())),
+                    ("last_name", JsonValue::String("B".into())),
+                    ("email", JsonValue::String("a@b.co".into())),
+                ]),
+                &cfg,
+                &[],
+                &nothing_hidden(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_hidden_fields_answer_is_dropped_not_stored() {
+        // An embed bundle cached before rules existed submits every field, and
+        // a visitor who fills a block then flips the controlling answer leaves
+        // a stale value behind. Neither may reach a backend.
+        let mut cfg = cfg();
+        cfg.city = enabled_optional();
+        let fields = vec![CustomField {
+            key: "billing_note".into(),
+            label: "Billing note".into(),
+            kind: CustomFieldType::Text,
+            required: true,
+            placeholder: None,
+            help_text: None,
+            position: 0,
+            width: crate::forms::FieldWidth::Full,
+            default_value: None,
+            visible_when: None,
+        }];
+        let hidden = HashSet::from(["city".to_string(), "billing_note".to_string()]);
+        let (std, custom) = validate_and_split(
+            payload(&[
+                ("first_name", JsonValue::String("A".into())),
+                ("last_name", JsonValue::String("B".into())),
+                ("email", JsonValue::String("a@b.co".into())),
+                ("city", JsonValue::String("Norwalk".into())),
+                ("billing_note", JsonValue::String("stale".into())),
+            ]),
+            &cfg,
+            &fields,
+            &hidden,
+        )
+        .expect("hidden fields are pruned, not rejected");
+        assert!(!std.contains_key("city"), "hidden standard value must not be stored");
+        assert_eq!(custom, JsonValue::Object(Default::default()), "hidden custom value must not be stored");
+    }
+
+    #[test]
+    fn a_hidden_field_skips_coercion_entirely() {
+        // A value that would otherwise 400 (not one of the options) is simply
+        // dropped when the rules say the field wasn't shown.
+        let fields = vec![CustomField {
+            key: "colour".into(),
+            label: "Colour".into(),
+            kind: CustomFieldType::Select { options: vec!["red".into()] },
+            required: false,
+            placeholder: None,
+            help_text: None,
+            position: 0,
+            width: crate::forms::FieldWidth::Full,
+            default_value: None,
+            visible_when: None,
+        }];
+        let call = |hidden: HashSet<String>| {
+            validate_and_split(
+                payload(&[
+                    ("first_name", JsonValue::String("A".into())),
+                    ("last_name", JsonValue::String("B".into())),
+                    ("email", JsonValue::String("a@b.co".into())),
+                    ("colour", JsonValue::String("chartreuse".into())),
+                ]),
+                &cfg(),
+                &fields,
+                &hidden,
+            )
+        };
+        assert!(call(nothing_hidden()).is_err());
+        assert!(call(HashSet::from(["colour".to_string()])).is_ok());
+    }
+
+    #[test]
+    fn coerces_a_radio_against_its_options() {
+        let field = CustomField {
+            key: "same".into(),
+            label: "Same address?".into(),
+            kind: CustomFieldType::Radio { options: vec!["Yes".into(), "No".into()] },
+            required: false,
+            placeholder: None,
+            help_text: None,
+            position: 0,
+            width: crate::forms::FieldWidth::Full,
+            default_value: None,
+            visible_when: None,
+        };
+        assert_eq!(
+            coerce_custom(&field, Some(JsonValue::String(" No ".into()))).unwrap(),
+            JsonValue::String("No".into())
+        );
+        assert!(coerce_custom(&field, Some(JsonValue::String("Maybe".into()))).is_err());
+    }
+
 }

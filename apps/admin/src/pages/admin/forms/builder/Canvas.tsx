@@ -16,9 +16,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Trash2 } from "lucide-react";
+import { GitBranch, GripVertical, Trash2 } from "lucide-react";
 import { Button, cn } from "@open-relay/ui";
-import { elementTitle, type BuilderElement } from "./model";
+import { elementRule, elementTitle, type BuilderElement } from "./model";
 import type { LayoutErrors } from "./validate";
 
 export interface CanvasProps {
@@ -101,6 +101,17 @@ function Row({
           <span>{KIND_LABEL[el.element]}</span>
           {(el.element === "standard" || el.element === "custom") && el.config.key && (
             <code className="truncate">{el.config.key}</code>
+          )}
+          {/* The rule itself lives in the Inspector; this is just so a
+              conditional element is findable in a long flat list. */}
+          {elementRule(el) && (
+            <span
+              className="inline-flex items-center gap-0.5 shrink-0"
+              title="Only shown when a condition is met"
+            >
+              <GitBranch className="h-3 w-3" />
+              if
+            </span>
           )}
         </div>
         {error && <p className="text-xs text-destructive mt-0.5">{error}</p>}

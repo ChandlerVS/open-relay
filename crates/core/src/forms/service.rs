@@ -3,7 +3,7 @@
 //! All functions take `&impl ConnectionTrait` so callers can pass either
 //! a `DatabaseConnection` or a `DatabaseTransaction`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::anyhow;
 use sea_orm::{
@@ -12,10 +12,10 @@ use sea_orm::{
 };
 
 use super::{
-    BackendBinding, CustomField, CustomFieldType, FormDto, FormElement, FormList, FormSelectOption,
-    ListQuery, MessageAction, NewForm, PostSubmissionAction, ProgressIndicator, PublicFormDto,
-    RedirectAction, STANDARD_FIELD_KEYS, SourceParam, StandardElement, StandardFieldsConfig,
-    StandardInputVariant, UpdateForm, default_backends,
+    BackendBinding, ConditionOp, CustomField, CustomFieldType, FormDto, FormElement, FormList,
+    FormSelectOption, ListQuery, MessageAction, NewForm, PostSubmissionAction, ProgressIndicator,
+    PublicFormDto, RedirectAction, STANDARD_FIELD_KEYS, SourceParam, StandardElement,
+    StandardFieldsConfig, StandardInputVariant, UpdateForm, VisibilityRule, default_backends,
 };
 use crate::backend::BackendRegistry;
 use crate::error::{CoreError, CoreResult};
@@ -30,6 +30,9 @@ const MAX_CUSTOM_FIELDS: usize = 100;
 const MAX_LAYOUT_ELEMENTS: usize = 300;
 const MAX_PARAGRAPH_LEN: usize = 2000;
 const MAX_PAGES: usize = 20;
+/// Conditions in one visibility rule. Generous for real forms, low enough that
+/// the per-element evaluation stays trivially cheap on the submission path.
+const MAX_CONDITIONS: usize = 10;
 const MAX_TAG_LEN: usize = 255;
 const MAX_SOURCE_PARAMS: usize = 50;
 const MAX_PARAM_LEN: usize = 64;
@@ -169,10 +172,10 @@ pub fn validate_custom_fields(fields: &[CustomField]) -> CoreResult<()> {
                 f.key
             )));
         }
-        if let CustomFieldType::Select { options } = &f.kind {
+        if let Some(options) = f.kind.options() {
             if options.is_empty() {
                 return Err(CoreError::BadRequest(format!(
-                    "custom field '{}' is a select but has no options",
+                    "custom field '{}' offers a choice but has no options",
                     f.key
                 )));
             }
@@ -648,7 +651,19 @@ pub fn merge_legacy_into_layout(
                 Some(cfs) => match cfs.iter().find(|n| n.key == c.key) {
                     Some(n) => {
                         seen_custom.insert(c.key.clone());
-                        out.push(FormElement::Custom(n.clone()));
+                        // Carry the visibility rule forward when the incoming
+                        // field doesn't state one, for the same reason the
+                        // standard branch above carries a placeholder: a client
+                        // that builds `custom_fields` from scratch has no
+                        // vocabulary for rules and must not silently delete one.
+                        // (`Option` can't tell "omitted" from "explicit null",
+                        // so carry-when-absent is the only available semantics —
+                        // the same trade the standard branch makes for `label`.)
+                        let mut n = n.clone();
+                        if n.visible_when.is_none() {
+                            n.visible_when = c.visible_when.clone();
+                        }
+                        out.push(FormElement::Custom(n));
                     }
                     None => continue,
                 },
@@ -745,7 +760,7 @@ fn normalize_layout(mut layout: Vec<FormElement>) -> Vec<FormElement> {
                 c.position = custom_idx;
                 custom_idx += 1;
                 c.label = c.label.trim().to_string();
-                if let CustomFieldType::Select { options } = &mut c.kind {
+                if let Some(options) = c.kind.options_mut() {
                     for o in options.iter_mut() {
                         *o = o.trim().to_string();
                     }
@@ -763,8 +778,116 @@ fn normalize_layout(mut layout: Vec<FormElement>) -> Vec<FormElement> {
             }
             FormElement::Divider => {}
         }
+        // Trim every rule the element carries, and collapse one left with no
+        // conditions back to "unconditional" — an empty rule would otherwise
+        // read as `all of nothing`, i.e. always visible, which is the same
+        // behaviour spelled in a way that survives a round trip badly.
+        if let Some(slot @ Some(_)) = el.visible_when_slot() {
+            if let Some(rule) = slot.as_mut() {
+                for c in rule.conditions.iter_mut() {
+                    c.field = c.field.trim().to_string();
+                    c.value = c.value.as_ref().map(|v| v.trim().to_string());
+                }
+                if rule.conditions.is_empty() {
+                    *slot = None;
+                }
+            }
+        }
     }
     layout
+}
+
+/// Drop rules a *legacy* write has stranded.
+///
+/// A caller that speaks only `standard_fields`/`custom_fields` has no vocabulary
+/// for conditions, yet its writes move elements around: disabling a standard
+/// field removes it, enabling one inserts it at its catalogue position, and a
+/// `position` reorder can move a controller behind its dependent. Any of those
+/// can leave a rule pointing at a key that is gone or no longer earlier — and
+/// rejecting the request would 400 a client for a rule it never sent and cannot
+/// see. So the legacy paths repair instead: the element stays, unconditional.
+///
+/// Explicit `layout` writes never go through this. There the caller *did* send
+/// the rule, so `validate_layout` tells them what's wrong.
+fn strip_dangling_rules(mut layout: Vec<FormElement>) -> Vec<FormElement> {
+    let mut seen: HashSet<String> = HashSet::new();
+    for el in layout.iter_mut() {
+        let key = el.field_key().map(str::to_string);
+        if let Some(slot) = el.visible_when_slot() {
+            let dangling = slot
+                .as_ref()
+                .is_some_and(|r| r.conditions.iter().any(|c| !seen.contains(&c.field)));
+            if dangling {
+                *slot = None;
+            }
+        }
+        if let Some(k) = key {
+            seen.insert(k);
+        }
+    }
+    layout
+}
+
+/// Validate one element's visibility rule against the fields that precede it.
+///
+/// `seen` holds every field key already passed, mapped to whether that field is
+/// a checkbox. Requiring a condition's target to be in `seen` — i.e. strictly
+/// earlier in the layout — is what rejects unknown keys, self-references and
+/// cycles all at once, and it is the invariant the single-pass evaluators in
+/// `forms::visibility` and `visibility.ts` are built on.
+fn validate_visible_when(
+    rule: &VisibilityRule,
+    owner: &str,
+    seen: &HashMap<String, bool>,
+) -> CoreResult<()> {
+    if rule.conditions.is_empty() {
+        return Err(CoreError::BadRequest(format!(
+            "'{owner}' has a visibility rule with no conditions"
+        )));
+    }
+    if rule.conditions.len() > MAX_CONDITIONS {
+        return Err(CoreError::BadRequest(format!(
+            "'{owner}' has more than {MAX_CONDITIONS} conditions"
+        )));
+    }
+    for c in &rule.conditions {
+        let Some(&is_checkbox) = seen.get(&c.field) else {
+            return Err(CoreError::BadRequest(format!(
+                "'{owner}' can only depend on a field that appears earlier in the form; \
+                 '{}' does not",
+                c.field
+            )));
+        };
+        match (c.op.takes_value(), &c.value) {
+            (true, None) => {
+                return Err(CoreError::BadRequest(format!(
+                    "'{owner}' has a condition on '{}' that needs a value",
+                    c.field
+                )));
+            }
+            (false, Some(_)) => {
+                return Err(CoreError::BadRequest(format!(
+                    "'{owner}' has a condition on '{}' that takes no value",
+                    c.field
+                )));
+            }
+            _ => {}
+        }
+        if let Some(v) = &c.value
+            && v.chars().count() > MAX_LABEL_LEN
+        {
+            return Err(CoreError::BadRequest(format!(
+                "'{owner}' has a condition value longer than {MAX_LABEL_LEN} characters"
+            )));
+        }
+        if matches!(c.op, ConditionOp::IsChecked | ConditionOp::IsNotChecked) && !is_checkbox {
+            return Err(CoreError::BadRequest(format!(
+                "'{owner}' tests whether '{}' is checked, but it is not a checkbox",
+                c.field
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
@@ -775,8 +898,21 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
     }
 
     let mut seen_standard: HashSet<&str> = HashSet::new();
+    // Field keys already passed, mapped to "is a checkbox" — the two things a
+    // visibility rule needs to know about a candidate controller.
+    let mut seen_fields: HashMap<String, bool> = HashMap::new();
     let mut pages = 1usize;
     for (i, el) in layout.iter().enumerate() {
+        // Rules are checked before the element records its own key, so a
+        // self-reference falls out as "does not appear earlier".
+        if let Some(rule) = el.visible_when() {
+            let owner = el.field_key().unwrap_or(match el {
+                FormElement::Heading(_) => "heading",
+                FormElement::Paragraph(_) => "paragraph",
+                _ => "element",
+            });
+            validate_visible_when(rule, owner, &seen_fields)?;
+        }
         match el {
             FormElement::Standard(s) => {
                 if !STANDARD_FIELD_KEYS.contains(&s.key.as_str()) {
@@ -849,6 +985,11 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
                 }
             }
             FormElement::Custom(_) | FormElement::Divider => {}
+        }
+        if let Some(key) = el.field_key() {
+            // A standard field is never a checkbox, so `false` is right for it.
+            let is_checkbox = matches!(el, FormElement::Custom(c) if c.kind.is_checkbox());
+            seen_fields.insert(key.to_string(), is_checkbox);
         }
     }
 
@@ -1034,7 +1175,7 @@ pub async fn create_form<C: ConnectionTrait>(
         None => {
             let sf = normalize_standard_fields(input.standard_fields.unwrap_or_default());
             let cf = normalize_custom_fields(input.custom_fields);
-            normalize_layout(layout_from_legacy(&sf, &cf))
+            strip_dangling_rules(normalize_layout(layout_from_legacy(&sf, &cf)))
         }
     };
     validate_layout(&layout)?;
@@ -1185,11 +1326,11 @@ pub async fn update_form<C: ConnectionTrait>(
                 // client that can't express order.
                 let sf = input.standard_fields.map(normalize_standard_fields);
                 let cf = input.custom_fields.map(normalize_custom_fields);
-                normalize_layout(merge_legacy_into_layout(
+                strip_dangling_rules(normalize_layout(merge_legacy_into_layout(
                     &layout_from_model(&existing)?,
                     sf.as_ref(),
                     cf.as_deref(),
-                ))
+                )))
             }
         };
         validate_layout(&layout)?;
@@ -1310,6 +1451,7 @@ mod tests {
             position,
             width: FieldWidth::Full,
             default_value: None,
+            visible_when: None,
         }
     }
 
@@ -1323,6 +1465,29 @@ mod tests {
             width: FieldWidth::Full,
             default_value: None,
             input_override: None,
+            visible_when: None,
+        })
+    }
+
+    fn rule(conds: &[(&str, ConditionOp, Option<&str>)]) -> VisibilityRule {
+        VisibilityRule {
+            match_mode: crate::forms::MatchMode::All,
+            conditions: conds
+                .iter()
+                .map(|(f, op, v)| crate::forms::Condition {
+                    field: (*f).to_string(),
+                    op: *op,
+                    value: v.map(str::to_string),
+                })
+                .collect(),
+        }
+    }
+
+    /// A custom field carrying a rule, for the conditional-visibility tests.
+    fn custom_when(key: &str, when: VisibilityRule) -> FormElement {
+        FormElement::Custom(CustomField {
+            visible_when: Some(when),
+            ..custom(key, 0)
         })
     }
 
@@ -1341,8 +1506,15 @@ mod tests {
         let elements = vec![
             std_el("email"),
             FormElement::Custom(custom("colour", 0)),
-            FormElement::Heading(HeadingElement { text: "About you".into(), level: 3 }),
-            FormElement::Paragraph(ParagraphElement { text: "Tell us more.".into() }),
+            FormElement::Heading(HeadingElement {
+                text: "About you".into(),
+                level: 3,
+                visible_when: None,
+            }),
+            FormElement::Paragraph(ParagraphElement {
+                text: "Tell us more.".into(),
+                visible_when: None,
+            }),
             FormElement::Divider,
             FormElement::PageBreak(PageBreakElement { title: Some("Step 2".into()) }),
         ];
@@ -1381,7 +1553,11 @@ mod tests {
 
     #[test]
     fn heading_level_round_trips_as_a_number() {
-        let el = FormElement::Heading(HeadingElement { text: "Hi".into(), level: 4 });
+        let el = FormElement::Heading(HeadingElement {
+            text: "Hi".into(),
+            level: 4,
+            visible_when: None,
+        });
         let v = serde_json::to_value(&el).unwrap();
         assert_eq!(v["config"]["level"], serde_json::json!(4));
     }
@@ -1463,7 +1639,11 @@ mod tests {
         // bundle draws, never what the server validates.
         let layout = vec![
             FormElement::Custom(custom("a", 0)),
-            FormElement::Heading(HeadingElement { text: "H".into(), level: 2 }),
+            FormElement::Heading(HeadingElement {
+                text: "H".into(),
+                level: 2,
+                visible_when: None,
+            }),
             std_el("email"),
         ];
         let (sf, cf) = legacy_from_layout(&layout);
@@ -1621,7 +1801,11 @@ mod tests {
     fn merge_legacy_removes_a_missing_custom_and_clears_on_empty_vec() {
         let existing = vec![
             FormElement::Custom(custom("a", 0)),
-            FormElement::Heading(HeadingElement { text: "H".into(), level: 2 }),
+            FormElement::Heading(HeadingElement {
+                text: "H".into(),
+                level: 2,
+                visible_when: None,
+            }),
             FormElement::Custom(custom("b", 1)),
         ];
         let out = merge_legacy_into_layout(&existing, None, Some(&[custom("a", 0)]));
@@ -1714,7 +1898,11 @@ mod tests {
     #[test]
     fn normalize_layout_clamps_heading_level_and_trims_copy() {
         let out = normalize_layout(vec![
-            FormElement::Heading(HeadingElement { text: "  Hi  ".into(), level: 9 }),
+            FormElement::Heading(HeadingElement {
+                text: "  Hi  ".into(),
+                level: 9,
+                visible_when: None,
+            }),
             FormElement::Custom(custom("a", 42)),
         ]);
         match &out[0] {
@@ -1767,6 +1955,7 @@ mod tests {
                 position: 0,
                 width: Default::default(),
                 default_value: None,
+                visible_when: None,
             },
             CustomField {
                 key: "shoe_size".into(),
@@ -1778,6 +1967,7 @@ mod tests {
                 position: 1,
                 width: Default::default(),
                 default_value: None,
+                visible_when: None,
             },
         ];
         assert!(validate_custom_fields(&fields).is_err());
@@ -1795,6 +1985,7 @@ mod tests {
             position: 0,
             width: Default::default(),
             default_value: None,
+            visible_when: None,
         }];
         assert!(validate_custom_fields(&fields).is_err());
     }
@@ -1813,6 +2004,7 @@ mod tests {
                 position: 0,
                 width: Default::default(),
                 default_value: None,
+                visible_when: None,
             }];
             assert!(
                 validate_custom_fields(&fields).is_ok(),
@@ -1833,6 +2025,7 @@ mod tests {
             position: 0,
             width: Default::default(),
             default_value: None,
+            visible_when: None,
         }];
         assert!(validate_custom_fields(&fields).is_err());
     }
@@ -1869,6 +2062,7 @@ mod tests {
             position: 0,
             width: Default::default(),
             default_value: None,
+            visible_when: None,
         }];
         assert!(validate_custom_fields(&fields).is_err());
     }
@@ -2048,4 +2242,209 @@ mod tests {
             })
         );
     }
+
+    // ---- conditional visibility -----------------------------------------
+
+    #[test]
+    fn a_rule_round_trips_through_json() {
+        let el = custom_when("b", rule(&[("a", ConditionOp::Equals, Some("yes"))]));
+        let json = serde_json::to_value(&el).unwrap();
+        assert_eq!(
+            json["config"]["visible_when"],
+            serde_json::json!({ "conditions": [{ "field": "a", "op": "equals", "value": "yes" }] }),
+            "`match` stays off the wire while it is the default"
+        );
+        let back: FormElement = serde_json::from_value(json).unwrap();
+        assert_eq!(back, el);
+    }
+
+    #[test]
+    fn a_typo_inside_a_rule_is_rejected_not_dropped() {
+        let json = serde_json::json!({
+            "element": "standard",
+            "config": {
+                "key": "city",
+                "visible_when": { "conditions": [{ "field": "a", "op": "equals", "valeu": "x" }] }
+            }
+        });
+        assert!(serde_json::from_value::<FormElement>(json).is_err());
+    }
+
+    #[test]
+    fn validate_layout_requires_the_controller_to_appear_earlier() {
+        // Forward reference: `b` names `a`, which comes after it.
+        let forward = vec![
+            custom_when("b", rule(&[("a", ConditionOp::Equals, Some("x"))])),
+            FormElement::Custom(custom("a", 1)),
+        ];
+        assert!(validate_layout(&forward).is_err());
+
+        // The same two elements the other way round are fine.
+        let ok = vec![
+            FormElement::Custom(custom("a", 0)),
+            custom_when("b", rule(&[("a", ConditionOp::Equals, Some("x"))])),
+        ];
+        assert!(validate_layout(&ok).is_ok());
+    }
+
+    #[test]
+    fn validate_layout_rejects_a_self_reference_and_an_unknown_key() {
+        let me = vec![custom_when("a", rule(&[("a", ConditionOp::IsNotEmpty, None)]))];
+        assert!(validate_layout(&me).is_err(), "a field cannot depend on itself");
+
+        let ghost = vec![custom_when("a", rule(&[("nope", ConditionOp::IsNotEmpty, None)]))];
+        assert!(validate_layout(&ghost).is_err());
+    }
+
+    #[test]
+    fn validate_layout_checks_operand_arity() {
+        let missing = vec![
+            FormElement::Custom(custom("a", 0)),
+            custom_when("b", rule(&[("a", ConditionOp::Equals, None)])),
+        ];
+        assert!(validate_layout(&missing).is_err(), "equals needs a value");
+
+        let extra = vec![
+            FormElement::Custom(custom("a", 0)),
+            custom_when("b", rule(&[("a", ConditionOp::IsEmpty, Some("x"))])),
+        ];
+        assert!(validate_layout(&extra).is_err(), "is_empty takes no value");
+    }
+
+    #[test]
+    fn validate_layout_allows_is_checked_only_against_a_checkbox() {
+        let text = vec![
+            FormElement::Custom(custom("a", 0)),
+            custom_when("b", rule(&[("a", ConditionOp::IsChecked, None)])),
+        ];
+        assert!(validate_layout(&text).is_err());
+
+        let checkbox = vec![
+            FormElement::Custom(CustomField {
+                kind: CustomFieldType::Checkbox,
+                ..custom("a", 0)
+            }),
+            custom_when("b", rule(&[("a", ConditionOp::IsChecked, None)])),
+        ];
+        assert!(validate_layout(&checkbox).is_ok());
+    }
+
+    #[test]
+    fn validate_layout_caps_condition_count() {
+        let many: Vec<(&str, ConditionOp, Option<&str>)> =
+            (0..MAX_CONDITIONS + 1).map(|_| ("a", ConditionOp::IsNotEmpty, None)).collect();
+        let layout = vec![
+            FormElement::Custom(custom("a", 0)),
+            custom_when("b", rule(&many)),
+        ];
+        assert!(validate_layout(&layout).is_err());
+    }
+
+    #[test]
+    fn a_decoration_element_can_carry_a_rule() {
+        let layout = vec![
+            FormElement::Custom(custom("a", 0)),
+            FormElement::Heading(HeadingElement {
+                text: "Billing".into(),
+                level: 2,
+                visible_when: Some(rule(&[("a", ConditionOp::Equals, Some("no"))])),
+            }),
+        ];
+        assert!(validate_layout(&layout).is_ok());
+    }
+
+    #[test]
+    fn normalize_layout_trims_a_rule_and_drops_an_empty_one() {
+        let out = normalize_layout(vec![
+            FormElement::Custom(custom("a", 0)),
+            custom_when("b", rule(&[(" a ", ConditionOp::Equals, Some("  yes  "))])),
+            custom_when("c", VisibilityRule { match_mode: crate::forms::MatchMode::All, conditions: vec![] }),
+        ]);
+        let cond = &out[1].visible_when().unwrap().conditions[0];
+        assert_eq!(cond.field, "a");
+        assert_eq!(cond.value.as_deref(), Some("yes"));
+        assert!(out[2].visible_when().is_none(), "a rule with no conditions is not a rule");
+    }
+
+    #[test]
+    fn a_legacy_write_repairs_a_rule_it_stranded_instead_of_rejecting_it() {
+        // A legacy client disables the controller. It has no vocabulary for
+        // conditions and cannot see the rule, so 400ing it would be unactionable
+        // — the dependent just becomes unconditional.
+        let existing = vec![
+            std_el("phone"),
+            FormElement::Custom(CustomField {
+                visible_when: Some(rule(&[("phone", ConditionOp::IsNotEmpty, None)])),
+                ..custom("note", 0)
+            }),
+        ];
+        let sf = StandardFieldsConfig::all_disabled();
+        let merged = strip_dangling_rules(normalize_layout(merge_legacy_into_layout(
+            &existing,
+            Some(&sf),
+            None,
+        )));
+        assert_eq!(merged.iter().filter_map(|e| e.field_key()).collect::<Vec<_>>(), vec!["note"]);
+        assert!(merged[0].visible_when().is_none());
+        assert!(validate_layout(&merged).is_ok());
+    }
+
+    #[test]
+    fn a_legacy_write_repairs_a_controller_that_moved_behind_its_dependent() {
+        // Pass 2 inserts a newly-enabled standard at its catalogue position,
+        // which here lands *after* the custom that depends on it.
+        let existing = vec![FormElement::Custom(CustomField {
+            visible_when: Some(rule(&[("phone", ConditionOp::IsNotEmpty, None)])),
+            ..custom("note", 0)
+        })];
+        let mut sf = StandardFieldsConfig::all_disabled();
+        sf.phone = on(false);
+        let merged = strip_dangling_rules(normalize_layout(merge_legacy_into_layout(
+            &existing,
+            Some(&sf),
+            None,
+        )));
+        assert!(validate_layout(&merged).is_ok(), "a legacy PATCH must never 400 on a rule it can't see");
+        assert!(merged.iter().all(|e| e.visible_when().is_none()));
+    }
+
+    #[test]
+    fn merge_legacy_keeps_a_custom_fields_rule_a_client_cannot_express() {
+        // Mirrors `merge_legacy_preserves_layout_only_extras_on_update` for the
+        // custom branch, which replaces the field wholesale.
+        let when = rule(&[("a", ConditionOp::Equals, Some("yes"))]);
+        let existing = vec![
+            FormElement::Custom(custom("a", 0)),
+            FormElement::Custom(CustomField {
+                visible_when: Some(when.clone()),
+                ..custom("b", 1)
+            }),
+        ];
+        // An old client echoes the fields back without the key it never knew.
+        let incoming = vec![custom("a", 0), custom("b", 1)];
+        let out = merge_legacy_into_layout(&existing, None, Some(&incoming));
+        assert_eq!(out[1].visible_when(), Some(&when));
+    }
+
+    #[test]
+    fn legacy_from_layout_drops_a_standard_rule_but_carries_a_custom_one() {
+        let when = rule(&[("a", ConditionOp::Equals, Some("yes"))]);
+        let layout = vec![
+            FormElement::Custom(custom("a", 0)),
+            FormElement::Standard(StandardElement {
+                visible_when: Some(when.clone()),
+                ..StandardElement::from_legacy("city", &on(false))
+            }),
+            FormElement::Custom(CustomField {
+                visible_when: Some(when.clone()),
+                ..custom("b", 1)
+            }),
+        ];
+        let (sf, cf) = legacy_from_layout(&layout);
+        // `StandardFieldConfig` has nowhere to put a rule; `CustomField` is
+        // stored verbatim, so its rule rides along.
+        assert!(sf.city.enabled);
+        assert_eq!(cf[1].visible_when, Some(when));
+    }
+
 }

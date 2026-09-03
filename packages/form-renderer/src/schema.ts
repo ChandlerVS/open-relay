@@ -20,6 +20,38 @@ export type FieldWidth = "full" | "half";
  */
 export type StandardInputVariant = "text" | "select";
 
+/** Whether every condition must hold, or only one. Absent means `"all"`. */
+export type MatchMode = "all" | "any";
+
+/** Mirrors `open_relay_core::forms::ConditionOp`. */
+export type ConditionOp =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "is_empty"
+  | "is_not_empty"
+  | "is_checked"
+  | "is_not_checked";
+
+/** One comparison against a controlling field's answer. */
+export interface Condition {
+  /** Submission key of a field appearing strictly earlier in the layout. */
+  field: string;
+  op: ConditionOp;
+  /** Present for `equals`/`not_equals`/`contains`, absent for the rest. */
+  value?: string | null;
+}
+
+/**
+ * Show an element only when earlier answers match. Mirrors
+ * `open_relay_core::forms::VisibilityRule`; evaluated by `visibility.ts`, which
+ * must stay in lockstep with `crates/core/src/forms/visibility.rs`.
+ */
+export interface VisibilityRule {
+  match?: MatchMode;
+  conditions: Condition[];
+}
+
 export type CustomField =
   | (CustomFieldBase & { type: "text" })
   | (CustomFieldBase & { type: "email" })
@@ -28,6 +60,7 @@ export type CustomField =
   | (CustomFieldBase & { type: "url" })
   | (CustomFieldBase & { type: "textarea" })
   | (CustomFieldBase & { type: "select"; options: string[] })
+  | (CustomFieldBase & { type: "radio"; options: string[] })
   | (CustomFieldBase & { type: "checkbox" });
 
 interface CustomFieldBase {
@@ -39,6 +72,8 @@ interface CustomFieldBase {
   position: number;
   width?: FieldWidth;
   default_value?: string | null;
+  /** Show this field only when earlier answers match. Absent is unconditional. */
+  visible_when?: VisibilityRule | null;
 }
 
 export interface StandardElement {
@@ -50,15 +85,21 @@ export interface StandardElement {
   width?: FieldWidth;
   default_value?: string | null;
   input_override?: StandardInputVariant | null;
+  /** Show this field only when earlier answers match. Absent is unconditional. */
+  visible_when?: VisibilityRule | null;
 }
 
 export interface HeadingElement {
   text: string;
   level: number;
+  /** Show this field only when earlier answers match. Absent is unconditional. */
+  visible_when?: VisibilityRule | null;
 }
 
 export interface ParagraphElement {
   text: string;
+  /** Show this field only when earlier answers match. Absent is unconditional. */
+  visible_when?: VisibilityRule | null;
 }
 
 export interface PageBreakElement {
@@ -69,6 +110,11 @@ export interface PageBreakElement {
  * One entry in a form's ordered layout. Adjacently tagged to match
  * `open_relay_core::forms::FormElement` — `element` discriminates, `config`
  * carries the body (absent for `divider`).
+ *
+ * `divider` alone cannot carry a `visible_when` — it is a serde *unit* variant
+ * on the server, and giving it a body would reject every stored
+ * `{"element":"divider"}`. The renderer collapses dividers left stranded by
+ * their hidden neighbours instead; see `visibility.ts`.
  */
 export type FormElement =
   | { element: "standard"; config: StandardElement }

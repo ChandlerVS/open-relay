@@ -15,6 +15,7 @@
 //!   options. See [`CustomField`].
 
 pub mod service;
+pub mod visibility;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -153,9 +154,9 @@ impl Default for StandardFieldsConfig {
 
 /// HTML input types we expose for custom fields.
 ///
-/// `Select` carries its options on the variant so the renderer can't see a
-/// select-typed field without options. `Checkbox` is a single boolean
-/// checkbox (multi-select uses `Select`).
+/// `Select` and `Radio` carry their options on the variant so the renderer
+/// can't see an option-typed field without options. `Checkbox` is a single
+/// boolean checkbox (multi-select uses `Select`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum CustomFieldType {
@@ -169,7 +170,41 @@ pub enum CustomFieldType {
         #[serde(default)]
         options: Vec<String>,
     },
+    /// A radio group. Same option semantics as `Select` — the difference is
+    /// purely presentational, so every place that matches `Select` for options
+    /// handling matches this too.
+    Radio {
+        #[serde(default)]
+        options: Vec<String>,
+    },
     Checkbox,
+}
+
+impl CustomFieldType {
+    /// The declared options, for the two variants that carry them. Lets option
+    /// rules (validation, trimming, membership checks) be written once instead
+    /// of once per variant.
+    pub fn options(&self) -> Option<&Vec<String>> {
+        match self {
+            CustomFieldType::Select { options } | CustomFieldType::Radio { options } => {
+                Some(options)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn options_mut(&mut self) -> Option<&mut Vec<String>> {
+        match self {
+            CustomFieldType::Select { options } | CustomFieldType::Radio { options } => {
+                Some(options)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_checkbox(&self) -> bool {
+        matches!(self, CustomFieldType::Checkbox)
+    }
 }
 
 /// One backend destination on a form. Each entry queues one delivery row per
@@ -205,6 +240,94 @@ pub fn default_backends() -> Vec<BackendBinding> {
     vec![BackendBinding::open_relay()]
 }
 
+/// Whether every condition must hold, or only one of them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchMode {
+    #[default]
+    All,
+    Any,
+}
+
+impl MatchMode {
+    /// Lets `all` stay off the wire, so a rule written today matches what a
+    /// caller that never heard of `match` would send.
+    pub fn is_default(&self) -> bool {
+        matches!(self, MatchMode::All)
+    }
+}
+
+/// How one condition compares a controlling field's answer.
+///
+/// There is deliberately no `one_of`: "A or B" is a [`MatchMode::Any`] rule with
+/// two [`ConditionOp::Equals`] conditions, which keeps `value` a plain
+/// `Option<String>` and so keeps `deny_unknown_fields` available on
+/// [`Condition`] (an untagged or flattened operand would forbid it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionOp {
+    Equals,
+    NotEquals,
+    Contains,
+    IsEmpty,
+    IsNotEmpty,
+    IsChecked,
+    IsNotChecked,
+}
+
+impl ConditionOp {
+    /// Whether this operator takes an operand. The four unary ops must not
+    /// carry a `value`; the three binary ones must.
+    pub fn takes_value(&self) -> bool {
+        matches!(
+            self,
+            ConditionOp::Equals | ConditionOp::NotEquals | ConditionOp::Contains
+        )
+    }
+}
+
+/// One comparison against a controlling field's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Condition {
+    /// Submission key of a field appearing *strictly earlier* in the layout.
+    /// Enforced by `service::validate_layout`; see [`VisibilityRule`].
+    pub field: String,
+    pub op: ConditionOp,
+    /// The operand. Required for `equals`/`not_equals`/`contains`, forbidden
+    /// for the rest — see [`ConditionOp::takes_value`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// Show an element only when the visitor's earlier answers match.
+///
+/// Every condition names a field that appears **strictly earlier in the
+/// layout** (`service::validate_layout` rejects anything else). That single
+/// rule subsumes unknown-key, self-reference and cycle detection, and it is
+/// what lets both evaluators — `crate::forms::visibility` here and
+/// `visibility.ts` in the renderer — resolve a whole form in one forward pass.
+///
+/// Rules live only in the `layout` column. A standard element's rule is dropped
+/// by the projection in `service::legacy_from_layout`, exactly like its
+/// `placeholder`/`width`; a custom field's rides along in `custom_fields`
+/// because a `Custom` element's config *is* the `CustomField` JSON. Either way
+/// an embed bundle cached before this existed ignores the key and keeps drawing
+/// every element — see the module docs on `crate::forms::visibility` for what
+/// the server does about that.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VisibilityRule {
+    #[serde(
+        rename = "match",
+        default,
+        skip_serializing_if = "MatchMode::is_default"
+    )]
+    pub match_mode: MatchMode,
+    /// At least one, at most `service::MAX_CONDITIONS`.
+    pub conditions: Vec<Condition>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 pub struct CustomField {
     /// Identifier, unique within the form. Used verbatim as the submission key
@@ -237,6 +360,10 @@ pub struct CustomField {
     /// submission that omits the key is still treated as absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<String>,
+    /// Show this element only when earlier answers match. `None` is
+    /// unconditional. See [`VisibilityRule`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<VisibilityRule>,
 }
 
 /// Fraction of a row a field occupies when rendered. Layout-only.
@@ -298,6 +425,10 @@ pub struct StandardElement {
     pub default_value: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_override: Option<StandardInputVariant>,
+    /// Show this element only when earlier answers match. `None` is
+    /// unconditional. See [`VisibilityRule`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<VisibilityRule>,
 }
 
 impl StandardElement {
@@ -312,6 +443,7 @@ impl StandardElement {
             width: FieldWidth::Full,
             default_value: None,
             input_override: None,
+            visible_when: None,
         }
     }
 }
@@ -324,6 +456,10 @@ pub struct HeadingElement {
     /// Rendered as `h{level}`. Clamped to 1..=6 on write.
     #[serde(default = "default_heading_level")]
     pub level: u8,
+    /// Show this element only when earlier answers match. `None` is
+    /// unconditional. See [`VisibilityRule`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<VisibilityRule>,
 }
 
 fn default_heading_level() -> u8 {
@@ -335,6 +471,10 @@ fn default_heading_level() -> u8 {
 #[serde(deny_unknown_fields)]
 pub struct ParagraphElement {
     pub text: String,
+    /// Show this element only when earlier answers match. `None` is
+    /// unconditional. See [`VisibilityRule`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<VisibilityRule>,
 }
 
 /// Splits the form into steps. Everything after this break, up to the next one,
@@ -380,6 +520,36 @@ impl FormElement {
             FormElement::Standard(s) => Some(&s.key),
             FormElement::Custom(c) => Some(&c.key),
             _ => None,
+        }
+    }
+
+    /// This element's visibility rule, if it has one.
+    ///
+    /// `Divider` and `PageBreak` always return `None` and can never carry one:
+    /// `Divider` is a serde *unit* variant, and under adjacent tagging giving it
+    /// a body would require a `config` key that no stored `{"element":"divider"}`
+    /// has. A divider left alone between hidden neighbours is collapsed by the
+    /// renderer instead. A conditional page break would mean a conditional page
+    /// count, which multi-step forms deliberately keep static.
+    pub fn visible_when(&self) -> Option<&VisibilityRule> {
+        match self {
+            FormElement::Standard(s) => s.visible_when.as_ref(),
+            FormElement::Custom(c) => c.visible_when.as_ref(),
+            FormElement::Heading(h) => h.visible_when.as_ref(),
+            FormElement::Paragraph(p) => p.visible_when.as_ref(),
+            FormElement::Divider | FormElement::PageBreak(_) => None,
+        }
+    }
+
+    /// The slot holding this element's rule, for normalization. `None` for the
+    /// variants that cannot carry one.
+    pub fn visible_when_slot(&mut self) -> Option<&mut Option<VisibilityRule>> {
+        match self {
+            FormElement::Standard(s) => Some(&mut s.visible_when),
+            FormElement::Custom(c) => Some(&mut c.visible_when),
+            FormElement::Heading(h) => Some(&mut h.visible_when),
+            FormElement::Paragraph(p) => Some(&mut p.visible_when),
+            FormElement::Divider | FormElement::PageBreak(_) => None,
         }
     }
 }

@@ -196,6 +196,82 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test progress_indicator -- --ignored
 ```
 
+### Conditional fields: rules point *backwards*, and the server prunes
+
+Any field, heading or paragraph can carry `visible_when` — a `VisibilityRule`
+(`crates/core/src/forms/mod.rs`) of one or more `Condition`s combined with
+`match: all | any`. Four things about it are not obvious from the code:
+
+1. **A condition may only name a field that appears strictly earlier in the
+   layout.** `validate_layout` enforces it, and that one rule is doing three
+   jobs: it rejects unknown keys, self-references and cycles at once, and it is
+   what lets both evaluators resolve a whole form in a **single forward pass**
+   with no fixpoint loop. Don't relax it without replacing it with a real cycle
+   check.
+2. **There are two implementations of one spec and they must agree exactly.**
+   `crates/core/src/forms/visibility.rs` is the reference (its module docs are
+   the spec); `packages/form-renderer/src/visibility.ts` is the copy that ships
+   in the embed bundle. If the visitor's form and the server's validation
+   disagree, someone gets a 400 they cannot act on. Two subtleties worth
+   keeping: a condition naming a controller that is *itself* hidden evaluates to
+   **false** — that is what makes hiding transitive *and* what stops a hidden
+   field's prefilled `default_value` from steering a later element — and
+   `is_checked` uses the same truthy vocabulary `coerce_custom` accepts
+   (`true`/`on`/`yes`/`1`), with `is_not_checked` as its negation rather than
+   "equals false", because an unanswered checkbox is absent, never `false`.
+3. **Hidden values are dropped, not merely exempted from `required`.**
+   `create_submission` computes the hidden set off the layout and hands it to
+   `validate_and_split`, which removes those keys before any coercion. This is
+   the reason the submission path stopped being layout-blind. It also means an
+   embed bundle cached before rules existed — which renders and submits every
+   field unconditionally — has its extra answers discarded rather than
+   delivered. That is the intended reading ("the author said those fields don't
+   apply"), but it is a real behaviour change for bundles that can never be
+   force-upgraded.
+4. **Legacy writes repair rather than reject.** A caller that speaks only
+   `standard_fields`/`custom_fields` has no vocabulary for rules, yet its writes
+   move elements: disabling a standard field removes it, enabling one inserts it
+   at its catalogue position, a `position` reorder can move a controller behind
+   its dependent. Any of those can strand a rule, so the legacy paths run
+   `strip_dangling_rules` and the element simply becomes unconditional — 400ing
+   a client over a rule it never sent and cannot see would be unactionable.
+   Explicit `layout` writes skip this entirely: there the caller *did* send the
+   rule, so `validate_layout` tells them what's wrong.
+
+`FormElement::Divider` cannot carry a rule. It is a serde **unit** variant, and
+under adjacent tagging giving it a body would require a `config` key that no
+stored `{"element":"divider"}` has. The renderer's `visibleElements` collapses
+dividers left leading, trailing or doubled once their neighbours hide, which is
+the cosmetic half of the problem and all that actually mattered. `PageBreak`
+can't carry one either, deliberately: pages stay unconditional so the step list
+never churns on a keystroke. Instead `Form.tsx` **skips** a page with nothing
+visible on it during Next/Back, and both the progress bar and the "Step N of M"
+wording count only live steps so they can't disagree.
+
+Hiding in the renderer is done by **unmounting**, never CSS. Per-step gating
+relies on native constraint validation seeing only what is in the DOM, so an
+unmounted field is exempt from `required` for free — whereas a `display:none`
+required input makes the browser block submit on a control it refuses to focus.
+`Form.tsx` also prunes hidden keys from the payload **subtractively**: rebuilding
+it from the visible layout keys would silently drop the honeypot `_hp` and every
+bot would sail through.
+
+Rules on a *standard* element are dropped by `legacy_from_layout` like its
+`placeholder`/`width`; rules on a *custom* field ride along in `custom_fields`,
+because a `Custom` element's config is the `CustomField` JSON verbatim. Same
+asymmetry `width` and `default_value` already have.
+
+`CustomFieldType::Radio` was added alongside this — a `Select` with different
+chrome, sharing its option rules and its submission coercion.
+
+`crates/core/tests/conditional_fields.rs` guards the round trip, the pruning and
+the legacy-repair behaviour, `#[ignore]`d like the others:
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test conditional_fields -- --ignored
+```
+
 ### Backend delivery is a registry of trait objects
 
 `open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.

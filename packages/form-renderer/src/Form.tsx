@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { COUNTRIES, STANDARD_FIELDS } from "./standardFields";
 import { resolveLayout, splitIntoPages } from "./layout";
+import { computeVisibility, visibleElements } from "./visibility";
 import type {
   CustomField,
   FormElement,
@@ -135,10 +136,13 @@ export function Form({
     };
   }, [formId, apiUrl, schemaProp]);
 
-  const pages = useMemo(
-    () => (schema ? splitIntoPages(resolveLayout(schema)) : []),
-    [schema],
-  );
+  const layout = useMemo(() => (schema ? resolveLayout(schema) : []), [schema]);
+
+  // Pages are deliberately *not* value-dependent: a page break is unconditional,
+  // so the step list is fixed and can't churn on every keystroke. Conditional
+  // elements are filtered inside a page, and a page left with nothing visible is
+  // skipped during navigation (see `nextVisiblePage`).
+  const pages = useMemo(() => splitIntoPages(layout), [layout]);
 
   // Each field's default_value, keyed by field key. Shared by the initial
   // prefill and by the "submit another" reset — a reset that just cleared
@@ -160,6 +164,15 @@ export function Form({
     if (Object.keys(defaultValues).length === 0) return;
     setValues((v) => ({ ...defaultValues, ...v }));
   }, [defaultValues]);
+
+  // Resolved against defaults *merged in*, not raw state: the prefill above is
+  // an effect, so on the first committed frame `values` is still empty and a
+  // controller with a `default_value` would read as unanswered — flashing its
+  // dependents into view one frame later.
+  const { visible, hiddenKeys } = useMemo(
+    () => computeVisibility(layout, { ...defaultValues, ...values }),
+    [layout, defaultValues, values],
+  );
 
   // What to do once a submission lands. A server too old to know the field, or
   // a form that never configured one, gets the built-in message.
@@ -240,20 +253,39 @@ export function Form({
     setValues((v) => ({ ...v, [key]: val }));
 
   const page = pages[safePageIndex];
-  const isLastPage = safePageIndex >= pages.length - 1;
-  // Completed steps, not the current one: step 1 of 4 is 0%, step 4 is 75%.
-  // Derived from `safePageIndex` so a layout shrinking under the builder
-  // preview can't produce a fill wider than the track.
-  const percent = Math.round((safePageIndex / Math.max(pages.length, 1)) * 100);
+  // Steps that currently have something on them. A page whose every element is
+  // conditional can empty out entirely, and stepping onto it would show a lone
+  // Next button — or, on the last page, no Submit at all.
+  const liveSteps = pages
+    .map((p, i) => (visibleElements(p, visible).length > 0 ? i : -1))
+    .filter((i) => i >= 0);
+  const nextLive = liveSteps.find((i) => i > safePageIndex);
+  const prevLive = [...liveSteps].reverse().find((i) => i < safePageIndex);
+  const isLastPage = nextLive === undefined;
+
+  // Both the bar and the "Step N of M" wording count only live steps, so the
+  // percentage can't disagree with what the visitor is being told. Completed
+  // steps, not the current one: step 1 of 4 is 0%, step 4 is 75%.
+  const stepCount = Math.max(liveSteps.length, 1);
+  const stepIndex = Math.max(
+    liveSteps.findIndex((i) => i >= safePageIndex),
+    0,
+  );
+  const percent = Math.round((stepIndex / stepCount) * 100);
 
   const submit = async () => {
     setStatus("submitting");
     setError(null);
     const base = apiUrl.endsWith("/") ? apiUrl.slice(0, -1) : apiUrl;
+    // Subtractive, never a whitelist: `values` also carries the honeypot `_hp`,
+    // which the server reads to reject bots. Rebuilding from the visible layout
+    // keys would drop it silently and every bot would sail through.
+    const answers: Record<string, string | boolean> = { ...values };
+    for (const key of hiddenKeys) delete answers[key];
     const body =
       source && Object.keys(source).length > 0
-        ? { ...values, _source: source }
-        : values;
+        ? { ...answers, _source: source }
+        : answers;
     try {
       const res = await fetch(
         `${base}/public/forms/${encodeURIComponent(formId)}/submissions`,
@@ -299,8 +331,8 @@ export function Form({
         // currently in the DOM, i.e. this step only — which is exactly the
         // per-step gate we want. Fields on later pages aren't mounted yet.
         e.preventDefault();
-        if (!isLastPage) {
-          setPageIndex(safePageIndex + 1);
+        if (nextLive !== undefined) {
+          setPageIndex(nextLive);
           return;
         }
         if (previewMode) return;
@@ -308,7 +340,7 @@ export function Form({
       }}
     >
       <h2 className="or-form__title">{schema.name}</h2>
-      {pages.length > 1 && (progressStyle === "steps" || page?.title) && (
+      {stepCount > 1 && (progressStyle === "steps" || page?.title) && (
         <div className="or-form__steps">
           {/*
             The count is style-dependent, but a page break's title names the
@@ -317,22 +349,34 @@ export function Form({
           */}
           {progressStyle === "steps" && (
             <span className="or-form__step-count">
-              Step {safePageIndex + 1} of {pages.length}
+              Step {stepIndex + 1} of {stepCount}
             </span>
           )}
           {page?.title && <span className="or-form__step-title">{page.title}</span>}
         </div>
       )}
       <div className="or-form__fields">
-        {page?.elements.map((el, i) => (
-          <LayoutElement
-            key={elementKey(el, i)}
-            element={el}
-            scope={schema.id}
-            values={values}
-            onChange={set}
-          />
-        ))}
+        {/*
+          Hidden elements are *unmounted*, never CSS-hidden. Per-step gating
+          leans on native constraint validation seeing only what's in the DOM
+          (see the onSubmit comment), so unmounting exempts a hidden required
+          field for free — while a `display:none` required input would make the
+          browser block submit on a control it refuses to focus.
+
+          Keys come from the element's index in the whole layout, not its
+          position in this filtered list, so a heading doesn't remount whenever
+          a sibling appears or disappears.
+        */}
+        {page &&
+          visibleElements(page, visible).map(({ el, index }) => (
+            <LayoutElement
+              key={elementKey(el, index)}
+              element={el}
+              scope={schema.id}
+              values={values}
+              onChange={set}
+            />
+          ))}
         {/*
           Honeypot: a hidden field a real user never sees or tabs to, but many
           bots auto-fill. The server rejects a submission whose `_hp` is set.
@@ -367,11 +411,11 @@ export function Form({
         </div>
       )}
       <div className="or-form__actions">
-        {safePageIndex > 0 && (
+        {prevLive !== undefined && (
           <button
             type="button"
             className="or-form__back"
-            onClick={() => setPageIndex(safePageIndex - 1)}
+            onClick={() => setPageIndex(prevLive)}
           >
             Back
           </button>
@@ -391,7 +435,7 @@ export function Form({
           </button>
         )}
       </div>
-      {pages.length > 1 && progressStyle === "bar" && (
+      {stepCount > 1 && progressStyle === "bar" && (
         <div className="or-form__progress">
           {/*
             `role="progressbar"` sits on the track, not this wrapper, so the
@@ -405,7 +449,7 @@ export function Form({
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percent}
-            aria-valuetext={`Step ${safePageIndex + 1} of ${pages.length}`}
+            aria-valuetext={`Step ${stepIndex + 1} of ${stepCount}`}
           >
             {/* Dynamic, so it can't live in the stylesheet. */}
             <div className="or-form__progress-fill" style={{ width: `${percent}%` }} />
@@ -632,6 +676,39 @@ function CustomFieldInput({
           {field.label}
           {required && <span className="or-field__required"> *</span>}
         </label>
+        {field.help_text && <p className="or-field__help">{field.help_text}</p>}
+      </div>
+    );
+  }
+
+  if (field.type === "radio") {
+    // `name` groups the buttons, so it has to be unique to this form instance —
+    // elsewhere in this file it is decorative (values are React state, never
+    // FormData). `required` on every member is satisfied by any one of them
+    // being checked, which is the per-group behaviour we want.
+    const group = `or-${scope}-${field.key}`;
+    return (
+      <div className={`${fieldClass(field.width)} or-field--radio`}>
+        <fieldset className="or-radio-group">
+          <legend className="or-field__label">
+            {field.label}
+            {required && <span className="or-field__required"> *</span>}
+          </legend>
+          {field.options.map((opt) => (
+            <label key={opt} className="or-radio-option" htmlFor={`${group}-${opt}`}>
+              <input
+                id={`${group}-${opt}`}
+                name={group}
+                type="radio"
+                required={required}
+                value={opt}
+                checked={value === opt}
+                onChange={() => onChange(opt)}
+              />{" "}
+              {opt}
+            </label>
+          ))}
+        </fieldset>
         {field.help_text && <p className="or-field__help">{field.help_text}</p>}
       </div>
     );

@@ -21,16 +21,22 @@ import { Inspector } from "./Inspector";
 import { Palette } from "./Palette";
 import { validateLayout } from "./validate";
 import {
+  controllerCandidates,
+  elementKey,
   newCustomElement,
   newDecorationElement,
   newId,
   newStandardElement,
+  renameRuleReferences,
   stripIds,
+  stripRuleReferences,
   usedStandardKeys,
   withIds,
+  withRule,
   type BuilderElement,
   type CustomTypeName,
   type FormElement,
+  type VisibilityRule,
 } from "./model";
 
 export function FormBuilderPage() {
@@ -61,7 +67,8 @@ export function FormBuilderPage() {
     return JSON.stringify(stripIds(items)) !== JSON.stringify(form.layout);
   }, [form, items]);
 
-  const selected = items?.find((i) => i.id === selectedId) ?? null;
+  const selectedIndex = items?.findIndex((i) => i.id === selectedId) ?? -1;
+  const selected = selectedIndex >= 0 ? (items?.[selectedIndex] ?? null) : null;
 
   const append = (element: FormElement) => {
     const item = { id: newId(), element };
@@ -71,14 +78,44 @@ export function FormBuilderPage() {
   };
 
   const patchSelected = (element: FormElement) => {
+    setItems((prev) => {
+      const before = prev ?? [];
+      const current = before.find((i) => i.id === selectedId);
+      let next = before.map((i) => (i.id === selectedId ? { ...i, element } : i));
+      // A custom field's key is editable, and rules reference keys. Repoint them
+      // as it is retyped so a rename doesn't dangle every rule that depends on
+      // this field and block save on an error the user can't see the cause of.
+      const from = current ? elementKey(current.element) : null;
+      const to = elementKey(element);
+      if (from && to !== null && from !== to) {
+        next = renameRuleReferences(next, from, to);
+      }
+      return next;
+    });
+    setSavedAt(null);
+  };
+
+  /** Copy one rule onto several elements at once — a branch usually hides a block. */
+  const applyRuleToMany = (ids: string[], rule: VisibilityRule) => {
+    const targets = new Set(ids);
     setItems((prev) =>
-      (prev ?? []).map((i) => (i.id === selectedId ? { ...i, element } : i)),
+      (prev ?? []).map((i) =>
+        targets.has(i.id) ? { ...i, element: withRule(i.element, rule) } : i,
+      ),
     );
     setSavedAt(null);
   };
 
   const remove = (rid: string) => {
-    setItems((prev) => (prev ?? []).filter((i) => i.id !== rid));
+    setItems((prev) => {
+      const before = prev ?? [];
+      // Drop the rules that pointed at this field, so deleting a controller
+      // can't strand the form in a state the server refuses to save.
+      const key = before.find((i) => i.id === rid)?.element ?? null;
+      const dropped = before.filter((i) => i.id !== rid);
+      const referenced = key ? elementKey(key) : null;
+      return referenced ? stripRuleReferences(dropped, referenced) : dropped;
+    });
     if (rid === selectedId) setSelectedId(null);
     setSavedAt(null);
   };
@@ -234,7 +271,13 @@ export function FormBuilderPage() {
             <CardTitle className="text-sm">Settings</CardTitle>
           </CardHeader>
           <CardContent>
-            <Inspector item={selected} onChange={patchSelected} />
+            <Inspector
+                item={selected}
+                onChange={patchSelected}
+                candidates={controllerCandidates(items, selectedIndex)}
+                ruleTargets={items.slice(selectedIndex + 1)}
+                onApplyRuleToMany={applyRuleToMany}
+              />
           </CardContent>
         </Card>
 

@@ -40,6 +40,7 @@ fn custom(key: &str) -> CustomField {
         position: 0,
         width: FieldWidth::Full,
         default_value: None,
+        visible_when: None,
     }
 }
 
@@ -53,6 +54,7 @@ fn standard(key: &str, required: bool) -> FormElement {
         width: FieldWidth::Full,
         default_value: None,
         input_override: None,
+        visible_when: None,
     })
 }
 
@@ -74,6 +76,7 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
         FormElement::Heading(HeadingElement {
             text: "More".into(),
             level: 2,
+            visible_when: None,
         }),
         FormElement::PageBreak(PageBreakElement {
             title: Some("Step 2".into()),

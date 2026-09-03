@@ -40,6 +40,13 @@ export function resolveLayout(schema: PublicFormDto): FormElement[] {
 export interface FormPage {
   title: string | null;
   elements: FormElement[];
+  /**
+   * Index of this page's first element in the flat layout. Conditional
+   * visibility is resolved over the whole layout in one pass, so a page needs
+   * this to look its own elements up in that result — and it gives decoration
+   * elements a React key that doesn't shift when a sibling hides.
+   */
+  offset: number;
 }
 
 /**
@@ -48,18 +55,24 @@ export interface FormPage {
  * page, so single-page forms need no special casing at the call site.
  */
 export function splitIntoPages(layout: FormElement[]): FormPage[] {
-  const pages: FormPage[] = [{ title: null, elements: [] }];
-  for (const el of layout) {
+  const pages: FormPage[] = [{ title: null, elements: [], offset: 0 }];
+  layout.forEach((el, i) => {
     if (el.element === "page_break") {
-      pages.push({ title: el.config.title ?? null, elements: [] });
+      pages.push({ title: el.config.title ?? null, elements: [], offset: i + 1 });
     } else {
       pages[pages.length - 1]!.elements.push(el);
     }
-  }
+  });
   return pages;
 }
 
-/** Submission keys on a page, used for per-step required validation. */
+/**
+ * Submission keys on a page.
+ *
+ * Layout-shaped, not submission-shaped: this includes fields a visibility rule
+ * currently hides. Use `computeVisibility` from `visibility.ts` if you need the
+ * keys that will actually be submitted.
+ */
 export function pageFieldKeys(page: FormPage): string[] {
   return page.elements
     .map((el) =>

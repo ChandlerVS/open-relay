@@ -2,15 +2,29 @@ import { Input, Label } from "@open-relay/ui";
 import { STANDARD_FIELDS } from "@open-relay/form-renderer";
 import {
   CUSTOM_FIELD_TYPES,
+  canBeConditional,
+  elementRule,
   retypeCustomField,
+  withRule,
   type BuilderElement,
+  type ControllerCandidate,
   type CustomTypeName,
   type FormElement,
+  type VisibilityRule,
 } from "./model";
+import { VisibilityRuleEditor } from "./VisibilityRuleEditor";
 
 export interface InspectorProps {
   item: BuilderElement | null;
   onChange: (next: FormElement) => void;
+  /**
+   * Fields earlier in the layout, which are the only legal controllers for a
+   * visibility rule — see `controllerCandidates`.
+   */
+  candidates: ControllerCandidate[];
+  /** Elements after this one, for the rule editor's bulk apply. */
+  ruleTargets: BuilderElement[];
+  onApplyRuleToMany: (ids: string[], rule: VisibilityRule) => void;
 }
 
 const SELECT_CLASS =
@@ -69,7 +83,13 @@ function WidthRow({
 }
 
 /** Settings for the selected element. */
-export function Inspector({ item, onChange }: InspectorProps) {
+export function Inspector({
+  item,
+  onChange,
+  candidates,
+  ruleTargets,
+  onApplyRuleToMany,
+}: InspectorProps) {
   if (!item) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -79,6 +99,18 @@ export function Inspector({ item, onChange }: InspectorProps) {
   }
 
   const el = item.element;
+
+  // Rendered from every branch whose element kind can carry a rule, so the
+  // control sits in the same place whatever is selected.
+  const visibility = canBeConditional(el) ? (
+    <VisibilityRuleEditor
+      rule={elementRule(el)}
+      candidates={candidates}
+      targets={ruleTargets}
+      onChange={(rule) => onChange(withRule(el, rule))}
+      onApplyToMany={onApplyRuleToMany}
+    />
+  ) : null;
 
   if (el.element === "standard") {
     const cfg = el.config;
@@ -126,6 +158,7 @@ export function Inspector({ item, onChange }: InspectorProps) {
           checked={cfg.required ?? false}
           onChange={(required) => patch({ required })}
         />
+        {visibility}
         {cfg.key === "country" && (
           <div className="space-y-1">
             <Check
@@ -187,7 +220,7 @@ export function Inspector({ item, onChange }: InspectorProps) {
             ))}
           </select>
         </Row>
-        {cfg.type === "select" && (
+        {(cfg.type === "select" || cfg.type === "radio") && (
           <Row label="Options (one per line)">
             <textarea
               className="w-full min-h-24 rounded border border-border bg-background p-2 text-sm"
@@ -237,6 +270,7 @@ export function Inspector({ item, onChange }: InspectorProps) {
           checked={cfg.required ?? false}
           onChange={(required) => patch({ required })}
         />
+        {visibility}
       </div>
     );
   }
@@ -272,6 +306,7 @@ export function Inspector({ item, onChange }: InspectorProps) {
             ))}
           </select>
         </Row>
+        {visibility}
       </div>
     );
   }
@@ -279,15 +314,20 @@ export function Inspector({ item, onChange }: InspectorProps) {
   if (el.element === "paragraph") {
     const cfg = el.config;
     return (
-      <Row label="Text">
-        <textarea
-          className="w-full min-h-32 rounded border border-border bg-background p-2 text-sm"
-          value={cfg.text}
-          onChange={(e) =>
-            onChange({ element: "paragraph", config: { text: e.target.value } })
-          }
-        />
-      </Row>
+      <div className="space-y-3">
+        <Row label="Text">
+          <textarea
+            className="w-full min-h-32 rounded border border-border bg-background p-2 text-sm"
+            value={cfg.text}
+            onChange={(e) =>
+              // Spread the existing config: rebuilding it as `{ text }` alone
+              // would silently drop the visibility rule below.
+              onChange({ element: "paragraph", config: { ...cfg, text: e.target.value } })
+            }
+          />
+        </Row>
+        {visibility}
+      </div>
     );
   }
 

@@ -2455,6 +2455,44 @@
           }
         }
       },
+      "Condition": {
+        "type": "object",
+        "description": "One comparison against a controlling field's answer.",
+        "required": [
+          "field",
+          "op"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Submission key of a field appearing *strictly earlier* in the layout.\nEnforced by `service::validate_layout`; see [`VisibilityRule`]."
+          },
+          "op": {
+            "$ref": "#/components/schemas/ConditionOp"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operand. Required for `equals`/`not_equals`/`contains`, forbidden\nfor the rest — see [`ConditionOp::takes_value`]."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConditionOp": {
+        "type": "string",
+        "description": "How one condition compares a controlling field's answer.\n\nThere is deliberately no `one_of`: \"A or B\" is a [`MatchMode::Any`] rule with\ntwo [`ConditionOp::Equals`] conditions, which keeps `value` a plain\n`Option<String>` and so keeps `deny_unknown_fields` available on\n[`Condition`] (an untagged or flattened operand would forbid it).",
+        "enum": [
+          "equals",
+          "not_equals",
+          "contains",
+          "is_empty",
+          "is_not_empty",
+          "is_checked",
+          "is_not_checked"
+        ]
+      },
       "CustomField": {
         "allOf": [
           {
@@ -2500,6 +2538,17 @@
               },
               "required": {
                 "type": "boolean"
+              },
+              "visible_when": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VisibilityRule",
+                    "description": "Show this element only when earlier answers match. `None` is\nunconditional. See [`VisibilityRule`]."
+                  }
+                ]
               },
               "width": {
                 "$ref": "#/components/schemas/FieldWidth",
@@ -2617,6 +2666,27 @@
           },
           {
             "type": "object",
+            "description": "A radio group. Same option semantics as `Select` — the difference is\npurely presentational, so every place that matches `Select` for options\nhandling matches this too.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "radio"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "required": [
               "type"
             ],
@@ -2630,7 +2700,7 @@
             }
           }
         ],
-        "description": "HTML input types we expose for custom fields.\n\n`Select` carries its options on the variant so the renderer can't see a\nselect-typed field without options. `Checkbox` is a single boolean\ncheckbox (multi-select uses `Select`)."
+        "description": "HTML input types we expose for custom fields.\n\n`Select` and `Radio` carry their options on the variant so the renderer\ncan't see an option-typed field without options. `Checkbox` is a single\nboolean checkbox (multi-select uses `Select`)."
       },
       "DashboardOverview": {
         "type": "object",
@@ -3136,6 +3206,17 @@
           },
           "text": {
             "type": "string"
+          },
+          "visible_when": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityRule",
+                "description": "Show this element only when earlier answers match. `None` is\nunconditional. See [`VisibilityRule`]."
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -3216,6 +3297,14 @@
             "$ref": "#/components/schemas/UserDto"
           }
         }
+      },
+      "MatchMode": {
+        "type": "string",
+        "description": "Whether every condition must hold, or only one of them.",
+        "enum": [
+          "all",
+          "any"
+        ]
       },
       "MeResponse": {
         "type": "object",
@@ -3617,6 +3706,17 @@
         "properties": {
           "text": {
             "type": "string"
+          },
+          "visible_when": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityRule",
+                "description": "Show this element only when earlier answers match. `None` is\nunconditional. See [`VisibilityRule`]."
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -4116,6 +4216,17 @@
           },
           "required": {
             "type": "boolean"
+          },
+          "visible_when": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityRule",
+                "description": "Show this element only when earlier answers match. `None` is\nunconditional. See [`VisibilityRule`]."
+              }
+            ]
           },
           "width": {
             "$ref": "#/components/schemas/FieldWidth"
@@ -4835,6 +4946,26 @@
             "type": "string"
           }
         }
+      },
+      "VisibilityRule": {
+        "type": "object",
+        "description": "Show an element only when the visitor's earlier answers match.\n\nEvery condition names a field that appears **strictly earlier in the\nlayout** (`service::validate_layout` rejects anything else). That single\nrule subsumes unknown-key, self-reference and cycle detection, and it is\nwhat lets both evaluators — `crate::forms::visibility` here and\n`visibility.ts` in the renderer — resolve a whole form in one forward pass.\n\nRules live only in the `layout` column. A standard element's rule is dropped\nby the projection in `service::legacy_from_layout`, exactly like its\n`placeholder`/`width`; a custom field's rides along in `custom_fields`\nbecause a `Custom` element's config *is* the `CustomField` JSON. Either way\nan embed bundle cached before this existed ignores the key and keeps drawing\nevery element — see the module docs on `crate::forms::visibility` for what\nthe server does about that.",
+        "required": [
+          "conditions"
+        ],
+        "properties": {
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "description": "At least one, at most `service::MAX_CONDITIONS`."
+          },
+          "match": {
+            "$ref": "#/components/schemas/MatchMode"
+          }
+        },
+        "additionalProperties": false
       }
     }
   },

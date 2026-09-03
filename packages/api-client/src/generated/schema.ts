@@ -724,6 +724,30 @@ export interface components {
             current_password: string;
             new_password: string;
         };
+        /** @description One comparison against a controlling field's answer. */
+        Condition: {
+            /**
+             * @description Submission key of a field appearing *strictly earlier* in the layout.
+             *     Enforced by `service::validate_layout`; see [`VisibilityRule`].
+             */
+            field: string;
+            op: components["schemas"]["ConditionOp"];
+            /**
+             * @description The operand. Required for `equals`/`not_equals`/`contains`, forbidden
+             *     for the rest — see [`ConditionOp::takes_value`].
+             */
+            value?: string | null;
+        };
+        /**
+         * @description How one condition compares a controlling field's answer.
+         *
+         *     There is deliberately no `one_of`: "A or B" is a [`MatchMode::Any`] rule with
+         *     two [`ConditionOp::Equals`] conditions, which keeps `value` a plain
+         *     `Option<String>` and so keeps `deny_unknown_fields` available on
+         *     [`Condition`] (an untagged or flattened operand would forbid it).
+         * @enum {string}
+         */
+        ConditionOp: "equals" | "not_equals" | "contains" | "is_empty" | "is_not_empty" | "is_checked" | "is_not_checked";
         CustomField: components["schemas"]["CustomFieldType"] & {
             /**
              * @description Value prefilled by the renderer. Never applied server-side: a
@@ -751,6 +775,7 @@ export interface components {
              */
             position?: number;
             required?: boolean;
+            visible_when?: null | components["schemas"]["VisibilityRule"];
             /**
              * @description Fraction of the row this field occupies. Layout-only — invisible to
              *     pre-layout embed bundles, which always render full width.
@@ -760,9 +785,9 @@ export interface components {
         /**
          * @description HTML input types we expose for custom fields.
          *
-         *     `Select` carries its options on the variant so the renderer can't see a
-         *     select-typed field without options. `Checkbox` is a single boolean
-         *     checkbox (multi-select uses `Select`).
+         *     `Select` and `Radio` carry their options on the variant so the renderer
+         *     can't see an option-typed field without options. `Checkbox` is a single
+         *     boolean checkbox (multi-select uses `Select`).
          */
         CustomFieldType: {
             /** @enum {string} */
@@ -786,6 +811,10 @@ export interface components {
             options?: string[];
             /** @enum {string} */
             type: "select";
+        } | {
+            options?: string[];
+            /** @enum {string} */
+            type: "radio";
         } | {
             /** @enum {string} */
             type: "checkbox";
@@ -969,6 +998,7 @@ export interface components {
              */
             level?: number;
             text: string;
+            visible_when?: null | components["schemas"]["VisibilityRule"];
         };
         Health: {
             status: string;
@@ -995,6 +1025,11 @@ export interface components {
             token: string;
             user: components["schemas"]["UserDto"];
         };
+        /**
+         * @description Whether every condition must hold, or only one of them.
+         * @enum {string}
+         */
+        MatchMode: "all" | "any";
         /**
          * @description Session-shape response for `/auth/me`. Flat permission set is what the
          *     frontend's `usePermissions` hook consumes; `roles` provides the role
@@ -1169,6 +1204,7 @@ export interface components {
         /** @description A block of static explanatory copy between fields. */
         ParagraphElement: {
             text: string;
+            visible_when?: null | components["schemas"]["VisibilityRule"];
         };
         /** @enum {string} */
         Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "auth_config:write";
@@ -1389,6 +1425,7 @@ export interface components {
             label?: string | null;
             placeholder?: string | null;
             required?: boolean;
+            visible_when?: null | components["schemas"]["VisibilityRule"];
             width?: components["schemas"]["FieldWidth"];
         };
         /**
@@ -1648,6 +1685,28 @@ export interface components {
             /** Format: int32 */
             id: number;
             label: string;
+        };
+        /**
+         * @description Show an element only when the visitor's earlier answers match.
+         *
+         *     Every condition names a field that appears **strictly earlier in the
+         *     layout** (`service::validate_layout` rejects anything else). That single
+         *     rule subsumes unknown-key, self-reference and cycle detection, and it is
+         *     what lets both evaluators — `crate::forms::visibility` here and
+         *     `visibility.ts` in the renderer — resolve a whole form in one forward pass.
+         *
+         *     Rules live only in the `layout` column. A standard element's rule is dropped
+         *     by the projection in `service::legacy_from_layout`, exactly like its
+         *     `placeholder`/`width`; a custom field's rides along in `custom_fields`
+         *     because a `Custom` element's config *is* the `CustomField` JSON. Either way
+         *     an embed bundle cached before this existed ignores the key and keeps drawing
+         *     every element — see the module docs on `crate::forms::visibility` for what
+         *     the server does about that.
+         */
+        VisibilityRule: {
+            /** @description At least one, at most `service::MAX_CONDITIONS`. */
+            conditions: components["schemas"]["Condition"][];
+            match?: components["schemas"]["MatchMode"];
         };
     };
     responses: never;

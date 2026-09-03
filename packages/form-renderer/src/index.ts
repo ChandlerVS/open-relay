@@ -14,6 +14,13 @@ export {
   type StandardFieldKey,
 } from "./standardFields";
 export {
+  computeVisibility,
+  visibleElements,
+  canonical,
+  type Values,
+  type Visibility,
+} from "./visibility";
+export {
   resolveLayout,
   layoutFromLegacy,
   splitIntoPages,
@@ -37,4 +44,8 @@ export type {
   RedirectAction,
   ProgressIndicator,
   ProgressStyle,
+  VisibilityRule,
+  Condition,
+  ConditionOp,
+  MatchMode,
 } from "./schema";
