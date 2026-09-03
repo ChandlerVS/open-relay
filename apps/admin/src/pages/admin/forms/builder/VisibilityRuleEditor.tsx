@@ -38,18 +38,38 @@ function opsFor(candidate: ControllerCandidate | undefined) {
   return OPS.filter((o) => (o.checkboxOnly ? isCheckbox : true));
 }
 
+/**
+ * The operand half of a condition, for a given controller and operator.
+ *
+ * A choice controller (dropdown / radio) renders its operand as a `<select>` of
+ * that field's options, and a `<select>` whose `value` matches none of them
+ * *displays the first option anyway* — so carrying a value across a controller
+ * change would show "Yes" while the rule actually held `""` (or a stale option
+ * from the previous field), and the only hint would be a validation error
+ * naming a value the editor appears to have. So the operand is always re-based
+ * on the new controller's option set: kept when it is still one of them,
+ * otherwise the first option.
+ */
+function valueFor(
+  candidate: ControllerCandidate | undefined,
+  op: ConditionOp,
+  prev: string | null | undefined,
+): { value?: string } {
+  if (!opTakesValue(op)) return {};
+  const options = candidate?.options;
+  if (options?.length) {
+    return { value: prev && options.includes(prev) ? prev : options[0]! };
+  }
+  return { value: prev ?? "" };
+}
+
 /** The rule a freshly enabled toggle starts from: the first available field. */
 function defaultRule(candidates: ControllerCandidate[]): VisibilityRule {
   const first = candidates[0];
   const isCheckbox = first?.type === "checkbox";
+  const op: ConditionOp = isCheckbox ? "is_checked" : "equals";
   return {
-    conditions: [
-      {
-        field: first?.key ?? "",
-        op: isCheckbox ? "is_checked" : "equals",
-        ...(isCheckbox ? {} : { value: first?.options?.[0] ?? "" }),
-      },
-    ],
+    conditions: [{ field: first?.key ?? "", op, ...valueFor(first, op, "") }],
   };
 }
 
@@ -144,10 +164,22 @@ export function VisibilityRuleEditor({
                         setCondition(i, {
                           field: e.target.value,
                           op,
-                          ...(opTakesValue(op) ? { value: cond.value ?? "" } : {}),
+                          ...valueFor(next, op, cond.value),
                         });
                       }}
                     >
+                      {/* Same reason as the operand's placeholder below: a
+                          controller can be dragged after its dependent, and a
+                          select that silently shows a field the rule does not
+                          name would make the "has to appear earlier" error
+                          unreadable. */}
+                      {!candidates.some((c) => c.key === cond.field) && (
+                        <option value={cond.field}>
+                          {cond.field
+                            ? `${cond.field} — no longer earlier in the form`
+                            : "Choose a field…"}
+                        </option>
+                      )}
                       {candidates.map((c) => (
                         <option key={c.key} value={c.key}>
                           {c.label}
@@ -162,7 +194,7 @@ export function VisibilityRuleEditor({
                         setCondition(i, {
                           field: cond.field,
                           op,
-                          ...(opTakesValue(op) ? { value: cond.value ?? "" } : {}),
+                          ...valueFor(candidate, op, cond.value),
                         });
                       }}
                     >
@@ -184,6 +216,19 @@ export function VisibilityRuleEditor({
                             setCondition(i, { ...cond, value: e.target.value })
                           }
                         >
+                          {/* The options can move out from under a rule that
+                              was already saved — an option renamed or deleted.
+                              Without a slot to hold it the browser would show
+                              the first option while the rule still held the
+                              old one, so keep the odd value visible and say
+                              so. */}
+                          {!candidate.options.includes(cond.value ?? "") && (
+                            <option value={cond.value ?? ""}>
+                              {cond.value
+                                ? `${cond.value} — no longer an option`
+                                : "Choose a value…"}
+                            </option>
+                          )}
                           {candidate.options.map((o) => (
                             <option key={o} value={o}>
                               {o}
