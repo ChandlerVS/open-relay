@@ -4,6 +4,7 @@ import {
   CUSTOM_FIELD_TYPES,
   canBeConditional,
   elementRule,
+  fieldHasOptions,
   retypeCustomField,
   withRule,
   type BuilderElement,
@@ -22,6 +23,11 @@ export interface InspectorProps {
    * visibility rule — see `controllerCandidates`.
    */
   candidates: ControllerCandidate[];
+  /**
+   * Country fields earlier in the layout — the only legal parents for a state
+   * picker, see `countryFieldCandidates`.
+   */
+  countryCandidates: ControllerCandidate[];
   /** Elements after this one, for the rule editor's bulk apply. */
   ruleTargets: BuilderElement[];
   onApplyRuleToMany: (ids: string[], rule: VisibilityRule) => void;
@@ -87,6 +93,7 @@ export function Inspector({
   item,
   onChange,
   candidates,
+  countryCandidates,
   ruleTargets,
   onApplyRuleToMany,
 }: InspectorProps) {
@@ -159,7 +166,7 @@ export function Inspector({
           onChange={(required) => patch({ required })}
         />
         {visibility}
-        {cfg.key === "country" && (
+        {(cfg.key === "country" || cfg.key === "state") && (
           <div className="space-y-1">
             <Check
               label="Render as a dropdown"
@@ -167,8 +174,9 @@ export function Inspector({
               onChange={(v) => patch({ input_override: v ? "select" : null })}
             />
             <p className="text-xs text-muted-foreground">
-              Submits an ISO country code instead of free text, which delivers
-              more reliably to external systems.
+              {cfg.key === "country"
+                ? "Submits an ISO country code instead of free text, which delivers more reliably to external systems."
+                : "Lists the states or provinces of the chosen country. Needs the standard Country field earlier in the form, also set to a dropdown — a free-text country holds a name, not a code."}
             </p>
           </div>
         )}
@@ -220,7 +228,7 @@ export function Inspector({
             ))}
           </select>
         </Row>
-        {(cfg.type === "select" || cfg.type === "radio") && (
+        {fieldHasOptions(cfg) && (
           <Row label="Options (one per line)">
             <textarea
               className="w-full min-h-24 rounded border border-border bg-background p-2 text-sm"
@@ -241,13 +249,51 @@ export function Inspector({
             />
           </Row>
         )}
-        <Row label="Placeholder">
-          <Input
-            className="h-8 text-sm"
-            value={cfg.placeholder ?? ""}
-            onChange={(e) => patch({ placeholder: e.target.value || null })}
-          />
-        </Row>
+        {cfg.type === "state" && (
+          <div className="space-y-1">
+            <Row label="Country field">
+              <select
+                className={SELECT_CLASS}
+                value={cfg.country_field ?? ""}
+                onChange={(e) =>
+                  patch({ country_field: e.target.value || undefined } as Partial<typeof cfg>)
+                }
+              >
+                <option value="">Not linked — free text</option>
+                {/*
+                  A reference that is no longer earlier in the form still has to
+                  be shown, or the picker would silently read as "not linked"
+                  while the saved value still points at it.
+                */}
+                {cfg.country_field &&
+                  !countryCandidates.some((c) => c.key === cfg.country_field) && (
+                    <option value={cfg.country_field}>
+                      {cfg.country_field} — no longer earlier in the form
+                    </option>
+                  )}
+                {countryCandidates.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </Row>
+            <p className="text-xs text-muted-foreground">
+              Lists the states or provinces of whichever country is chosen
+              there, and submits the ISO code. The country has to come earlier
+              in the form. Unlinked, this is a plain text box.
+            </p>
+          </div>
+        )}
+        {cfg.type !== "country" && cfg.type !== "state" && (
+          <Row label="Placeholder">
+            <Input
+              className="h-8 text-sm"
+              value={cfg.placeholder ?? ""}
+              onChange={(e) => patch({ placeholder: e.target.value || null })}
+            />
+          </Row>
+        )}
         <Row label="Help text">
           <Input
             className="h-8 text-sm"
@@ -255,7 +301,12 @@ export function Inspector({
             onChange={(e) => patch({ help_text: e.target.value || null })}
           />
         </Row>
-        {cfg.type !== "checkbox" && (
+        {/*
+          A default country code is genuinely useful; a default subdivision is
+          not, since the list it belongs to depends on an answer nobody has
+          given yet.
+        */}
+        {cfg.type !== "checkbox" && cfg.type !== "state" && (
           <Row label="Default value">
             <Input
               className="h-8 text-sm"

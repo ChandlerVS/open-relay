@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { COUNTRIES, STANDARD_FIELDS } from "./standardFields";
-import { resolveLayout, splitIntoPages } from "./layout";
+import { STANDARD_FIELDS } from "./standardFields";
+import { COUNTRIES, subdivisionsFor, type RegionOption } from "./regions";
+import { resolveLayout, splitIntoPages, stateBindings } from "./layout";
 import { computeVisibility, visibleElements } from "./visibility";
 import type {
   CustomField,
@@ -165,13 +166,21 @@ export function Form({
     setValues((v) => ({ ...defaultValues, ...v }));
   }, [defaultValues]);
 
-  // Resolved against defaults *merged in*, not raw state: the prefill above is
-  // an effect, so on the first committed frame `values` is still empty and a
-  // controller with a `default_value` would read as unanswered — flashing its
-  // dependents into view one frame later.
+  // Defaults merged in, not raw state: the prefill above is an effect, so on
+  // the first committed frame `values` is still empty and a controller with a
+  // `default_value` would read as unanswered — flashing its dependents into
+  // view one frame later. Every read that asks "what does that other field
+  // say?" goes through this, which is both rules and the state pickers'
+  // country lookup: a country with a default would otherwise draw its state as
+  // a text box for one frame before swapping to a dropdown.
+  const resolved = useMemo(
+    () => ({ ...defaultValues, ...values }),
+    [defaultValues, values],
+  );
+
   const { visible, hiddenKeys } = useMemo(
-    () => computeVisibility(layout, { ...defaultValues, ...values }),
-    [layout, defaultValues, values],
+    () => computeVisibility(layout, resolved),
+    [layout, resolved],
   );
 
   // What to do once a submission lands. A server too old to know the field, or
@@ -249,8 +258,17 @@ export function Form({
     );
   }
 
+  // Layout-derived, so neither lookup costs anything per keystroke.
+  const bindings = useMemo(() => stateBindings(layout), [layout]);
+
   const set = (key: string, val: string | boolean) =>
-    setValues((v) => ({ ...v, [key]: val }));
+    setValues((v) => {
+      const next = { ...v, [key]: val };
+      // See `stateBindings`: a stale subdivision under a new country is a
+      // pairing the server rejects, and the field would look answered.
+      for (const dependent of bindings.byCountry.get(key) ?? []) next[dependent] = "";
+      return next;
+    });
 
   const page = pages[safePageIndex];
   // Steps that currently have something on them. A page whose every element is
@@ -374,6 +392,10 @@ export function Form({
               element={el}
               scope={schema.id}
               values={values}
+              resolved={resolved}
+              bindings={bindings}
+              hiddenKeys={hiddenKeys}
+              regions={schema.regions}
               onChange={set}
             />
           ))}
@@ -537,15 +559,43 @@ function elementKey(el: FormElement, index: number): string {
   return `${el.element}-${index}`;
 }
 
+/**
+ * The country code a subdivision picker should list against.
+ *
+ * A hidden controller reads as unset, exactly as it does in `visibility.ts` —
+ * and this agrees with the server, where a hidden field's answer is dropped
+ * before the subdivision is ever checked. Without that, hiding a country would
+ * leave its state picker showing a list for an answer nobody is sending.
+ */
+function resolveCountry(
+  key: string | null | undefined,
+  values: Record<string, string | boolean>,
+  hiddenKeys: ReadonlySet<string>,
+): string | undefined {
+  if (!key || hiddenKeys.has(key)) return undefined;
+  const raw = values[key];
+  return typeof raw === "string" && raw ? raw : undefined;
+}
+
 function LayoutElement({
   element,
   scope,
   values,
+  resolved,
+  bindings,
+  hiddenKeys,
+  regions,
   onChange,
 }: {
   element: FormElement;
   scope: number;
+  /** Raw state — what each control displays. */
   values: Record<string, string | boolean>;
+  /** State with defaults merged in — what one field reads *about another*. */
+  resolved: Record<string, string | boolean>;
+  bindings: ReturnType<typeof stateBindings>;
+  hiddenKeys: ReadonlySet<string>;
+  regions: string | null | undefined;
   onChange: (key: string, value: string | boolean) => void;
 }) {
   switch (element.element) {
@@ -556,6 +606,10 @@ function LayoutElement({
           value={values[element.config.key]}
           onChange={(v) => onChange(element.config.key, v)}
           scope={scope}
+          subdivisions={subdivisionsFor(
+            regions,
+            resolveCountry(bindings.byState.get(element.config.key), resolved, hiddenKeys),
+          )}
         />
       );
     case "custom":
@@ -565,6 +619,10 @@ function LayoutElement({
           value={values[element.config.key]}
           onChange={(v) => onChange(element.config.key, v)}
           scope={scope}
+          subdivisions={subdivisionsFor(
+            regions,
+            resolveCountry(bindings.byState.get(element.config.key), resolved, hiddenKeys),
+          )}
         />
       );
     case "heading": {
@@ -586,11 +644,14 @@ function StandardFieldInput({
   value,
   onChange,
   scope,
+  subdivisions,
 }: {
   field: StandardElement;
   value: string | boolean | undefined;
   onChange: (next: string) => void;
   scope: number;
+  /** Set for a `state` field whose country is chosen and has subdivisions. */
+  subdivisions?: readonly RegionOption[] | undefined;
 }) {
   const def = STANDARD_FIELDS.find((d) => d.key === field.key);
   if (!def) return null;
@@ -599,6 +660,12 @@ function StandardFieldInput({
   const required = field.required ?? false;
   const label = (field.label && field.label.trim()) || def.default_label;
   const asSelect = field.key === "country" && field.input_override === "select";
+  // A state dropdown falls back to text whenever there is no list to draw:
+  // country unanswered, country hidden, a country with no ISO subdivisions, or
+  // a server too old to send the table. The server accepts free text in every
+  // one of those cases, so the fallback can't produce a value it would reject.
+  const stateOptions =
+    field.key === "state" && field.input_override === "select" ? subdivisions : undefined;
 
   const common = {
     id,
@@ -633,6 +700,19 @@ function StandardFieldInput({
             </option>
           ))}
         </select>
+      ) : stateOptions ? (
+        // Submits the bare ISO 3166-2 subdivision code, which the GoHighLevel
+        // backend forwards verbatim — `CA`, the form CRMs expect.
+        <select {...common}>
+          <option value="" disabled>
+            Choose…
+          </option>
+          {stateOptions.map((r) => (
+            <option key={r.code} value={r.code}>
+              {r.name}
+            </option>
+          ))}
+        </select>
       ) : def.input_type === "textarea" ? (
         <textarea {...common} rows={4} />
       ) : (
@@ -652,11 +732,14 @@ function CustomFieldInput({
   value,
   onChange,
   scope,
+  subdivisions,
 }: {
   field: CustomField;
   value: string | boolean | undefined;
   onChange: (next: string | boolean) => void;
   scope: number;
+  /** Set for a `state` field whose country is chosen and has subdivisions. */
+  subdivisions?: readonly RegionOption[] | undefined;
 }) {
   const id = `or-${scope}-${field.key}`;
   const required = field.required ?? false;
@@ -727,28 +810,77 @@ function CustomFieldInput({
     ) => onChange(e.target.value),
   };
 
+  const choices = (options: readonly RegionOption[] | readonly string[]) => (
+    <select {...inputProps}>
+      <option value="" disabled>
+        Choose…
+      </option>
+      {options.map((o) =>
+        typeof o === "string" ? (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ) : (
+          <option key={o.code} value={o.code}>
+            {o.name}
+          </option>
+        ),
+      )}
+    </select>
+  );
+
+  // A switch rather than a ternary chain so the `never` below is reachable:
+  // without it a new variant on the `CustomField` union silently renders
+  // `<input type="whatever">`, which is how `country` and `state` would have
+  // failed — quietly, and only in a visitor's browser.
+  let control: React.ReactNode;
+  switch (field.type) {
+    case "textarea":
+      control = <textarea {...inputProps} rows={4} />;
+      break;
+    case "select":
+      control = choices(field.options);
+      break;
+    case "country":
+      // Submits the ISO alpha-2 code. The list is in the bundle; only the
+      // subdivision table has to come from the server.
+      control = choices(COUNTRIES);
+      break;
+    case "state":
+      // Falls back to text whenever there is no list to draw: country
+      // unanswered, country hidden, a country with no ISO subdivisions, an
+      // unbound field, or a server too old to send the table. The server
+      // accepts free text in every one of those cases, so this can't produce a
+      // value it would reject.
+      control = subdivisions ? (
+        choices(subdivisions)
+      ) : (
+        <input type="text" autoComplete="address-level1" {...inputProps} />
+      );
+      break;
+    case "text":
+    case "email":
+    case "number":
+    case "tel":
+    case "url":
+      // The type is the HTML input type, which is why these need no branch of
+      // their own.
+      control = <input type={field.type} {...inputProps} />;
+      break;
+    default: {
+      const unhandled: never = field;
+      void unhandled;
+      control = null;
+    }
+  }
+
   return (
     <div className={fieldClass(field.width)}>
       <label htmlFor={id} className="or-field__label">
         {field.label}
         {required && <span className="or-field__required"> *</span>}
       </label>
-      {field.type === "textarea" ? (
-        <textarea {...inputProps} rows={4} />
-      ) : field.type === "select" ? (
-        <select {...inputProps}>
-          <option value="" disabled>
-            Choose…
-          </option>
-          {field.options.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <input type={field.type} {...inputProps} />
-      )}
+      {control}
       {field.help_text && <p className="or-field__help">{field.help_text}</p>}
     </div>
   );

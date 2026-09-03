@@ -23,7 +23,7 @@ use super::{
 use crate::error::{CoreError, CoreResult};
 use crate::forms::{
     BackendBinding, CustomField, CustomFieldType, STANDARD_FIELD_KEYS, StandardFieldsConfig,
-    service as forms_service, visibility,
+    regions, service as forms_service, visibility,
 };
 use crate::metadata::{MetadataKey, service as metadata_service};
 use crate::reps::service as reps_service;
@@ -141,7 +141,12 @@ fn validate_and_split(
         if hidden.contains(&f.key) {
             continue;
         }
-        let value = coerce_custom(f, raw)?;
+        // `custom_out` already holds every earlier field's coerced answer,
+        // which is what a state picker needs to know its country. That is
+        // sound with no second pass: `country_field` must name a field
+        // strictly earlier in the layout, and `custom_fields` is in layout
+        // order, so the country is always coerced first.
+        let value = coerce_custom(f, raw, &custom_out)?;
         if value.is_null() && f.required {
             return Err(CoreError::BadRequest(format!(
                 "required custom field '{}' missing",
@@ -164,7 +169,16 @@ fn validate_and_split(
     Ok((standard, JsonValue::Object(custom_out)))
 }
 
-fn coerce_custom(field: &CustomField, raw: Option<JsonValue>) -> CoreResult<JsonValue> {
+/// Coerce one custom answer to its stored form.
+///
+/// `earlier` holds the coerced answers of every custom field ahead of this one
+/// in the layout — only [`CustomFieldType::State`] reads it, to find the
+/// country its subdivision must belong to.
+fn coerce_custom(
+    field: &CustomField,
+    raw: Option<JsonValue>,
+    earlier: &JsonMap<String, JsonValue>,
+) -> CoreResult<JsonValue> {
     let raw = match raw {
         Some(JsonValue::Null) | None => return Ok(JsonValue::Null),
         Some(v) => v,
@@ -259,6 +273,84 @@ fn coerce_custom(field: &CustomField, raw: Option<JsonValue>) -> CoreResult<Json
                 json_kind(&other)
             ))),
         },
+        CustomFieldType::Country => match raw {
+            JsonValue::String(s) => {
+                let code = s.trim().to_ascii_uppercase();
+                if code.is_empty() {
+                    Ok(JsonValue::Null)
+                } else if regions::is_country_code(&code) {
+                    Ok(JsonValue::String(code))
+                } else {
+                    Err(CoreError::BadRequest(format!(
+                        "custom field '{}' value '{code}' is not an ISO 3166-1 country code",
+                        field.key
+                    )))
+                }
+            }
+            other => Err(CoreError::BadRequest(format!(
+                "custom field '{}' must be a string, got {}",
+                field.key,
+                json_kind(&other)
+            ))),
+        },
+        CustomFieldType::State { country_field } => match raw {
+            JsonValue::String(s) => {
+                let code = s.trim().to_ascii_uppercase();
+                if code.is_empty() {
+                    return Ok(JsonValue::Null);
+                }
+                // Unbound renders free text, so accept free text — this is the
+                // shape a legacy repair leaves behind, and it is exactly what
+                // the standard `state` field has always accepted.
+                let Some(parent) = country_field else {
+                    return capped_text(field, &s);
+                };
+                // A country that is unanswered *or hidden* reads as unset:
+                // hidden keys are dropped before they ever reach this loop, so
+                // the two cases converge here the same way they do in the
+                // renderer, which draws no options in either.
+                let country = earlier.get(parent.as_str()).and_then(JsonValue::as_str);
+                let Some(country) = country.filter(|c| !c.is_empty()) else {
+                    return Err(CoreError::BadRequest(format!(
+                        "custom field '{}' has a value but '{parent}' has no country selected",
+                        field.key
+                    )));
+                };
+                match regions::subdivisions(country) {
+                    // 49 of the 249 countries have no subdivisions at all; the
+                    // renderer draws a text box for those, so accept one.
+                    None => capped_text(field, &s),
+                    Some(_) if regions::is_subdivision_of(country, &code) => {
+                        Ok(JsonValue::String(code))
+                    }
+                    Some(_) => Err(CoreError::BadRequest(format!(
+                        "custom field '{}' value '{code}' is not a subdivision of {country}",
+                        field.key
+                    ))),
+                }
+            }
+            other => Err(CoreError::BadRequest(format!(
+                "custom field '{}' must be a string, got {}",
+                field.key,
+                json_kind(&other)
+            ))),
+        },
+    }
+}
+
+/// Trim-and-cap a free-text answer, the fallback shape a state picker takes
+/// when it has no subdivision list to check against.
+fn capped_text(field: &CustomField, raw: &str) -> CoreResult<JsonValue> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        Ok(JsonValue::Null)
+    } else if trimmed.chars().count() > MAX_STANDARD_FIELD_LEN {
+        Err(CoreError::BadRequest(format!(
+            "custom field '{}' exceeds {MAX_STANDARD_FIELD_LEN} characters",
+            field.key
+        )))
+    } else {
+        Ok(JsonValue::String(trimmed.to_string()))
     }
 }
 
@@ -778,6 +870,25 @@ mod tests {
         CustomField, CustomFieldType, StandardFieldConfig, StandardFieldsConfig,
     };
 
+    /// Coerce one answer with no earlier fields in scope.
+    fn coerce(field: &CustomField, raw: &str) -> CoreResult<JsonValue> {
+        coerce_custom(field, Some(JsonValue::String(raw.into())), &JsonMap::new())
+    }
+
+    /// Coerce one answer with `earlier` standing in for the fields ahead of it
+    /// — how a state picker sees its country.
+    fn coerce_after(
+        field: &CustomField,
+        raw: &str,
+        earlier: &[(&str, &str)],
+    ) -> CoreResult<JsonValue> {
+        let mut map = JsonMap::new();
+        for (k, v) in earlier {
+            map.insert((*k).to_string(), JsonValue::String((*v).to_string()));
+        }
+        coerce_custom(field, Some(JsonValue::String(raw.into())), &map)
+    }
+
     #[test]
     fn honeypot_detection() {
         let trip = |v: serde_json::Value| {
@@ -1098,10 +1209,171 @@ mod tests {
             visible_when: None,
         };
         assert_eq!(
-            coerce_custom(&field, Some(JsonValue::String(" No ".into()))).unwrap(),
+            coerce(&field, " No ").unwrap(),
             JsonValue::String("No".into())
         );
-        assert!(coerce_custom(&field, Some(JsonValue::String("Maybe".into()))).is_err());
+        assert!(coerce(&field, "Maybe").is_err());
     }
 
+    // ---- country / state pickers -----------------------------------------
+
+    fn region_field(key: &str, kind: CustomFieldType) -> CustomField {
+        CustomField {
+            key: key.into(),
+            label: key.into(),
+            kind,
+            required: false,
+            placeholder: None,
+            help_text: None,
+            position: 0,
+            width: crate::forms::FieldWidth::Full,
+            default_value: None,
+            visible_when: None,
+        }
+    }
+
+    fn state_field(parent: Option<&str>) -> CustomField {
+        region_field(
+            "state",
+            CustomFieldType::State { country_field: parent.map(str::to_string) },
+        )
+    }
+
+    #[test]
+    fn coerces_a_country_to_its_alpha2_code() {
+        let f = region_field("country", CustomFieldType::Country);
+        assert_eq!(coerce(&f, "US").unwrap(), JsonValue::String("US".into()));
+        assert_eq!(
+            coerce(&f, " nz ").unwrap(),
+            JsonValue::String("NZ".into()),
+            "trimmed and upper-cased into the canonical stored form"
+        );
+        assert_eq!(coerce(&f, "  ").unwrap(), JsonValue::Null);
+        assert!(coerce(&f, "XX").is_err());
+        assert!(
+            coerce(&f, "United States").is_err(),
+            "the picker submits a code, never a name"
+        );
+    }
+
+    #[test]
+    fn coerces_a_subdivision_against_its_country() {
+        let f = state_field(Some("country"));
+        assert_eq!(
+            coerce_after(&f, "ca", &[("country", "US")]).unwrap(),
+            JsonValue::String("CA".into()),
+            "the bare subdivision code, not US-CA"
+        );
+        assert!(
+            coerce_after(&f, "TX", &[("country", "CA")]).is_err(),
+            "Texas is not a Canadian province"
+        );
+        assert!(coerce_after(&f, "ZZ", &[("country", "US")]).is_err());
+        assert_eq!(coerce_after(&f, "", &[("country", "US")]).unwrap(), JsonValue::Null);
+    }
+
+    #[test]
+    fn a_subdivision_needs_its_country_answered() {
+        let f = state_field(Some("country"));
+        // Unanswered and hidden converge here: a hidden country never reaches
+        // `custom_out`, so both read as unset — and the renderer draws no
+        // options in either case.
+        assert!(coerce_after(&f, "CA", &[]).is_err());
+        assert!(coerce_after(&f, "CA", &[("country", "")]).is_err());
+        assert_eq!(
+            coerce_after(&f, "", &[]).unwrap(),
+            JsonValue::Null,
+            "an empty answer is still just absent"
+        );
+    }
+
+    #[test]
+    fn a_country_without_subdivisions_takes_free_text() {
+        // Hong Kong has no ISO 3166-2 entries, so the renderer draws a text box.
+        let f = state_field(Some("country"));
+        assert_eq!(
+            coerce_after(&f, " Kowloon ", &[("country", "HK")]).unwrap(),
+            JsonValue::String("Kowloon".into())
+        );
+    }
+
+    #[test]
+    fn an_unbound_state_takes_free_text() {
+        // The shape a legacy repair leaves behind — and what the standard
+        // `state` field has always accepted.
+        let f = state_field(None);
+        assert_eq!(
+            coerce(&f, " Wherever ").unwrap(),
+            JsonValue::String("Wherever".into())
+        );
+        assert!(coerce(&f, &"x".repeat(MAX_STANDARD_FIELD_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn a_state_resolves_against_the_country_answered_ahead_of_it() {
+        // The whole pipeline, in layout order, with two independent pairs.
+        let fields = vec![
+            region_field("billing_country", CustomFieldType::Country),
+            region_field(
+                "billing_state",
+                CustomFieldType::State { country_field: Some("billing_country".into()) },
+            ),
+            region_field("shipping_country", CustomFieldType::Country),
+            region_field(
+                "shipping_state",
+                CustomFieldType::State { country_field: Some("shipping_country".into()) },
+            ),
+        ];
+        let payload = NewSubmissionPayload(
+            [
+                ("billing_country".to_string(), JsonValue::String("US".into())),
+                ("billing_state".to_string(), JsonValue::String("CA".into())),
+                ("shipping_country".to_string(), JsonValue::String("CA".into())),
+                ("shipping_state".to_string(), JsonValue::String("BC".into())),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let (_, custom) = validate_and_split(
+            payload,
+            &StandardFieldsConfig::all_disabled(),
+            &fields,
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert_eq!(custom["billing_state"], JsonValue::String("CA".into()));
+        assert_eq!(custom["shipping_state"], JsonValue::String("BC".into()));
+    }
+
+    #[test]
+    fn a_hidden_country_takes_its_state_down_with_it() {
+        // Note the keys: a custom field may never be named `country` or
+        // `state`, because `validate_custom_fields` reserves every standard key.
+        let fields = vec![
+            region_field("ship_country", CustomFieldType::Country),
+            region_field(
+                "ship_state",
+                CustomFieldType::State { country_field: Some("ship_country".into()) },
+            ),
+        ];
+        let payload = NewSubmissionPayload(
+            [
+                ("ship_country".to_string(), JsonValue::String("US".into())),
+                ("ship_state".to_string(), JsonValue::String("CA".into())),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        // The country is hidden, so it is dropped before coercion — which
+        // leaves the state with nothing to validate against.
+        let hidden: HashSet<String> = ["ship_country".to_string()].into_iter().collect();
+        let err = validate_and_split(
+            payload,
+            &StandardFieldsConfig::all_disabled(),
+            &fields,
+            &hidden,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::BadRequest(_)));
+    }
 }

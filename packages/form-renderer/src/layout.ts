@@ -80,3 +80,59 @@ export function pageFieldKeys(page: FormPage): string[] {
     )
     .filter((k): k is string => k !== null);
 }
+
+/**
+ * How each subdivision picker is bound to a country field, both ways round.
+ *
+ * One function so the two uses can't disagree. `byState` answers "which
+ * country's list do I draw?"; `byCountry` answers "which answers do I clear
+ * when this country changes?" — because a subdivision code only means anything
+ * under its own country, and a visitor who picks `US` / `CA` then switches to
+ * `FR` would otherwise submit California under France. The server rejects that
+ * pairing, so without the clearing they'd find out at submit time, on a field
+ * that looks answered.
+ *
+ * Mirrors what `service::validate_layout` will accept, which is why both ends
+ * are checked:
+ *
+ * - a custom `state` names its country explicitly, and unbound is legal (it
+ *   renders free text);
+ * - the standard pair is a singleton each, so its binding is implicit — but
+ *   only when *both* are dropdowns, since a free-text country holds a name
+ *   rather than a code.
+ *
+ * A binding this function omits is one the server would refuse to save, so the
+ * builder preview can't show a working dropdown for a form that won't save.
+ */
+export function stateBindings(layout: FormElement[]): {
+  byCountry: Map<string, string[]>;
+  byState: Map<string, string>;
+} {
+  const byCountry = new Map<string, string[]>();
+  const byState = new Map<string, string>();
+  const standardCountryIsSelect = layout.some(
+    (el) =>
+      el.element === "standard" &&
+      el.config.key === "country" &&
+      el.config.input_override === "select",
+  );
+  const bind = (country: string, state: string) => {
+    byState.set(state, country);
+    const list = byCountry.get(country);
+    if (list) list.push(state);
+    else byCountry.set(country, [state]);
+  };
+  for (const el of layout) {
+    if (el.element === "custom" && el.config.type === "state") {
+      if (el.config.country_field) bind(el.config.country_field, el.config.key);
+    } else if (
+      el.element === "standard" &&
+      el.config.key === "state" &&
+      el.config.input_override === "select" &&
+      standardCountryIsSelect
+    ) {
+      bind("country", "state");
+    }
+  }
+  return { byCountry, byState };
+}

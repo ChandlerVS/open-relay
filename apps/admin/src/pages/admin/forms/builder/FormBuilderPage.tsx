@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
-import { ShadowForm, type PublicFormDto } from "@open-relay/form-renderer";
+import {
+  PACKED_SUBDIVISIONS,
+  ShadowForm,
+  type PublicFormDto,
+} from "@open-relay/form-renderer";
 import {
   Alert,
   AlertDescription,
@@ -22,8 +26,12 @@ import { Palette } from "./Palette";
 import { validateLayout } from "./validate";
 import {
   controllerCandidates,
+  countryFieldCandidates,
   elementKey,
+  isCountryField,
   newCustomElement,
+  renameCountryReferences,
+  stripCountryReferences,
   newDecorationElement,
   newId,
   newStandardElement,
@@ -89,6 +97,14 @@ export function FormBuilderPage() {
       const to = elementKey(element);
       if (from && to !== null && from !== to) {
         next = renameRuleReferences(next, from, to);
+        // A state picker names its country by key too, so it dangles the same
+        // way a rule does.
+        next = renameCountryReferences(next, from, to);
+      }
+      // Retyping a country field to something else strands every state picker
+      // that named it, exactly as deleting it would.
+      if (from && current && isCountryField(current.element) && !isCountryField(element)) {
+        next = stripCountryReferences(next, from);
       }
       return next;
     });
@@ -114,7 +130,10 @@ export function FormBuilderPage() {
       const key = before.find((i) => i.id === rid)?.element ?? null;
       const dropped = before.filter((i) => i.id !== rid);
       const referenced = key ? elementKey(key) : null;
-      return referenced ? stripRuleReferences(dropped, referenced) : dropped;
+      if (!referenced) return dropped;
+      // Unbind any state picker it was driving too — the same repair the
+      // server applies on a legacy write.
+      return stripCountryReferences(stripRuleReferences(dropped, referenced), referenced);
     });
     if (rid === selectedId) setSelectedId(null);
     setSavedAt(null);
@@ -154,6 +173,10 @@ export function FormBuilderPage() {
       // compatibility — omitting it here compiles fine and silently previews
       // the default bar instead of the form's real setting.
       progress_indicator: form.progress_indicator,
+      // The server sends this only to forms that need it, to keep the embed
+      // script small. The admin has no such budget and the layout here is
+      // unsaved anyway, so just always hand the preview the whole table.
+      regions: PACKED_SUBDIVISIONS,
     };
   }, [form, items]);
 
@@ -240,7 +263,7 @@ export function FormBuilderPage() {
               usedStandard={usedStandardKeys(items)}
               onAddStandard={(key) => append(newStandardElement(key))}
               onAddCustom={(type: CustomTypeName) =>
-                append(newCustomElement(type, items.length))
+                append(newCustomElement(type, items.length, items))
               }
               onAddDecoration={(kind) => append(newDecorationElement(kind))}
             />
@@ -275,6 +298,7 @@ export function FormBuilderPage() {
                 item={selected}
                 onChange={patchSelected}
                 candidates={controllerCandidates(items, selectedIndex)}
+                countryCandidates={countryFieldCandidates(items, selectedIndex)}
                 ruleTargets={items.slice(selectedIndex + 1)}
                 onApplyRuleToMany={applyRuleToMany}
               />

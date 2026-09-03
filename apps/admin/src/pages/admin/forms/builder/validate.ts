@@ -1,5 +1,10 @@
 import { STANDARD_FIELDS } from "@open-relay/form-renderer";
-import { elementRule, type BuilderElement, type VisibilityRule } from "./model";
+import {
+  elementRule,
+  isCountryField,
+  type BuilderElement,
+  type VisibilityRule,
+} from "./model";
 
 /** Errors keyed by BuilderElement.id, so they survive a reorder. */
 export type LayoutErrors = Record<string, string>;
@@ -62,12 +67,18 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
   // Field keys passed so far → is it a checkbox. Standard fields feed this too,
   // even though they return early below, because a rule may depend on one.
   const seenFields = new Map<string, boolean>();
+  // Country-valued keys passed so far — the only legal parents for a state
+  // picker. Mirrors the `is_country` half of the server's `SeenField`.
+  const seenCountries = new Set<string>();
 
   const record = (item: BuilderElement) => {
     const el = item.element;
     if (el.element === "standard") seenFields.set(el.config.key, false);
     if (el.element === "custom" && el.config.key.trim()) {
       seenFields.set(el.config.key, el.config.type === "checkbox");
+    }
+    if (isCountryField(el)) {
+      seenCountries.add(el.element === "custom" ? el.config.key : "country");
     }
   };
 
@@ -85,6 +96,13 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
     if (el.element === "standard") {
       if (seenStandard.has(el.config.key)) {
         errors[item.id] = "This standard field is already on the form.";
+      } else if (
+        el.config.key === "state" &&
+        el.config.input_override === "select" &&
+        !seenCountries.has("country")
+      ) {
+        errors[item.id] =
+          "The state dropdown needs the Country field earlier in the form, also set to a dropdown.";
       }
       seenStandard.add(el.config.key);
       record(item);
@@ -123,6 +141,16 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
           el.config.type === "radio"
             ? "A radio group needs at least one option."
             : "A dropdown needs at least one option.";
+      } else if (el.config.type === "state" && el.config.country_field) {
+        // Unbound is fine — that is the free-text fallback. A reference that
+        // names nothing earlier, or names something that isn't a country, is
+        // what the server rejects.
+        const parent = el.config.country_field;
+        if (!seenFields.has(parent)) {
+          errors[item.id] = `"${parent}" has to appear earlier in the form to drive this.`;
+        } else if (!seenCountries.has(parent)) {
+          errors[item.id] = `"${parent}" is not a country field.`;
+        }
       }
       if (key && !seenKeys.has(key)) seenKeys.set(key, item.id);
       record(item);

@@ -37,6 +37,8 @@ cargo run -p open-relay-server
 # Frontend
 pnpm install
 pnpm gen:api           # snapshots openapi.json → packages/api-client (server MUST be running)
+pnpm gen:regions       # regenerates the ISO 3166 catalogues from data/iso-codes (offline)
+pnpm gen:regions:check # asserts the checked-in catalogues are current
 pnpm dev               # turbo: admin dev server + embed-sdk watch build
 pnpm build             # turbo build, respects ^build ordering
 pnpm typecheck         # turbo typecheck across all TS packages
@@ -270,6 +272,108 @@ the legacy-repair behaviour, `#[ignore]`d like the others:
 ```bash
 DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test conditional_fields -- --ignored
+```
+
+### Country & state pickers: the catalogue is generated, the reference points *backwards*
+
+Two custom field types — `country` (ISO 3166-1 alpha-2) and `state` (ISO 3166-2)
+— let one form carry several address blocks. They exist as **custom** types
+precisely because the standard `country`/`state` fields are singletons
+(`declare_standard_fields!` makes one struct field each), so a billing *and* a
+shipping pair is impossible with those. The standard pair also gained a select
+variant (`input_override: "select"` now applies to `state`, not just `country`),
+which covers the single-address case.
+
+Five things aren't obvious from the code:
+
+1. **The catalogue is generated into two checked-in files, not hand-written
+   twice.** `scripts/gen-regions.mjs` reads the vendored Debian `iso-codes`
+   data in `data/iso-codes/` and emits both
+   `crates/core/src/forms/regions.json` (via `include_str!`) and
+   `packages/form-renderer/src/regions.data.ts`. This is deliberately *not*
+   the `visibility.rs` / `visibility.ts` situation: there are two copies, but
+   one generator, so drift is a generator bug rather than a transcription one.
+   `pnpm gen:regions:check` re-runs it and asserts `git diff --exit-code`.
+   Output is checked in so neither `cargo build` nor the embed build needs
+   node or the network.
+
+2. **Only *top-level* subdivisions ship.** ISO 3166-2 entries carrying a
+   `parent` are the nested tier — the UK's 200-odd districts under England /
+   Scotland / Wales / NI, France's departments under its regions — and a
+   "state / province" picker wants the top one. 3,590 rows rather than 5,046.
+   One consequence to know: Ireland's top level is its four provinces, not its
+   counties.
+
+3. **The subdivision table rides on the form response, not the bundle.**
+   Packed, it is ~40 KB gzipped against an embed script of 63 KB, and most
+   forms have no state field — compiling it in would tax every host page for a
+   table almost none of them use. So `PublicFormDto.regions` carries it, and
+   only when `needs_subdivisions(&layout)` says the form has a field that
+   draws one. The country list *is* in the bundle (~2 KB gzipped): the country
+   picker is the entry point and must render synchronously. Net effect on
+   `open-relay.js`: 63.2 → 65.6 KB gzipped, and `PACKED_SUBDIVISIONS` tree-shakes
+   out of it entirely. The admin preview imports the table directly, having no
+   such budget.
+
+4. **`country_field` points strictly backwards, and that one rule does three
+   jobs** — exactly like `visible_when`. `validate_layout` carries a single
+   `SeenField { is_checkbox, is_country }` map through one forward pass, so
+   unknown keys, self-references and cycles all fall out of the same check, and
+   both evaluators resolve a whole form without a fixpoint loop. A state picker
+   may name a `Country` custom field, or the standard `country` element **when
+   it is a select** — a plain-text country holds a *name*, not a code. Note
+   `CustomFieldType::options()` deliberately returns `None` for both new
+   variants even though they render dropdowns: their choices aren't
+   author-declared, and reporting them would make the "offers a choice but has
+   no options" rule nonsense and hand the admin's rule editor a 3,590-entry
+   operand dropdown.
+
+5. **Legacy writes repair rather than reject, and unbound means free text.**
+   `strip_dangling_country_refs` runs beside `strip_dangling_rules` on the two
+   legacy write paths only. A legacy client can disable the standard `country`
+   field or reorder a country picker behind its dependent, stranding a
+   reference it has no vocabulary for; 400ing over that would be unactionable.
+   So the state field becomes unbound — which renders and validates as free
+   text, exactly what the standard `state` field has always done. The same
+   fallback covers a country with no ISO subdivisions (49 of 249) and a bundle
+   whose server never sent a table, so the renderer and `coerce_custom` agree
+   on every one of those cases.
+
+A subdivision is stored as the **bare** code (`CA`), not the full ISO 3166-2
+code (`US-CA`): the country is captured by the sibling field, and
+`backend::gohighlevel` forwards `state` verbatim, so `CA` is what reaches the
+CRM. `coerce_custom` gets the country from the answers already coerced ahead of
+it — sound with no second pass, because `country_field` must be earlier and
+`custom_fields` is in layout order. A country that is unanswered **or hidden**
+reads the same way (a hidden field's answer is dropped before coercion), so a
+non-empty state with no country is a 400 on both sides.
+
+Deliberate non-change: the *standard* `state`/`country` fields get no
+server-side membership validation. `input_override` is layout-only and is
+dropped by `legacy_from_layout`, so gating on it would 400 a legacy author over
+something they cannot see — and the existing standard country select already
+worked this way. For standard fields the select is presentation only.
+
+`stateBindings` (`layout.ts`) is the renderer's single source of truth for the
+binding, both directions: which country's list a state draws, and which states
+to clear when a country changes — so `CA` can never be submitted under `FR`, a
+pairing the server rejects on a field that would look answered. It mirrors what
+`validate_layout` accepts, including the standard pair needing *both* halves to
+be dropdowns, so the builder preview can't show a working dropdown for a form
+that won't save.
+Country lookups read the **defaults-merged** value map, not raw state, for the
+same reason the visibility memo does: the prefill is an effect, so a country
+with a `default_value` would otherwise draw its state as a text box for one
+frame. `CustomFieldInput` now ends in a `never` exhaustiveness guard — the
+fallback `<input type={field.type}>` used to swallow an unknown variant
+silently.
+
+`crates/core/tests/region_fields.rs` guards the round trip, the cross-field
+coercion and the legacy repair, `#[ignore]`d like the others:
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test region_fields -- --ignored
 ```
 
 ### Backend delivery is a registry of trait objects

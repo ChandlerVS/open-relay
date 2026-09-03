@@ -231,7 +231,9 @@ export function VisibilityRuleEditor({
                           )}
                           {candidate.options.map((o) => (
                             <option key={o} value={o}>
-                              {o}
+                              {/* A country's stored value is its ISO code; show
+                                  the name so the rule reads as English. */}
+                              {candidate.optionLabels?.[o] ?? o}
                             </option>
                           ))}
                         </select>

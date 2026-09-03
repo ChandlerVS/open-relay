@@ -788,6 +788,11 @@ export interface components {
          *     `Select` and `Radio` carry their options on the variant so the renderer
          *     can't see an option-typed field without options. `Checkbox` is a single
          *     boolean checkbox (multi-select uses `Select`).
+         *
+         *     `Country` and `State` are option-valued too, but their choices come from
+         *     the ISO catalogue in [`super::regions`] rather than from the author, which
+         *     is the whole point of them — see [`CustomFieldType::options`] for why they
+         *     deliberately do *not* report those choices as `options`.
          */
         CustomFieldType: {
             /** @enum {string} */
@@ -818,6 +823,25 @@ export interface components {
         } | {
             /** @enum {string} */
             type: "checkbox";
+        } | {
+            /** @enum {string} */
+            type: "country";
+        } | {
+            /**
+             * @description Key of a country-valued field appearing **strictly earlier** in the
+             *     layout — the same backwards-only rule [`VisibilityRule`] follows,
+             *     and for the same reason: it rejects unknown keys, self-references
+             *     and cycles at once, and lets the whole form resolve in one forward
+             *     pass.
+             *
+             *     `None` renders free text. That is both the honest fallback for a
+             *     field nobody has bound yet and the state a legacy repair leaves
+             *     behind when the reference is stranded — see
+             *     `service::strip_dangling_country_refs`.
+             */
+            country_field?: string | null;
+            /** @enum {string} */
+            type: "state";
         };
         /**
          * @description Aggregate payload backing the admin dashboard. `recent_submissions` is
@@ -1291,6 +1315,17 @@ export interface components {
              *     drawing the `Step N of M` line.
              */
             progress_indicator: components["schemas"]["ProgressIndicator"];
+            /**
+             * @description Packed ISO 3166-2 subdivisions (see [`regions`]), sent **only** when
+             *     `layout` holds a field that needs them.
+             *
+             *     It is ~40 KB gzipped and most forms have no state field, so compiling
+             *     it into the embed script would tax every host page for a table almost
+             *     none of them use. Riding on this response instead keeps the script
+             *     small and cacheable across all forms, and costs no extra round-trip.
+             *     A bundle too old to know the field just ignores it.
+             */
+            regions?: string | null;
             slug: string;
             /**
              * @description Retained for embed bundles cached on host pages before `layout`

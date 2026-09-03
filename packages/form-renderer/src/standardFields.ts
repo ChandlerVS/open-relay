@@ -34,63 +34,16 @@ export type StandardFieldKey = (typeof STANDARD_FIELDS)[number]["key"];
 
 /**
  * ISO 3166-1 countries offered when a `country` field sets
- * `input_override: "select"`.
+ * `input_override: "select"`, and the choices a `country` custom field always
+ * offers.
  *
  * The submitted value is the alpha-2 code. That needs no backend change:
  * `normalize_country` in the GoHighLevel backend already passes any two-letter
  * code straight through (upper-cased), and it is more reliable than the
  * name-matching it falls back to for free-text input.
+ *
+ * Re-exported from `regions.ts` — the list used to be a hand-written 46-entry
+ * subset, which would now be a second, shorter country list in the same form
+ * builder.
  */
-export interface CountryOption {
-  code: string;
-  name: string;
-}
-
-export const COUNTRIES: readonly CountryOption[] = [
-  { code: "US", name: "United States" },
-  { code: "CA", name: "Canada" },
-  { code: "GB", name: "United Kingdom" },
-  { code: "AU", name: "Australia" },
-  { code: "NZ", name: "New Zealand" },
-  { code: "IE", name: "Ireland" },
-  { code: "DE", name: "Germany" },
-  { code: "FR", name: "France" },
-  { code: "ES", name: "Spain" },
-  { code: "IT", name: "Italy" },
-  { code: "NL", name: "Netherlands" },
-  { code: "BE", name: "Belgium" },
-  { code: "AT", name: "Austria" },
-  { code: "CH", name: "Switzerland" },
-  { code: "SE", name: "Sweden" },
-  { code: "NO", name: "Norway" },
-  { code: "DK", name: "Denmark" },
-  { code: "FI", name: "Finland" },
-  { code: "PL", name: "Poland" },
-  { code: "PT", name: "Portugal" },
-  { code: "CZ", name: "Czechia" },
-  { code: "GR", name: "Greece" },
-  { code: "MX", name: "Mexico" },
-  { code: "BR", name: "Brazil" },
-  { code: "AR", name: "Argentina" },
-  { code: "CL", name: "Chile" },
-  { code: "CO", name: "Colombia" },
-  { code: "IN", name: "India" },
-  { code: "JP", name: "Japan" },
-  { code: "CN", name: "China" },
-  { code: "KR", name: "South Korea" },
-  { code: "SG", name: "Singapore" },
-  { code: "HK", name: "Hong Kong" },
-  { code: "MY", name: "Malaysia" },
-  { code: "TH", name: "Thailand" },
-  { code: "PH", name: "Philippines" },
-  { code: "ID", name: "Indonesia" },
-  { code: "VN", name: "Vietnam" },
-  { code: "AE", name: "United Arab Emirates" },
-  { code: "SA", name: "Saudi Arabia" },
-  { code: "IL", name: "Israel" },
-  { code: "TR", name: "Turkey" },
-  { code: "ZA", name: "South Africa" },
-  { code: "NG", name: "Nigeria" },
-  { code: "KE", name: "Kenya" },
-  { code: "EG", name: "Egypt" },
-] as const;
+export { COUNTRIES, type RegionOption, type RegionOption as CountryOption } from "./regions";

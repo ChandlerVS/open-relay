@@ -14,6 +14,7 @@
 //!   label, input type, optional placeholder/help text, and (for `select`)
 //!   options. See [`CustomField`].
 
+pub mod regions;
 pub mod service;
 pub mod visibility;
 
@@ -157,6 +158,11 @@ impl Default for StandardFieldsConfig {
 /// `Select` and `Radio` carry their options on the variant so the renderer
 /// can't see an option-typed field without options. `Checkbox` is a single
 /// boolean checkbox (multi-select uses `Select`).
+///
+/// `Country` and `State` are option-valued too, but their choices come from
+/// the ISO catalogue in [`super::regions`] rather than from the author, which
+/// is the whole point of them — see [`CustomFieldType::options`] for why they
+/// deliberately do *not* report those choices as `options`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum CustomFieldType {
@@ -178,12 +184,42 @@ pub enum CustomFieldType {
         options: Vec<String>,
     },
     Checkbox,
+    /// An ISO 3166-1 country picker. Submits the alpha-2 code.
+    ///
+    /// Unlike the standard `country` field this is not a singleton, which is
+    /// the reason it exists: an advanced form may need a billing country and a
+    /// shipping country on the same page.
+    Country,
+    /// An ISO 3166-2 subdivision picker, driven by an earlier country field.
+    /// Submits the *bare* subdivision code (`CA`, not `US-CA`).
+    State {
+        /// Key of a country-valued field appearing **strictly earlier** in the
+        /// layout — the same backwards-only rule [`VisibilityRule`] follows,
+        /// and for the same reason: it rejects unknown keys, self-references
+        /// and cycles at once, and lets the whole form resolve in one forward
+        /// pass.
+        ///
+        /// `None` renders free text. That is both the honest fallback for a
+        /// field nobody has bound yet and the state a legacy repair leaves
+        /// behind when the reference is stranded — see
+        /// `service::strip_dangling_country_refs`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        country_field: Option<String>,
+    },
 }
 
 impl CustomFieldType {
-    /// The declared options, for the two variants that carry them. Lets option
-    /// rules (validation, trimming, membership checks) be written once instead
-    /// of once per variant.
+    /// The **author-declared** options, for the two variants that carry them.
+    /// Lets option rules (validation, trimming, membership checks) be written
+    /// once instead of once per variant.
+    ///
+    /// `Country` and `State` return `None` even though they render a
+    /// dropdown, and that is deliberate: their choices come from the ISO
+    /// catalogue, not from the form. Reporting them here would make
+    /// `service::validate_custom_fields`' "offers a choice but has no options"
+    /// error nonsense, put 3,590 strings through the trimming pass on every
+    /// write, and hand the admin's rule editor an unusable operand dropdown.
+    /// Membership for those two is checked against [`super::regions`] instead.
     pub fn options(&self) -> Option<&Vec<String>> {
         match self {
             CustomFieldType::Select { options } | CustomFieldType::Radio { options } => {
@@ -193,6 +229,7 @@ impl CustomFieldType {
         }
     }
 
+    /// See [`CustomFieldType::options`].
     pub fn options_mut(&mut self) -> Option<&mut Vec<String>> {
         match self {
             CustomFieldType::Select { options } | CustomFieldType::Radio { options } => {
@@ -204,6 +241,32 @@ impl CustomFieldType {
 
     pub fn is_checkbox(&self) -> bool {
         matches!(self, CustomFieldType::Checkbox)
+    }
+
+    /// Whether this field's answer is an ISO 3166-1 alpha-2 code, and so can
+    /// drive a [`CustomFieldType::State`] picker.
+    pub fn is_country(&self) -> bool {
+        matches!(self, CustomFieldType::Country)
+    }
+
+    /// The country field this one is driven by, for the one variant that has
+    /// one. Lets the reference be validated and repaired without matching the
+    /// variant at every call site.
+    pub fn country_field(&self) -> Option<&str> {
+        match self {
+            CustomFieldType::State { country_field } => country_field.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The slot holding [`CustomFieldType::country_field`], so a repair pass
+    /// can clear a stranded reference in place. `None` for every other
+    /// variant, which is what keeps those passes variant-blind.
+    pub fn country_field_slot(&mut self) -> Option<&mut Option<String>> {
+        match self {
+            CustomFieldType::State { country_field } => Some(country_field),
+            _ => None,
+        }
     }
 }
 
@@ -834,6 +897,16 @@ pub struct PublicFormDto {
     /// populated; a bundle too old to know the field just ignores it and keeps
     /// drawing the `Step N of M` line.
     pub progress_indicator: ProgressIndicator,
+    /// Packed ISO 3166-2 subdivisions (see [`regions`]), sent **only** when
+    /// `layout` holds a field that needs them.
+    ///
+    /// It is ~40 KB gzipped and most forms have no state field, so compiling
+    /// it into the embed script would tax every host page for a table almost
+    /// none of them use. Riding on this response instead keeps the script
+    /// small and cacheable across all forms, and costs no extra round-trip.
+    /// A bundle too old to know the field just ignores it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regions: Option<&'static str>,
 }
 
 /// A ready-to-paste embed snippet for a form, returned to admins so they can

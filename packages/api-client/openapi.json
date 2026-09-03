@@ -2698,9 +2698,46 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "An ISO 3166-1 country picker. Submits the alpha-2 code.\n\nUnlike the standard `country` field this is not a singleton, which is\nthe reason it exists: an advanced form may need a billing country and a\nshipping country on the same page.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "country"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An ISO 3166-2 subdivision picker, driven by an earlier country field.\nSubmits the *bare* subdivision code (`CA`, not `US-CA`).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "country_field": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Key of a country-valued field appearing **strictly earlier** in the\nlayout — the same backwards-only rule [`VisibilityRule`] follows,\nand for the same reason: it rejects unknown keys, self-references\nand cycles at once, and lets the whole form resolve in one forward\npass.\n\n`None` renders free text. That is both the honest fallback for a\nfield nobody has bound yet and the state a legacy repair leaves\nbehind when the reference is stranded — see\n`service::strip_dangling_country_refs`."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "state"
+                ]
+              }
+            }
           }
         ],
-        "description": "HTML input types we expose for custom fields.\n\n`Select` and `Radio` carry their options on the variant so the renderer\ncan't see an option-typed field without options. `Checkbox` is a single\nboolean checkbox (multi-select uses `Select`)."
+        "description": "HTML input types we expose for custom fields.\n\n`Select` and `Radio` carry their options on the variant so the renderer\ncan't see an option-typed field without options. `Checkbox` is a single\nboolean checkbox (multi-select uses `Select`).\n\n`Country` and `State` are option-valued too, but their choices come from\nthe ISO catalogue in [`super::regions`] rather than from the author, which\nis the whole point of them — see [`CustomFieldType::options`] for why they\ndeliberately do *not* report those choices as `options`."
       },
       "DashboardOverview": {
         "type": "object",
@@ -3892,6 +3929,13 @@
           "progress_indicator": {
             "$ref": "#/components/schemas/ProgressIndicator",
             "description": "How the renderer shows progress through a multi-step form. Always\npopulated; a bundle too old to know the field just ignores it and keeps\ndrawing the `Step N of M` line."
+          },
+          "regions": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Packed ISO 3166-2 subdivisions (see [`regions`]), sent **only** when\n`layout` holds a field that needs them.\n\nIt is ~40 KB gzipped and most forms have no state field, so compiling\nit into the embed script would tax every host page for a table almost\nnone of them use. Riding on this response instead keeps the script\nsmall and cacheable across all forms, and costs no extra round-trip.\nA bundle too old to know the field just ignores it."
           },
           "slug": {
             "type": "string"

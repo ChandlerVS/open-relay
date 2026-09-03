@@ -11,6 +11,7 @@ use sea_orm::{
     QueryFilter, QueryOrder, QuerySelect,
 };
 
+use super::regions;
 use super::{
     BackendBinding, ConditionOp, CustomField, CustomFieldType, FormDto, FormElement, FormList,
     FormSelectOption, ListQuery, MessageAction, NewForm, PostSubmissionAction, ProgressIndicator,
@@ -547,7 +548,7 @@ fn normalize_custom_fields(mut fields: Vec<CustomField>) -> Vec<CustomField> {
     for (idx, f) in fields.iter_mut().enumerate() {
         f.position = idx as i32;
         f.label = f.label.trim().to_string();
-        if let CustomFieldType::Select { options } = &mut f.kind {
+        if let Some(options) = f.kind.options_mut() {
             for o in options.iter_mut() {
                 *o = o.trim().to_string();
             }
@@ -662,6 +663,15 @@ pub fn merge_legacy_into_layout(
                         let mut n = n.clone();
                         if n.visible_when.is_none() {
                             n.visible_when = c.visible_when.clone();
+                        }
+                        // Same carry-when-absent trade for a state picker's
+                        // country reference: a legacy client cannot express one
+                        // and must not silently unbind it.
+                        if n.kind.country_field().is_none()
+                            && let Some(parent) = c.kind.country_field()
+                            && let Some(slot) = n.kind.country_field_slot()
+                        {
+                            *slot = Some(parent.to_string());
                         }
                         out.push(FormElement::Custom(n));
                     }
@@ -828,17 +838,79 @@ fn strip_dangling_rules(mut layout: Vec<FormElement>) -> Vec<FormElement> {
     layout
 }
 
+/// What `validate_layout`'s forward pass remembers about a field it has already
+/// walked past.
+///
+/// Both facts answer a "can this later element point at that earlier one?"
+/// question — `is_checkbox` for `is_checked` conditions, `is_country` for a
+/// state picker's `country_field` — so they share one map and one pass rather
+/// than each growing a second walk.
+#[derive(Debug, Clone, Copy)]
+struct SeenField {
+    is_checkbox: bool,
+    is_country: bool,
+}
+
+/// Clear a state picker's `country_field` when nothing earlier satisfies it.
+///
+/// The legacy analogue of [`strip_dangling_rules`], for the same reason and at
+/// the same call sites. A client that speaks only `standard_fields` /
+/// `custom_fields` has no vocabulary for a country reference, yet its writes
+/// move elements: disabling the standard `country` field removes it, and a
+/// `position` reorder can move a country picker behind its dependent. Either
+/// strands the reference, and 400ing a client over a field it never sent and
+/// cannot see would be unactionable.
+///
+/// So repair: the state field simply becomes unbound and renders free text —
+/// exactly what the standard `state` field has always done. The standard
+/// `state` dropdown degrades the same way, by losing its override.
+///
+/// Explicit `layout` writes never go through this; there `validate_layout`
+/// tells the caller what's wrong.
+fn strip_dangling_country_refs(mut layout: Vec<FormElement>) -> Vec<FormElement> {
+    let mut countries: HashSet<String> = HashSet::new();
+    for el in layout.iter_mut() {
+        match el {
+            FormElement::Custom(c) => {
+                let stranded = c
+                    .kind
+                    .country_field()
+                    .is_some_and(|parent| !countries.contains(parent));
+                if stranded && let Some(slot) = c.kind.country_field_slot() {
+                    *slot = None;
+                }
+                if c.kind.is_country() {
+                    countries.insert(c.key.clone());
+                }
+            }
+            FormElement::Standard(s) => {
+                if s.key == "state"
+                    && s.input_override == Some(StandardInputVariant::Select)
+                    && !countries.contains("country")
+                {
+                    s.input_override = None;
+                }
+                if s.key == "country" && s.input_override == Some(StandardInputVariant::Select) {
+                    countries.insert(s.key.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    layout
+}
+
 /// Validate one element's visibility rule against the fields that precede it.
 ///
-/// `seen` holds every field key already passed, mapped to whether that field is
-/// a checkbox. Requiring a condition's target to be in `seen` — i.e. strictly
-/// earlier in the layout — is what rejects unknown keys, self-references and
-/// cycles all at once, and it is the invariant the single-pass evaluators in
-/// `forms::visibility` and `visibility.ts` are built on.
+/// `seen` holds every field key already passed. Requiring a condition's target
+/// to be in `seen` — i.e. strictly earlier in the layout — is what rejects
+/// unknown keys, self-references and cycles all at once, and it is the
+/// invariant the single-pass evaluators in `forms::visibility` and
+/// `visibility.ts` are built on.
 fn validate_visible_when(
     rule: &VisibilityRule,
     owner: &str,
-    seen: &HashMap<String, bool>,
+    seen: &HashMap<String, SeenField>,
 ) -> CoreResult<()> {
     if rule.conditions.is_empty() {
         return Err(CoreError::BadRequest(format!(
@@ -851,7 +923,7 @@ fn validate_visible_when(
         )));
     }
     for c in &rule.conditions {
-        let Some(&is_checkbox) = seen.get(&c.field) else {
+        let Some(&SeenField { is_checkbox, .. }) = seen.get(&c.field) else {
             return Err(CoreError::BadRequest(format!(
                 "'{owner}' can only depend on a field that appears earlier in the form; \
                  '{}' does not",
@@ -898,9 +970,9 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
     }
 
     let mut seen_standard: HashSet<&str> = HashSet::new();
-    // Field keys already passed, mapped to "is a checkbox" — the two things a
-    // visibility rule needs to know about a candidate controller.
-    let mut seen_fields: HashMap<String, bool> = HashMap::new();
+    // Field keys already passed. See [`SeenField`] — one map serves both the
+    // visibility rules and the state pickers' country references.
+    let mut seen_fields: HashMap<String, SeenField> = HashMap::new();
     let mut pages = 1usize;
     for (i, el) in layout.iter().enumerate() {
         // Rules are checked before the element records its own key, so a
@@ -935,11 +1007,29 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
                         )));
                     }
                 }
-                if s.input_override == Some(StandardInputVariant::Select) && s.key != "country" {
+                if s.input_override == Some(StandardInputVariant::Select)
+                    && !matches!(s.key.as_str(), "country" | "state")
+                {
                     return Err(CoreError::BadRequest(format!(
                         "standard field '{}' has no select variant",
                         s.key
                     )));
+                }
+                // The standard pair is a singleton each, so the state select's
+                // country is implicit — but it still has to be a *code*, which
+                // only the select variant submits, and it still has to come
+                // first so the one forward pass can resolve it.
+                if s.key == "state"
+                    && s.input_override == Some(StandardInputVariant::Select)
+                    && !seen_fields
+                        .get("country")
+                        .is_some_and(|f| f.is_country)
+                {
+                    return Err(CoreError::BadRequest(
+                        "the standard 'state' dropdown needs the standard 'country' field \
+                         earlier in the form, also set to a dropdown"
+                            .into(),
+                    ));
                 }
             }
             FormElement::Heading(h) => {
@@ -984,12 +1074,52 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
                     )));
                 }
             }
-            FormElement::Custom(_) | FormElement::Divider => {}
+            FormElement::Custom(c) => {
+                // Same strictly-earlier rule the visibility rules follow, and
+                // it does the same triple duty here: unknown key, self-
+                // reference and cycle all fall out of this one check, and the
+                // renderer can resolve every state picker in one forward pass.
+                if let Some(parent) = c.kind.country_field() {
+                    match seen_fields.get(parent) {
+                        None => {
+                            return Err(CoreError::BadRequest(format!(
+                                "custom field '{}' names a country field '{parent}' that does \
+                                 not appear earlier in the form",
+                                c.key
+                            )));
+                        }
+                        Some(f) if !f.is_country => {
+                            return Err(CoreError::BadRequest(format!(
+                                "custom field '{}' names '{parent}', which is not a country \
+                                 picker",
+                                c.key
+                            )));
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            FormElement::Divider => {}
         }
         if let Some(key) = el.field_key() {
             // A standard field is never a checkbox, so `false` is right for it.
             let is_checkbox = matches!(el, FormElement::Custom(c) if c.kind.is_checkbox());
-            seen_fields.insert(key.to_string(), is_checkbox);
+            // A plain-text country field holds a *name*, not a code, so it
+            // cannot drive a subdivision list — only the select variant can.
+            let is_country = match el {
+                FormElement::Custom(c) => c.kind.is_country(),
+                FormElement::Standard(s) => {
+                    s.key == "country" && s.input_override == Some(StandardInputVariant::Select)
+                }
+                _ => false,
+            };
+            seen_fields.insert(
+                key.to_string(),
+                SeenField {
+                    is_checkbox,
+                    is_country,
+                },
+            );
         }
     }
 
@@ -1111,6 +1241,7 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
     let backends = backends_from_model(&m)?;
     let post_submission_action = post_submission_action_from_model(&m)?;
     let progress_indicator = progress_indicator_from_model(&m)?;
+    let regions = needs_subdivisions(&layout).then(regions::packed_subdivisions);
     Ok(PublicFormDto {
         id: m.id,
         name: m.name,
@@ -1121,6 +1252,20 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
         backends,
         post_submission_action,
         progress_indicator,
+        regions,
+    })
+}
+
+/// Whether this layout has anything that renders a subdivision dropdown, and so
+/// needs the ~40 KB table shipped alongside it. See
+/// [`PublicFormDto::regions`] — every other form pays nothing.
+fn needs_subdivisions(layout: &[FormElement]) -> bool {
+    layout.iter().any(|el| match el {
+        FormElement::Custom(c) => matches!(c.kind, CustomFieldType::State { .. }),
+        FormElement::Standard(s) => {
+            s.key == "state" && s.input_override == Some(StandardInputVariant::Select)
+        }
+        _ => false,
     })
 }
 
@@ -1175,7 +1320,9 @@ pub async fn create_form<C: ConnectionTrait>(
         None => {
             let sf = normalize_standard_fields(input.standard_fields.unwrap_or_default());
             let cf = normalize_custom_fields(input.custom_fields);
-            strip_dangling_rules(normalize_layout(layout_from_legacy(&sf, &cf)))
+            strip_dangling_country_refs(strip_dangling_rules(normalize_layout(
+                layout_from_legacy(&sf, &cf),
+            )))
         }
     };
     validate_layout(&layout)?;
@@ -1326,10 +1473,12 @@ pub async fn update_form<C: ConnectionTrait>(
                 // client that can't express order.
                 let sf = input.standard_fields.map(normalize_standard_fields);
                 let cf = input.custom_fields.map(normalize_custom_fields);
-                strip_dangling_rules(normalize_layout(merge_legacy_into_layout(
-                    &layout_from_model(&existing)?,
-                    sf.as_ref(),
-                    cf.as_deref(),
+                strip_dangling_country_refs(strip_dangling_rules(normalize_layout(
+                    merge_legacy_into_layout(
+                        &layout_from_model(&existing)?,
+                        sf.as_ref(),
+                        cf.as_deref(),
+                    ),
                 )))
             }
         };
@@ -1467,6 +1616,29 @@ mod tests {
             input_override: None,
             visible_when: None,
         })
+    }
+
+    /// A country picker element.
+    fn country_el(key: &str) -> FormElement {
+        let mut f = custom(key, 0);
+        f.kind = CustomFieldType::Country;
+        FormElement::Custom(f)
+    }
+
+    /// A state picker, optionally bound to `parent`.
+    fn state_el(key: &str, parent: Option<&str>) -> FormElement {
+        let mut f = custom(key, 0);
+        f.kind = CustomFieldType::State { country_field: parent.map(str::to_string) };
+        FormElement::Custom(f)
+    }
+
+    /// A standard element with the select variant turned on.
+    fn std_select(key: &str) -> FormElement {
+        let mut el = std_el(key);
+        if let FormElement::Standard(s) = &mut el {
+            s.input_override = Some(StandardInputVariant::Select);
+        }
+        el
     }
 
     fn rule(conds: &[(&str, ConditionOp, Option<&str>)]) -> VisibilityRule {
@@ -2447,4 +2619,178 @@ mod tests {
         assert_eq!(cf[1].visible_when, Some(when));
     }
 
+    // ---- country / state pickers -----------------------------------------
+
+    #[test]
+    fn a_state_picker_must_name_a_country_that_comes_first() {
+        assert!(
+            validate_layout(&[country_el("c"), state_el("s", Some("c"))]).is_ok(),
+            "the country is earlier"
+        );
+        assert!(
+            validate_layout(&[state_el("s", Some("c")), country_el("c")]).is_err(),
+            "the country is later"
+        );
+        assert!(
+            validate_layout(&[state_el("s", Some("nope"))]).is_err(),
+            "there is no such field"
+        );
+        assert!(
+            validate_layout(&[state_el("s", Some("s"))]).is_err(),
+            "a field cannot depend on itself"
+        );
+    }
+
+    #[test]
+    fn a_state_picker_can_only_be_driven_by_a_country() {
+        // A plain text field holds anything at all.
+        assert!(validate_layout(&[FormElement::Custom(custom("c", 0)), state_el("s", Some("c"))]).is_err());
+        // A plain-text standard country holds a *name*, not a code.
+        assert!(validate_layout(&[std_el("country"), state_el("s", Some("country"))]).is_err());
+        // The select variant does submit a code, so it qualifies.
+        assert!(validate_layout(&[std_select("country"), state_el("s", Some("country"))]).is_ok());
+    }
+
+    #[test]
+    fn an_unbound_state_picker_is_valid() {
+        // What a legacy repair leaves behind; it renders free text.
+        assert!(validate_layout(&[state_el("s", None)]).is_ok());
+    }
+
+    #[test]
+    fn two_country_state_pairs_coexist() {
+        // The reason these are custom types at all: the standard pair is a
+        // singleton, and an advanced form needs billing *and* shipping.
+        assert!(
+            validate_layout(&[
+                country_el("billing_country"),
+                state_el("billing_state", Some("billing_country")),
+                country_el("shipping_country"),
+                state_el("shipping_state", Some("shipping_country")),
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_standard_state_dropdown_needs_the_standard_country_dropdown_first() {
+        assert!(validate_layout(&[std_select("country"), std_select("state")]).is_ok());
+        assert!(
+            validate_layout(&[std_select("state"), std_select("country")]).is_err(),
+            "country must come first"
+        );
+        assert!(
+            validate_layout(&[std_el("country"), std_select("state")]).is_err(),
+            "a text country submits a name, not a code"
+        );
+        assert!(validate_layout(&[std_select("state")]).is_err(), "no country at all");
+        assert!(
+            validate_layout(&[std_select("email")]).is_err(),
+            "other standard fields still have no select variant"
+        );
+    }
+
+    #[test]
+    fn a_country_picker_can_control_a_visibility_rule() {
+        let mut dependent = custom("note", 1);
+        dependent.visible_when = Some(rule(&[("c", ConditionOp::Equals, Some("US"))]));
+        assert!(validate_layout(&[country_el("c"), FormElement::Custom(dependent)]).is_ok());
+    }
+
+    #[test]
+    fn a_country_picker_reports_no_author_options() {
+        // Its choices come from the ISO catalogue, so the "offers a choice but
+        // has no options" rule must not fire on it.
+        let FormElement::Custom(c) = country_el("c") else { unreachable!() };
+        assert!(c.kind.options().is_none());
+        assert!(validate_custom_fields(&[c]).is_ok());
+    }
+
+    #[test]
+    fn a_legacy_write_unbinds_a_stranded_state_rather_than_rejecting_it() {
+        // Disabling the standard country removes it from the layout, stranding
+        // a state picker that named it. A legacy client cannot see the
+        // reference, so repair instead of 400.
+        let existing = vec![std_select("country"), state_el("s", Some("country"))];
+        let mut sf = StandardFieldsConfig::all_disabled();
+        sf.email = StandardFieldConfig::default_enabled();
+        let merged = strip_dangling_country_refs(strip_dangling_rules(normalize_layout(
+            merge_legacy_into_layout(&existing, Some(&sf), None),
+        )));
+        assert!(
+            validate_layout(&merged).is_ok(),
+            "a legacy PATCH must never 400 on a reference it can't see"
+        );
+        let state = merged
+            .iter()
+            .find_map(|el| match el {
+                FormElement::Custom(c) if c.key == "s" => Some(c),
+                _ => None,
+            })
+            .expect("the state field survives");
+        assert_eq!(
+            state.kind,
+            CustomFieldType::State { country_field: None },
+            "unbound, so it renders free text"
+        );
+    }
+
+    #[test]
+    fn a_legacy_write_drops_a_stranded_standard_state_override() {
+        let layout = strip_dangling_country_refs(vec![std_select("state")]);
+        let FormElement::Standard(s) = &layout[0] else { unreachable!() };
+        assert_eq!(s.input_override, None);
+        assert!(validate_layout(&layout).is_ok());
+    }
+
+    #[test]
+    fn a_legacy_write_carries_a_country_reference_forward() {
+        // A client rebuilding `custom_fields` from scratch has no vocabulary
+        // for the reference and must not silently unbind it.
+        let existing = vec![country_el("c"), state_el("s", Some("c"))];
+        let FormElement::Custom(incoming_country) = country_el("c") else { unreachable!() };
+        let FormElement::Custom(incoming_state) = state_el("s", None) else { unreachable!() };
+        let merged = merge_legacy_into_layout(
+            &existing,
+            None,
+            Some(&[incoming_country, incoming_state]),
+        );
+        let state = merged
+            .iter()
+            .find_map(|el| match el {
+                FormElement::Custom(c) if c.key == "s" => Some(c),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(state.kind.country_field(), Some("c"));
+    }
+
+    #[test]
+    fn region_fields_survive_a_layout_round_trip() {
+        let els = vec![country_el("c"), state_el("s", Some("c"))];
+        let json = serde_json::to_string(&els).unwrap();
+        let back: Vec<FormElement> = serde_json::from_str(&json).unwrap();
+        assert_eq!(els, back);
+        // An unbound state omits the key entirely rather than writing null.
+        let unbound = serde_json::to_value(&state_el("s", None)).unwrap();
+        assert!(unbound["config"].get("country_field").is_none());
+    }
+
+    #[test]
+    fn only_a_form_that_needs_subdivisions_is_told_to_carry_them() {
+        assert!(!needs_subdivisions(&[std_el("email"), country_el("c")]));
+        assert!(needs_subdivisions(&[country_el("c"), state_el("s", Some("c"))]));
+        assert!(needs_subdivisions(&[std_select("country"), std_select("state")]));
+        assert!(!needs_subdivisions(&[std_select("country")]));
+    }
+
+    #[test]
+    fn radio_options_are_trimmed_on_the_legacy_path() {
+        // `normalize_custom_fields` used to match `Select` literally and miss
+        // `Radio`; `normalize_layout` masked it on both write paths.
+        let mut f = custom("colour", 0);
+        f.kind = CustomFieldType::Radio { options: vec!["  Red  ".into()] };
+        let out = normalize_custom_fields(vec![f]);
+        assert_eq!(out[0].kind.options().unwrap(), &vec!["Red".to_string()]);
+    }
 }

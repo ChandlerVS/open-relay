@@ -1,5 +1,5 @@
 import type { components } from "@open-relay/api-client";
-import { STANDARD_FIELDS } from "@open-relay/form-renderer";
+import { COUNTRIES, STANDARD_FIELDS } from "@open-relay/form-renderer";
 
 export type FormElement = components["schemas"]["FormElement"];
 export type CustomField = components["schemas"]["CustomField"];
@@ -70,13 +70,48 @@ export const CUSTOM_FIELD_TYPES = [
   { type: "select", label: "Dropdown" },
   { type: "radio", label: "Radio group" },
   { type: "checkbox", label: "Checkbox" },
+  { type: "country", label: "Country" },
+  { type: "state", label: "State / province" },
 ] as const;
 
 export type CustomTypeName = (typeof CUSTOM_FIELD_TYPES)[number]["type"];
 
-/** The two types that offer a fixed set of choices. */
+/**
+ * The two types that offer an **author-declared** set of choices.
+ *
+ * `country` and `state` render dropdowns too, but their choices come from the
+ * ISO catalogue, so they have no options editor and no "needs at least one
+ * option" rule. Mirrors `CustomFieldType::options` on the server.
+ */
 export function hasOptions(type: CustomTypeName): boolean {
   return type === "select" || type === "radio";
+}
+
+/**
+ * The narrowing form of [`hasOptions`], so the options editor can reach
+ * `field.options` without restating the type test inline.
+ */
+export function fieldHasOptions(
+  field: CustomField,
+): field is CustomField & { options?: string[] } {
+  return hasOptions(field.type);
+}
+
+/** Whether a field's answer is an ISO country code, and so can drive a state picker. */
+export function isCountryField(el: FormElement): boolean {
+  if (el.element === "custom") return el.config.type === "country";
+  // A plain-text standard country holds a *name*, not a code.
+  return (
+    el.element === "standard" &&
+    el.config.key === "country" &&
+    el.config.input_override === "select"
+  );
+}
+
+/** The country field a state picker is bound to, or `null`. */
+export function countryFieldRef(el: FormElement): string | null {
+  if (el.element !== "custom" || el.config.type !== "state") return null;
+  return el.config.country_field ?? null;
 }
 
 /**
@@ -102,9 +137,19 @@ export function retypeCustomField(field: CustomField, type: CustomTypeName): Cus
     default_value,
     visible_when,
   };
-  return hasOptions(type)
-    ? { ...base, type, options: "options" in field ? (field.options ?? []) : [] }
-    : { ...base, type };
+  if (hasOptions(type)) {
+    return { ...base, type, options: "options" in field ? (field.options ?? []) : [] };
+  }
+  if (type === "state") {
+    // Survives a move away and back, the same way options do between the two
+    // choice types.
+    return {
+      ...base,
+      type,
+      country_field: "country_field" in field ? field.country_field : undefined,
+    };
+  }
+  return { ...base, type };
 }
 
 /** A field element's rule, or `null` for a kind that can't carry one. */
@@ -165,6 +210,12 @@ export interface ControllerCandidate {
   /** `undefined` for a standard field, which is never a checkbox or a choice. */
   type?: CustomTypeName;
   options?: string[];
+  /**
+   * Display names for `options` whose stored value isn't human-readable — a
+   * country picker's operands are ISO codes. Absent means the option string is
+   * its own label, which is true of every author-declared option.
+   */
+  optionLabels?: Record<string, string>;
 }
 
 /**
@@ -189,7 +240,16 @@ export function controllerCandidates(
         key: el.config.key,
         label: elementTitle(el),
         type: el.config.type,
-        options: "options" in el.config ? el.config.options : undefined,
+        // A country picker's answers are a known set too, so offer them rather
+        // than inviting a typo — but as names over codes. A *state* picker is
+        // deliberately left to free text: its answer set depends on an answer
+        // nobody has given yet, and the union of all of them is 3,590 entries.
+        ...(el.config.type === "country"
+          ? {
+              options: COUNTRIES.map((c) => c.code),
+              optionLabels: Object.fromEntries(COUNTRIES.map((c) => [c.code, c.name])),
+            }
+          : { options: "options" in el.config ? el.config.options : undefined }),
       });
     }
   }
@@ -236,6 +296,73 @@ export function stripRuleReferences(items: BuilderElement[], key: string): Build
   });
 }
 
+/**
+ * Country fields that could drive the state picker at `index`.
+ *
+ * Same "strictly earlier" rule as `controllerCandidates`, and for the same
+ * reason: it is what `service::validate_layout` enforces and what lets the
+ * renderer resolve every picker in one forward pass.
+ */
+export function countryFieldCandidates(
+  items: BuilderElement[],
+  index: number,
+): ControllerCandidate[] {
+  const out: ControllerCandidate[] = [];
+  for (const item of items.slice(0, Math.max(index, 0))) {
+    const el = item.element;
+    if (!isCountryField(el)) continue;
+    const key = el.element === "custom" ? el.config.key : "country";
+    if (!key.trim()) continue;
+    out.push({ key, label: elementTitle(el) });
+  }
+  return out;
+}
+
+/** Rewrite a state picker's `country_field` when its country is renamed. */
+export function renameCountryReferences(
+  items: BuilderElement[],
+  from: string,
+  to: string,
+): BuilderElement[] {
+  if (!from || from === to) return items;
+  return items.map((item) =>
+    countryFieldRef(item.element) === from
+      ? { ...item, element: withCountryField(item.element, to) }
+      : item,
+  );
+}
+
+/**
+ * Unbind any state picker driven by `key`.
+ *
+ * Deleting or retyping the country strands the reference, and an unbound state
+ * picker renders free text — the same repair `service::strip_dangling_country_refs`
+ * applies server-side, so the builder never shows a form the server would
+ * reject.
+ */
+export function stripCountryReferences(
+  items: BuilderElement[],
+  key: string,
+): BuilderElement[] {
+  if (!key) return items;
+  return items.map((item) =>
+    countryFieldRef(item.element) === key
+      ? { ...item, element: withCountryField(item.element, undefined) }
+      : item,
+  );
+}
+
+function withCountryField(el: FormElement, key: string | undefined): FormElement {
+  if (el.element !== "custom" || el.config.type !== "state") return el;
+  // Delete rather than write `null`, like `withRule` — the dirty check is a
+  // `JSON.stringify` comparison, so an explicit null would read as an edit.
+  const { country_field: _drop, ...rest } = el.config;
+  return {
+    ...el,
+    config: key ? { ...rest, country_field: key } : rest,
+  } as FormElement;
+}
+
 export function newStandardElement(key: string): FormElement {
   return {
     element: "standard",
@@ -250,17 +377,32 @@ export function newStandardElement(key: string): FormElement {
   };
 }
 
-export function newCustomElement(type: CustomTypeName, index: number): FormElement {
+export function newCustomElement(
+  type: CustomTypeName,
+  index: number,
+  /**
+   * Existing elements, so a new state picker can bind itself to the last
+   * country field ahead of it. Without this a freshly dropped state field is
+   * unbound and renders free text until someone notices the setting.
+   */
+  items: BuilderElement[] = [],
+): FormElement {
   const base = {
     key: "",
     label: "",
     required: false,
     position: index,
   };
-  return {
-    element: "custom",
-    config: hasOptions(type) ? { ...base, type, options: [] } : { ...base, type },
-  };
+  if (hasOptions(type)) return { element: "custom", config: { ...base, type, options: [] } };
+  if (type === "state") {
+    const candidates = countryFieldCandidates(items, index);
+    const nearest = candidates[candidates.length - 1];
+    return {
+      element: "custom",
+      config: nearest ? { ...base, type, country_field: nearest.key } : { ...base, type },
+    };
+  }
+  return { element: "custom", config: { ...base, type } };
 }
 
 export function newDecorationElement(

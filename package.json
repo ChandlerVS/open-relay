@@ -11,7 +11,9 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "gen:api": "turbo run gen:api"
+    "gen:api": "turbo run gen:api",
+    "gen:regions": "node scripts/gen-regions.mjs",
+    "gen:regions:check": "node scripts/gen-regions.mjs && git diff --exit-code -- packages/form-renderer/src/regions.data.ts crates/core/src/forms/regions.json"
   },
   "devDependencies": {
     "turbo": "^2.5.0",

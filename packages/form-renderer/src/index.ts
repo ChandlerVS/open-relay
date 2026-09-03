@@ -8,11 +8,16 @@ export {
 export { ShadowForm } from "./ShadowForm";
 export {
   STANDARD_FIELDS,
-  COUNTRIES,
   type CountryOption,
   type StandardFieldDef,
   type StandardFieldKey,
 } from "./standardFields";
+export {
+  COUNTRIES,
+  PACKED_SUBDIVISIONS,
+  subdivisionsFor,
+  type RegionOption,
+} from "./regions";
 export {
   computeVisibility,
   visibleElements,
@@ -24,6 +29,7 @@ export {
   resolveLayout,
   layoutFromLegacy,
   splitIntoPages,
+  stateBindings,
   pageFieldKeys,
   type FormPage,
 } from "./layout";
