@@ -376,6 +376,73 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test region_fields -- --ignored
 ```
 
+### Row blocks: a flat marker pair, and width is read two ways
+
+Several fields sit on one line by putting them between a `FormElement::RowStart`
+and a `FormElement::RowEnd` (city / state / postal code being the case it was
+built for). Four things aren't obvious from the code:
+
+1. **A row is a flat marker pair, not a container with `children`.** The whole
+   layout system rests on one flat slot per element: `element_visibility` returns
+   a `Vec<bool>` *positionally parallel* to the layout, `FormPage.offset` indexes
+   into that by `offset + i`, `coerce_custom` reads earlier answers out of a
+   `custom_fields` list that is in layout order, and `validate_layout` resolves
+   rules and country references in one forward pass. Nesting breaks all of those
+   at once; markers break none of them, because they register no key and every
+   pass walks straight past. This is the same call `PageBreak` made — pages are a
+   grouping computed from separators, not a nested structure — and it is what
+   keeps the builder a **single flat `SortableContext` with
+   `restrictToVerticalAxis`**: dragging a field into a row is an ordinary
+   vertical reorder, not a cross-container drop.
+
+   It is also what keeps the projection honest. Fields in a row are still
+   top-level elements, so `legacy_from_layout` still writes them to the legacy
+   pair and an embed bundle cached before rows existed still renders them —
+   stacked, since it ignores the markers. Same way `width` already degrades
+   there. `crates/core/tests/layout_rows.rs` pins that specifically.
+
+2. **`FieldWidth` is read two ways against one denominator of six.** Outside a
+   row it is a span of the six-track grid (`half` = 3 tracks, `third` = 2);
+   inside a row it is a *flex weight*. `Full` weighs six, so a row whose fields
+   all leave the width alone splits evenly — which is what you want when three
+   fields were put in a row precisely so they'd sit side by side. The grid went
+   2 → 6 tracks to make thirds expressible; `half` was `span 1` of 2 and is now
+   `span 3` of 6, i.e. the same 50%, so no existing form's rendering changed.
+
+3. **A row carries no `visible_when`, deliberately.** Its fields keep their own
+   rules, and `visibleElements` collapses a row whose fields have all hidden —
+   the same pass that already collapses a stranded divider. Doing it *there*
+   rather than at render time is load-bearing: `Form.tsx` decides which steps are
+   live by asking whether a page has any visible elements, so an all-hidden row
+   has to come back empty or its page counts as a step with nothing on it. Only
+   `standard`/`custom` may sit in a row (`FormElement::allowed_in_row`); a page
+   break inside one would split a line across two steps.
+
+4. **The builder repairs rather than restricts.** A flat list lets a drag invert
+   or strand a marker, so `Canvas`'s `onDragEnd` runs `normalizeRows` after the
+   `arrayMove` — it un-nests, closes, and drops empty rows so a reorder can never
+   produce a layout that won't save. Deleting either marker takes its partner
+   (`withoutRow`), since half a pair is a 400. The server mirrors the split:
+   `normalize_layout` drops an *empty* row quietly (cosmetic debris, like a rule
+   with no conditions), while `validate_layout` rejects structural breakage. That
+   quiet cleanup is also why the legacy write paths need no repair pass of their
+   own — `merge_legacy_into_layout` can empty a row by disabling its fields, and
+   both paths already call `normalize_layout`. The one thing that pass *did* need
+   is a guard so a newly enabled standard field is never inserted **inside** a
+   row (`row_start_before` / `row_end_after`): a legacy client can't see a row and
+   never asked for one.
+
+`FormElement` now has 8 variants, so a new one surfaces first at the exhaustive
+`shape()` match in `crates/core/tests/layout_projection.rs`. `RowStartElement` is
+a newtype variant carrying an optional `label` (rendered as `role="group"`), not a
+unit variant — same lesson `Divider` records, that a unit variant can never grow a
+body under adjacent tagging.
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test layout_rows -- --ignored
+```
+
 ### Backend delivery is a registry of trait objects
 
 `open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.

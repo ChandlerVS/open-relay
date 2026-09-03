@@ -11,8 +11,20 @@ export interface StandardFieldConfig {
 
 export type StandardFieldsConfig = Record<string, StandardFieldConfig>;
 
-/** Fraction of a row a field occupies. Absent means full width. */
-export type FieldWidth = "full" | "half";
+/**
+ * Fraction of a row a field occupies. Absent means full width.
+ *
+ * Read two ways, against the same denominator of six:
+ *
+ * - **Outside a row**, a span of the six-track grid `.or-form__fields` lays
+ *   down — `half` is three tracks, `third` two. Adjacent fields whose spans fit
+ *   share a line by grid auto-placement.
+ * - **Inside a `row_start`/`row_end` pair**, a flex weight. `full` weighs six,
+ *   so a row whose fields all leave this alone splits evenly.
+ *
+ * Mirrors `open_relay_core::forms::FieldWidth`.
+ */
+export type FieldWidth = "full" | "two_thirds" | "half" | "third";
 
 /**
  * Overrides how a standard field renders. Only `country` and `state` have a
@@ -121,6 +133,14 @@ export interface PageBreakElement {
   title?: string | null;
 }
 
+export interface RowStartElement {
+  /**
+   * Names the group for assistive tech, where the fields share a subject their
+   * individual labels don't state.
+   */
+  label?: string | null;
+}
+
 /**
  * One entry in a form's ordered layout. Adjacently tagged to match
  * `open_relay_core::forms::FormElement` — `element` discriminates, `config`
@@ -130,6 +150,14 @@ export interface PageBreakElement {
  * on the server, and giving it a body would reject every stored
  * `{"element":"divider"}`. The renderer collapses dividers left stranded by
  * their hidden neighbours instead; see `visibility.ts`.
+ *
+ * `row_start`/`row_end` bracket a run of fields drawn on one line. They are a
+ * flat marker pair, not a container with `children`, which is what keeps this
+ * list one slot per element — `computeVisibility` returns a `boolean[]`
+ * positionally parallel to it and `FormPage.offset` indexes through that, so
+ * nesting would break both. Neither marker carries a rule: the fields keep
+ * their own, and a row whose fields have all hidden is collapsed the same way a
+ * stranded divider is. Same call `page_break` made, for the same reason.
  */
 export type FormElement =
   | { element: "standard"; config: StandardElement }
@@ -137,7 +165,9 @@ export type FormElement =
   | { element: "heading"; config: HeadingElement }
   | { element: "paragraph"; config: ParagraphElement }
   | { element: "divider" }
-  | { element: "page_break"; config: PageBreakElement };
+  | { element: "page_break"; config: PageBreakElement }
+  | { element: "row_start"; config: RowStartElement }
+  | { element: "row_end" };
 
 /**
  * Body of a `message` post-submission action. Every field is optional; an

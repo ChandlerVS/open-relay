@@ -18,7 +18,13 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { GitBranch, GripVertical, Trash2 } from "lucide-react";
 import { Button, cn } from "@open-relay/ui";
-import { elementRule, elementTitle, type BuilderElement } from "./model";
+import {
+  elementRule,
+  elementTitle,
+  isRowMarker,
+  normalizeRows,
+  type BuilderElement,
+} from "./model";
 import type { LayoutErrors } from "./validate";
 
 export interface CanvasProps {
@@ -37,13 +43,16 @@ const KIND_LABEL: Record<BuilderElement["element"]["element"], string> = {
   paragraph: "Text",
   divider: "Divider",
   page_break: "Page break",
+  row_start: "Row",
+  row_end: "Row",
 };
 
-function Row({
+function ElementRow({
   item,
   selected,
   error,
   stepNumber,
+  inRow,
   onSelect,
   onRemove,
 }: {
@@ -51,6 +60,8 @@ function Row({
   selected: boolean;
   error: string | undefined;
   stepNumber: number | null;
+  /** Sits between a `row_start` and its `row_end`, so it is drawn indented. */
+  inRow: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }) {
@@ -59,6 +70,7 @@ function Row({
   });
   const el = item.element;
   const isBreak = el.element === "page_break";
+  const marker = isRowMarker(el);
   const required =
     (el.element === "standard" || el.element === "custom") && el.config.required;
 
@@ -71,7 +83,10 @@ function Row({
         selected ? "border-primary ring-1 ring-primary" : "border-border",
         error && "border-destructive",
         isDragging && "opacity-50",
-        isBreak && "bg-muted/60 border-dashed",
+        (isBreak || marker) && "bg-muted/60 border-dashed",
+        // Indentation is the only cue that a field is in a row — the list is
+        // flat, so there is no container to draw around it.
+        inRow && "ml-5 border-l-2 border-l-primary/40",
       )}
     >
       <button
@@ -93,7 +108,9 @@ function Row({
           <span className="truncate text-sm font-medium">
             {isBreak && stepNumber !== null
               ? `Page break — step ${stepNumber} starts here`
-              : elementTitle(el)}
+              : el.element === "row_start"
+                ? `${elementTitle(el)} — fields below sit on one line`
+                : elementTitle(el)}
           </span>
           {required && <span className="text-destructive text-sm">*</span>}
         </div>
@@ -135,6 +152,13 @@ function Row({
  * One flat sortable list. Pages are a visual grouping computed from the
  * `page_break` elements rather than a nested structure, which keeps
  * drag-and-drop across a page boundary free.
+ *
+ * Rows work the same way, and for the same payoff: a `row_start`/`row_end`
+ * marker pair rather than a container with children, so putting a field in a
+ * row is an ordinary vertical reorder. No second `SortableContext`, no
+ * cross-container drag handling, and `restrictToVerticalAxis` stays on. The
+ * price is that a drop can leave the markers in a nonsensical order, which
+ * `normalizeRows` repairs afterwards rather than preventing.
  */
 export function Canvas({
   items,
@@ -155,7 +179,9 @@ export function Canvas({
     const from = items.findIndex((i) => i.id === active.id);
     const to = items.findIndex((i) => i.id === over.id);
     if (from === -1 || to === -1) return;
-    onReorder(arrayMove(items, from, to));
+    // Repair rather than restrict: a flat list lets a drag invert or strand a
+    // row marker, and tidying up after is what keeps the drag itself simple.
+    onReorder(normalizeRows(arrayMove(items, from, to)));
   };
 
   if (items.length === 0) {
@@ -167,6 +193,9 @@ export function Canvas({
   }
 
   let step = 1;
+  // Depth is derived on the fly from the markers, exactly like the step
+  // counter — neither is stored on the element.
+  let inRow = false;
   return (
     <DndContext
       sensors={sensors}
@@ -177,15 +206,19 @@ export function Canvas({
       <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
         <div className="flex flex-col gap-1.5">
           {items.map((item) => {
-            const stepNumber =
-              item.element.element === "page_break" ? ++step : null;
+            const kind = item.element.element;
+            const stepNumber = kind === "page_break" ? ++step : null;
+            if (kind === "row_end") inRow = false;
+            const indented = inRow;
+            if (kind === "row_start") inRow = true;
             return (
-              <Row
+              <ElementRow
                 key={item.id}
                 item={item}
                 selected={item.id === selectedId}
                 error={errors[item.id]}
                 stepNumber={stepNumber}
+                inRow={indented}
                 onSelect={() => onSelect(item.id)}
                 onRemove={() => onRemove(item.id)}
               />

@@ -430,12 +430,29 @@ pub struct CustomField {
 }
 
 /// Fraction of a row a field occupies when rendered. Layout-only.
+///
+/// Read two ways by the renderer, which is why the vocabulary is fractions
+/// rather than pixels:
+///
+/// - **Outside a row** it is a span of the six-track grid `.or-form__fields`
+///   lays down — `Half` is three tracks, `Third` two. Adjacent fields whose
+///   spans fit share a line by grid auto-placement, which is how the old
+///   two-track grid already paired two `Half`s.
+/// - **Inside a [`FormElement::RowStart`]/[`FormElement::RowEnd`] pair** it is a
+///   flex weight over the same denominator. `Full` weighs six, so a row whose
+///   fields all leave this alone splits evenly — the right default when three
+///   fields are dropped into a row precisely so they sit side by side.
+///
+/// Never validated: an author can only pick from the catalogue, and a width
+/// that does not tile is a cosmetic result, not a rejectable one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldWidth {
     #[default]
     Full,
+    TwoThirds,
     Half,
+    Third,
 }
 
 impl FieldWidth {
@@ -549,6 +566,39 @@ pub struct PageBreakElement {
     pub title: Option<String>,
 }
 
+/// Opens a row: everything up to the matching [`FormElement::RowEnd`] is laid
+/// out on one line, sharing the width by each field's [`FieldWidth`].
+///
+/// A row is a **flat marker pair**, not a container holding `children`. The
+/// whole layout system rests on one flat slot per element — `element_visibility`
+/// returns a `Vec<bool>` positionally parallel to the layout, `splitIntoPages`
+/// resolves a page's elements through that vec by `offset + i`, `coerce_custom`
+/// reads earlier answers out of a `custom_fields` list that is in layout order,
+/// and `service::validate_layout` resolves rules and country references in a
+/// single forward pass. Nesting would break every one of those at once. Markers
+/// break none of them: they register no key, so the passes walk straight past.
+///
+/// It is also what keeps the projection honest. Fields inside a row are still
+/// top-level elements, so `service::legacy_from_layout` still writes them to
+/// `standard_fields`/`custom_fields` and an embed bundle cached before rows
+/// existed still renders them — stacked, since it ignores the markers, exactly
+/// how `FieldWidth` already degrades there.
+///
+/// This is the same call `PageBreakElement` made, for the same reason.
+///
+/// A row carries no `visible_when`: its fields keep their own rules, and a row
+/// whose fields all hide is collapsed by the renderer, which already does that
+/// for a divider stranded between hidden neighbours.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RowStartElement {
+    /// Names the group for assistive tech (`role="group"`), where the fields
+    /// share a subject their individual labels don't state — an address block's
+    /// city/state/postal trio being the case this was built for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
 /// One entry in a form's ordered layout.
 ///
 /// Adjacently tagged: `element` names the kind and `config` carries the body
@@ -573,6 +623,8 @@ pub enum FormElement {
     Paragraph(ParagraphElement),
     Divider,
     PageBreak(PageBreakElement),
+    RowStart(RowStartElement),
+    RowEnd,
 }
 
 impl FormElement {
@@ -588,19 +640,24 @@ impl FormElement {
 
     /// This element's visibility rule, if it has one.
     ///
-    /// `Divider` and `PageBreak` always return `None` and can never carry one:
-    /// `Divider` is a serde *unit* variant, and under adjacent tagging giving it
-    /// a body would require a `config` key that no stored `{"element":"divider"}`
-    /// has. A divider left alone between hidden neighbours is collapsed by the
-    /// renderer instead. A conditional page break would mean a conditional page
-    /// count, which multi-step forms deliberately keep static.
+    /// `Divider`, `PageBreak` and the row markers always return `None` and can
+    /// never carry one: `Divider` is a serde *unit* variant, and under adjacent
+    /// tagging giving it a body would require a `config` key that no stored
+    /// `{"element":"divider"}` has. A divider left alone between hidden
+    /// neighbours is collapsed by the renderer instead. A conditional page break
+    /// would mean a conditional page count, which multi-step forms deliberately
+    /// keep static. A row is collapsed the same way a divider is, once its
+    /// fields have hidden themselves — see [`RowStartElement`].
     pub fn visible_when(&self) -> Option<&VisibilityRule> {
         match self {
             FormElement::Standard(s) => s.visible_when.as_ref(),
             FormElement::Custom(c) => c.visible_when.as_ref(),
             FormElement::Heading(h) => h.visible_when.as_ref(),
             FormElement::Paragraph(p) => p.visible_when.as_ref(),
-            FormElement::Divider | FormElement::PageBreak(_) => None,
+            FormElement::Divider
+            | FormElement::PageBreak(_)
+            | FormElement::RowStart(_)
+            | FormElement::RowEnd => None,
         }
     }
 
@@ -612,8 +669,19 @@ impl FormElement {
             FormElement::Custom(c) => Some(&mut c.visible_when),
             FormElement::Heading(h) => Some(&mut h.visible_when),
             FormElement::Paragraph(p) => Some(&mut p.visible_when),
-            FormElement::Divider | FormElement::PageBreak(_) => None,
+            FormElement::Divider
+            | FormElement::PageBreak(_)
+            | FormElement::RowStart(_)
+            | FormElement::RowEnd => None,
         }
+    }
+
+    /// Whether this element may sit between a [`FormElement::RowStart`] and its
+    /// [`FormElement::RowEnd`]. A row lays fields out on one line, so only
+    /// fields belong in one — a heading or divider inside a row has no sensible
+    /// rendering, and a page break inside one would split a line across steps.
+    pub fn allowed_in_row(&self) -> bool {
+        matches!(self, FormElement::Standard(_) | FormElement::Custom(_))
     }
 }
 

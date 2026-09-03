@@ -29,7 +29,11 @@ import {
   countryFieldCandidates,
   elementKey,
   isCountryField,
+  isInsideRow,
+  isRowMarker,
   newCustomElement,
+  newRowElements,
+  withoutRow,
   renameCountryReferences,
   stripCountryReferences,
   newDecorationElement,
@@ -78,10 +82,20 @@ export function FormBuilderPage() {
   const selectedIndex = items?.findIndex((i) => i.id === selectedId) ?? -1;
   const selected = selectedIndex >= 0 ? (items?.[selectedIndex] ?? null) : null;
 
-  const append = (element: FormElement) => {
-    const item = { id: newId(), element };
-    setItems((prev) => [...(prev ?? []), item]);
-    setSelectedId(item.id);
+  const append = (element: FormElement) => appendMany([element]);
+
+  /**
+   * Append one or more elements and select the first.
+   *
+   * A row is two elements — the `row_start`/`row_end` marker pair — so adding
+   * one is not a single append. Selecting the opener is what puts the row's
+   * settings in the inspector rather than the (settingless) closer.
+   */
+  const appendMany = (elements: FormElement[]) => {
+    const added = elements.map((element) => ({ id: newId(), element }));
+    if (added.length === 0) return;
+    setItems((prev) => [...(prev ?? []), ...added]);
+    setSelectedId(added[0]!.id);
     setSavedAt(null);
   };
 
@@ -128,7 +142,11 @@ export function FormBuilderPage() {
       // Drop the rules that pointed at this field, so deleting a controller
       // can't strand the form in a state the server refuses to save.
       const key = before.find((i) => i.id === rid)?.element ?? null;
-      const dropped = before.filter((i) => i.id !== rid);
+      // Deleting half a row leaves an unbalanced marker the server rejects, so
+      // a marker takes its partner with it. The fields it held stay put and
+      // simply become full-width again.
+      const dropped =
+        key && isRowMarker(key) ? withoutRow(before, rid) : before.filter((i) => i.id !== rid);
       const referenced = key ? elementKey(key) : null;
       if (!referenced) return dropped;
       // Unbind any state picker it was driving too — the same repair the
@@ -266,6 +284,7 @@ export function FormBuilderPage() {
                 append(newCustomElement(type, items.length, items))
               }
               onAddDecoration={(kind) => append(newDecorationElement(kind))}
+              onAddRow={() => appendMany(newRowElements())}
             />
           </CardContent>
         </Card>
@@ -297,6 +316,7 @@ export function FormBuilderPage() {
             <Inspector
                 item={selected}
                 onChange={patchSelected}
+                inRow={isInsideRow(items, selectedIndex)}
                 candidates={controllerCandidates(items, selectedIndex)}
                 countryCandidates={countryFieldCandidates(items, selectedIndex)}
                 ruleTargets={items.slice(selectedIndex + 1)}

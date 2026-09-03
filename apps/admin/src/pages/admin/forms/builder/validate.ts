@@ -1,5 +1,6 @@
 import { STANDARD_FIELDS } from "@open-relay/form-renderer";
 import {
+  allowedInRow,
   elementRule,
   isCountryField,
   type BuilderElement,
@@ -12,6 +13,7 @@ export type LayoutErrors = Record<string, string>;
 const MAX_KEY_LEN = 64;
 const MAX_LABEL_LEN = 200;
 const MAX_CONDITIONS = 10;
+const MAX_ROW_CHILDREN = 4;
 const VALUE_OPS = new Set(["equals", "not_equals", "contains"]);
 const CHECKBOX_OPS = new Set(["is_checked", "is_not_checked"]);
 const STANDARD_KEYS = new Set(STANDARD_FIELDS.map((f) => f.key));
@@ -70,6 +72,9 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
   // Country-valued keys passed so far — the only legal parents for a state
   // picker. Mirrors the `is_country` half of the server's `SeenField`.
   const seenCountries = new Set<string>();
+  // `Some`-style row state, mirroring the server's single forward pass: the id
+  // of the open row's marker, and how many fields it holds so far.
+  let row: { id: string; fields: number } | null = null;
 
   const record = (item: BuilderElement) => {
     const el = item.element;
@@ -84,6 +89,27 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
 
   items.forEach((item, index) => {
     const el = item.element;
+
+    if (el.element === "row_start") {
+      if (row) errors[item.id] = "Rows can't be nested. Close the open row first.";
+      row = { id: item.id, fields: 0 };
+      return;
+    }
+    if (el.element === "row_end") {
+      if (!row) errors[item.id] = "This closes a row that was never opened.";
+      row = null;
+      return;
+    }
+    if (row) {
+      if (!allowedInRow(el)) {
+        errors[item.id] = "Only fields can go in a row. Move this below the end of the row.";
+      } else {
+        row.fields += 1;
+        if (row.fields > MAX_ROW_CHILDREN) {
+          errors[row.id] = `A row holds at most ${MAX_ROW_CHILDREN} fields.`;
+        }
+      }
+    }
 
     // Checked before this element records its own key, so a self-reference
     // reads as "does not appear earlier" — same order as the server.
@@ -174,6 +200,15 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
       }
     }
   });
+
+  // A row left open at the end. Re-derived from the list rather than read out
+  // of the loop variable, which TypeScript narrows to `never` past the closure.
+  const unclosed = items.reduce<BuilderElement | null>(
+    (open, i) =>
+      i.element.element === "row_start" ? i : i.element.element === "row_end" ? null : open,
+    null,
+  );
+  if (unclosed) errors[unclosed.id] = "This row is never closed.";
 
   return errors;
 }

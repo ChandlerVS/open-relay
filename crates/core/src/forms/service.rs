@@ -31,6 +31,11 @@ const MAX_CUSTOM_FIELDS: usize = 100;
 const MAX_LAYOUT_ELEMENTS: usize = 300;
 const MAX_PARAGRAPH_LEN: usize = 2000;
 const MAX_PAGES: usize = 20;
+/// Fields on one row. The renderer's width vocabulary bottoms out at a third of
+/// the row, so four is already past the point where the controls stay usable;
+/// the cap is here to stop a layout that renders as unreadable slivers, not to
+/// express a rendering limit.
+const MAX_ROW_CHILDREN: usize = 4;
 /// Conditions in one visibility rule. Generous for real forms, low enough that
 /// the per-element evaluation stays trivially cheap on the submission path.
 const MAX_CONDITIONS: usize = 10;
@@ -702,10 +707,16 @@ pub fn merge_legacy_into_layout(
                 _ => false,
             });
             match successor {
-                Some(i) => out.insert(i, el),
+                // Before the successor — but never *inside* a row it happens to
+                // sit in. A legacy client has no vocabulary for rows and cannot
+                // see one, so silently making its field a fourth column of an
+                // address block would be a layout change it never asked for.
+                // Landing just before the row keeps catalogue order either way.
+                Some(i) => out.insert(row_start_before(&out, i), el),
                 None => {
                     // After the last standard field, but never pushed past a
-                    // page break into a later step.
+                    // page break into a later step, and never left inside a row
+                    // for the reason above.
                     let last_std = out.iter().rposition(|e| matches!(e, FormElement::Standard(_)));
                     match last_std {
                         Some(i) => {
@@ -713,7 +724,7 @@ pub fn merge_legacy_into_layout(
                                 .iter()
                                 .position(|e| matches!(e, FormElement::PageBreak(_)))
                                 .map(|b| i + 1 + b);
-                            out.insert(brk.unwrap_or(i + 1), el);
+                            out.insert(brk.unwrap_or(row_end_after(&out, i)), el);
                         }
                         None => out.push(el),
                     }
@@ -786,7 +797,10 @@ fn normalize_layout(mut layout: Vec<FormElement>) -> Vec<FormElement> {
             FormElement::PageBreak(b) => {
                 b.title = b.title.as_ref().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
             }
-            FormElement::Divider => {}
+            FormElement::RowStart(r) => {
+                r.label = r.label.as_ref().map(|l| l.trim().to_string()).filter(|l| !l.is_empty());
+            }
+            FormElement::Divider | FormElement::RowEnd => {}
         }
         // Trim every rule the element carries, and collapse one left with no
         // conditions back to "unconditional" — an empty rule would otherwise
@@ -804,7 +818,70 @@ fn normalize_layout(mut layout: Vec<FormElement>) -> Vec<FormElement> {
             }
         }
     }
-    layout
+    drop_empty_rows(layout)
+}
+
+/// Drop `RowStart` immediately followed by `RowEnd`.
+///
+/// Same stance `normalize_layout` takes on a rule with no conditions: cosmetic
+/// debris is repaired quietly, and only structural breakage — an unbalanced or
+/// nested marker — is worth a 400 from `validate_layout`. An empty row draws
+/// nothing, so rejecting one would be a 400 with no visible cause.
+///
+/// It is also what saves the legacy write paths a repair pass of their own.
+/// `merge_legacy_into_layout` can empty a row by disabling every standard field
+/// in it, and both legacy paths already run `normalize_layout` afterwards, so
+/// they inherit the cleanup for free — no analogue of `strip_dangling_rules` is
+/// needed for rows.
+fn drop_empty_rows(layout: Vec<FormElement>) -> Vec<FormElement> {
+    let mut out: Vec<FormElement> = Vec::with_capacity(layout.len());
+    for el in layout {
+        if matches!(el, FormElement::RowEnd)
+            && matches!(out.last(), Some(FormElement::RowStart(_)))
+        {
+            out.pop();
+            continue;
+        }
+        out.push(el);
+    }
+    out
+}
+
+/// Index of the `RowStart` enclosing `i`, if `i` sits inside a row.
+///
+/// Rows are a flat marker pair, so "inside" is a scan for an unclosed marker
+/// rather than a tree walk. `validate_layout` rejects nesting, so at most one
+/// row can be open at a time and the last marker seen settles it.
+fn open_row_at(layout: &[FormElement], i: usize) -> Option<usize> {
+    let mut open = None;
+    for (j, el) in layout.iter().take(i).enumerate() {
+        match el {
+            FormElement::RowStart(_) => open = Some(j),
+            FormElement::RowEnd => open = None,
+            _ => {}
+        }
+    }
+    open
+}
+
+/// An insertion point for "just before element `i`" that never lands in a row.
+fn row_start_before(layout: &[FormElement], i: usize) -> usize {
+    open_row_at(layout, i).unwrap_or(i)
+}
+
+/// An insertion point for "just after element `i`" that never lands in a row.
+fn row_end_after(layout: &[FormElement], i: usize) -> usize {
+    match open_row_at(layout, i) {
+        None => i + 1,
+        Some(_) => layout
+            .iter()
+            .skip(i)
+            .position(|e| matches!(e, FormElement::RowEnd))
+            .map(|e| i + e + 1)
+            // An unclosed row can only reach here mid-merge; validate_layout
+            // rejects it afterwards, so appending is a safe interim answer.
+            .unwrap_or(layout.len()),
+    }
 }
 
 /// Drop rules a *legacy* write has stranded.
@@ -974,6 +1051,10 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
     // visibility rules and the state pickers' country references.
     let mut seen_fields: HashMap<String, SeenField> = HashMap::new();
     let mut pages = 1usize;
+    // `Some(n)` while a row is open, `n` being the fields placed in it so far.
+    // A row is a flat marker pair (see `RowStartElement`), so it costs this one
+    // extra piece of state on the pass rather than a second, recursive walk.
+    let mut row: Option<usize> = None;
     for (i, el) in layout.iter().enumerate() {
         // Rules are checked before the element records its own key, so a
         // self-reference falls out as "does not appear earlier".
@@ -984,6 +1065,17 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
                 _ => "element",
             });
             validate_visible_when(rule, owner, &seen_fields)?;
+        }
+        // `RowEnd` is the one non-field that may follow an open row: it is the
+        // closer. Everything else — a heading, a divider, a page break, or
+        // another `RowStart` (nesting) — has no rendering on a shared line, so
+        // it has to wait until the row is closed.
+        if row.is_some() && !el.allowed_in_row() && !matches!(el, FormElement::RowEnd) {
+            return Err(CoreError::BadRequest(match el {
+                FormElement::RowStart(_) => "rows cannot be nested; close the open row first".into(),
+                _ => "a row can only contain fields; close it before adding anything else"
+                    .to_string(),
+            }));
         }
         match el {
             FormElement::Standard(s) => {
@@ -1099,7 +1191,32 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
                     }
                 }
             }
+            FormElement::RowStart(_) => {
+                // Nesting is rejected by the `allowed_in_row` guard above —
+                // `RowStart` is not allowed in a row — so reaching here means
+                // no row is open.
+                row = Some(0);
+            }
+            FormElement::RowEnd => {
+                if row.take().is_none() {
+                    return Err(CoreError::BadRequest(
+                        "a row was closed that was never opened".into(),
+                    ));
+                }
+            }
             FormElement::Divider => {}
+        }
+        // Counted after the arms so the cap covers exactly the fields, not the
+        // markers. `allowed_in_row` has already excluded everything else.
+        if let Some(n) = row.as_mut() {
+            if el.field_key().is_some() {
+                *n += 1;
+                if *n > MAX_ROW_CHILDREN {
+                    return Err(CoreError::BadRequest(format!(
+                        "no more than {MAX_ROW_CHILDREN} fields allowed in one row"
+                    )));
+                }
+            }
         }
         if let Some(key) = el.field_key() {
             // A standard field is never a checkbox, so `false` is right for it.
@@ -1121,6 +1238,10 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
                 },
             );
         }
+    }
+
+    if row.is_some() {
+        return Err(CoreError::BadRequest("a row was opened but never closed".into()));
     }
 
     // Delegate every custom-field rule (key charset, dupes, collision with a
@@ -1586,7 +1707,8 @@ mod tests {
     use crate::forms::ProgressStyle;
 
     use crate::forms::{
-        FieldWidth, HeadingElement, PageBreakElement, ParagraphElement, StandardFieldConfig,
+        FieldWidth, HeadingElement, PageBreakElement, ParagraphElement, RowStartElement,
+        StandardFieldConfig,
     };
 
     fn custom(key: &str, position: i32) -> CustomField {
@@ -2030,6 +2152,250 @@ mod tests {
         let mut f = custom("colour", 0);
         f.kind = CustomFieldType::Select { options: vec![] };
         assert!(validate_layout(&[FormElement::Custom(f)]).is_err());
+    }
+
+    // ---- Rows -------------------------------------------------------------
+
+    fn row_start() -> FormElement {
+        FormElement::RowStart(RowStartElement::default())
+    }
+
+    #[test]
+    fn validate_layout_accepts_a_row_of_fields() {
+        let layout = vec![
+            std_el("address_line_1"),
+            row_start(),
+            std_el("city"),
+            std_el("state"),
+            std_el("postal_code"),
+            FormElement::RowEnd,
+        ];
+        assert!(validate_layout(&layout).is_ok());
+    }
+
+    #[test]
+    fn validate_layout_rejects_unbalanced_rows() {
+        assert!(
+            validate_layout(&[row_start(), std_el("city")]).is_err(),
+            "opened but never closed"
+        );
+        assert!(
+            validate_layout(&[std_el("city"), FormElement::RowEnd]).is_err(),
+            "closed but never opened"
+        );
+        assert!(
+            validate_layout(&[row_start(), std_el("city"), FormElement::RowEnd, FormElement::RowEnd])
+                .is_err(),
+            "closed twice"
+        );
+    }
+
+    #[test]
+    fn validate_layout_rejects_a_nested_row() {
+        let layout = vec![row_start(), std_el("city"), row_start(), FormElement::RowEnd];
+        assert!(validate_layout(&layout).is_err());
+    }
+
+    #[test]
+    fn validate_layout_allows_only_fields_inside_a_row() {
+        let with = |el: FormElement| {
+            vec![std_el("email"), row_start(), std_el("city"), el, FormElement::RowEnd]
+        };
+        assert!(validate_layout(&with(FormElement::Divider)).is_err(), "divider");
+        assert!(
+            validate_layout(&with(FormElement::PageBreak(PageBreakElement::default()))).is_err(),
+            "page break — a row must not straddle two steps"
+        );
+        assert!(
+            validate_layout(&with(FormElement::Heading(HeadingElement {
+                text: "Nope".into(),
+                level: 2,
+                visible_when: None,
+            })))
+            .is_err(),
+            "heading"
+        );
+        // A custom field is fine, and so is the standard one already in there.
+        assert!(validate_layout(&with(FormElement::Custom(custom("note", 0)))).is_ok());
+    }
+
+    #[test]
+    fn validate_layout_caps_fields_in_one_row() {
+        let mut layout = vec![row_start()];
+        layout.extend(
+            ["first_name", "last_name", "email", "phone"].map(std_el),
+        );
+        layout.push(FormElement::RowEnd);
+        assert!(validate_layout(&layout).is_ok(), "{MAX_ROW_CHILDREN} fields fit");
+
+        layout.insert(5, std_el("company"));
+        assert!(validate_layout(&layout).is_err(), "one more does not");
+    }
+
+    #[test]
+    fn a_page_break_may_sit_directly_after_a_row() {
+        let layout = vec![
+            row_start(),
+            std_el("city"),
+            std_el("postal_code"),
+            FormElement::RowEnd,
+            FormElement::PageBreak(PageBreakElement::default()),
+            std_el("email"),
+        ];
+        assert!(validate_layout(&layout).is_ok());
+    }
+
+    #[test]
+    fn a_row_does_not_disturb_the_strictly_earlier_rule() {
+        // A rule may name a field inside a row, and a field inside a row may
+        // carry a rule naming one outside it. Markers register no key, so the
+        // one forward pass is unchanged.
+        let layout = vec![
+            row_start(),
+            FormElement::Custom(custom("a", 0)),
+            FormElement::RowEnd,
+            custom_when("b", rule(&[("a", ConditionOp::Equals, Some("x"))])),
+        ];
+        assert!(validate_layout(&layout).is_ok());
+
+        // The forward direction is still rejected across a row boundary.
+        let backwards = vec![
+            custom_when("b", rule(&[("a", ConditionOp::Equals, Some("x"))])),
+            row_start(),
+            FormElement::Custom(custom("a", 0)),
+            FormElement::RowEnd,
+        ];
+        assert!(validate_layout(&backwards).is_err());
+    }
+
+    #[test]
+    fn normalize_layout_drops_an_empty_row_rather_than_rejecting_it() {
+        let out = normalize_layout(vec![
+            std_el("email"),
+            row_start(),
+            FormElement::RowEnd,
+            std_el("phone"),
+        ]);
+        assert_eq!(
+            out.iter().filter_map(|e| e.field_key()).collect::<Vec<_>>(),
+            vec!["email", "phone"]
+        );
+        assert!(
+            !out.iter().any(|e| matches!(e, FormElement::RowStart(_) | FormElement::RowEnd)),
+            "an empty row draws nothing, so it is debris to clean up, not a 400"
+        );
+        assert!(validate_layout(&out).is_ok());
+    }
+
+    #[test]
+    fn normalize_layout_trims_a_row_label() {
+        let out = normalize_layout(vec![
+            row_start_labelled("  City, state, ZIP  "),
+            std_el("city"),
+            FormElement::RowEnd,
+        ]);
+        match &out[0] {
+            FormElement::RowStart(r) => assert_eq!(r.label.as_deref(), Some("City, state, ZIP")),
+            other => panic!("expected a row start, got {other:?}"),
+        }
+
+        let blank = normalize_layout(vec![
+            row_start_labelled("   "),
+            std_el("city"),
+            FormElement::RowEnd,
+        ]);
+        match &blank[0] {
+            FormElement::RowStart(r) => assert!(r.label.is_none(), "a blank label is no label"),
+            other => panic!("expected a row start, got {other:?}"),
+        }
+    }
+
+    fn row_start_labelled(label: &str) -> FormElement {
+        FormElement::RowStart(RowStartElement {
+            label: Some(label.to_string()),
+        })
+    }
+
+    #[test]
+    fn legacy_from_layout_still_sees_fields_inside_a_row() {
+        // The load-bearing one: an embed bundle cached before rows existed
+        // reads the legacy pair, so a field in a row must still project into it
+        // or that bundle renders an empty form.
+        let layout = vec![
+            row_start(),
+            std_el("city"),
+            FormElement::Custom(custom("note", 0)),
+            FormElement::RowEnd,
+        ];
+        let (sf, cf) = legacy_from_layout(&layout);
+        assert!(sf.get("city").unwrap().enabled);
+        assert_eq!(cf.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), vec!["note"]);
+    }
+
+    #[test]
+    fn a_legacy_write_never_inserts_a_standard_field_into_a_row() {
+        // A legacy client cannot see a row and never asked for one, so enabling
+        // a field must not silently make it another column of an address block.
+        let existing = vec![
+            row_start(),
+            std_el("city"),
+            std_el("postal_code"),
+            FormElement::RowEnd,
+        ];
+        let mut sf = StandardFieldsConfig::all_disabled();
+        sf.city = on(false);
+        sf.postal_code = on(false);
+        // `state` sorts between city and postal_code in the catalogue, so the
+        // naive insertion point is inside the row.
+        sf.state = on(false);
+
+        let merged = normalize_layout(merge_legacy_into_layout(&existing, Some(&sf), None));
+        assert!(validate_layout(&merged).is_ok());
+
+        let shape: Vec<&str> = merged
+            .iter()
+            .map(|e| match e {
+                FormElement::RowStart(_) => "[",
+                FormElement::RowEnd => "]",
+                FormElement::Standard(s) => s.key.as_str(),
+                _ => "?",
+            })
+            .collect();
+        assert_eq!(shape, vec!["state", "[", "city", "postal_code", "]"]);
+    }
+
+    #[test]
+    fn a_legacy_write_that_empties_a_row_leaves_a_saveable_layout() {
+        // Disabling every field in a row would otherwise leave a bare marker
+        // pair; normalize_layout cleans it up, which is why the legacy paths
+        // need no repair pass of their own for rows.
+        let existing = vec![
+            std_el("email"),
+            row_start(),
+            std_el("city"),
+            std_el("postal_code"),
+            FormElement::RowEnd,
+        ];
+        let mut sf = StandardFieldsConfig::all_disabled();
+        sf.email = on(false);
+
+        let merged = normalize_layout(merge_legacy_into_layout(&existing, Some(&sf), None));
+        assert_eq!(merged.iter().filter_map(|e| e.field_key()).collect::<Vec<_>>(), vec!["email"]);
+        assert!(
+            !merged.iter().any(|e| matches!(e, FormElement::RowStart(_) | FormElement::RowEnd))
+        );
+        assert!(
+            validate_layout(&merged).is_ok(),
+            "a legacy PATCH must never leave the layout in a state it can't re-save"
+        );
+    }
+
+    #[test]
+    fn a_row_marker_can_never_carry_a_rule() {
+        assert!(row_start().visible_when().is_none());
+        assert!(FormElement::RowEnd.visible_when().is_none());
+        assert!(row_start().visible_when_slot().is_none());
+        assert!(FormElement::RowEnd.visible_when_slot().is_none());
     }
 
     #[test]

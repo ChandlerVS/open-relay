@@ -139,6 +139,10 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
                 FormElement::PageBreak(b) => {
                     format!("page_break:{}", b.title.clone().unwrap_or_default())
                 }
+                FormElement::RowStart(r) => {
+                    format!("row_start:{}", r.label.clone().unwrap_or_default())
+                }
+                FormElement::RowEnd => "row_end".into(),
             })
             .collect()
     };

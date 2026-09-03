@@ -1,5 +1,5 @@
 import type { Condition, FormElement, VisibilityRule } from "./schema";
-import type { FormPage } from "./layout";
+import type { FormPage, LayoutEntry } from "./layout";
 
 /**
  * Evaluating a layout's conditional-visibility rules.
@@ -123,29 +123,46 @@ export function computeVisibility(layout: FormElement[], values: Values): Visibi
 
 /**
  * A page's elements paired with their layout index, filtered to the visible
- * ones, with dividers that no longer separate anything removed.
+ * ones, with decoration that no longer decorates anything removed.
  *
- * A `divider` cannot carry a rule of its own (see `schema.ts`), so hiding the
- * block around one would otherwise leave a rule floating between unrelated
- * fields. Collapsing leading, trailing and doubled dividers is the cheap fix,
- * and it is purely presentational — nothing here affects what is submitted.
+ * Neither a `divider` nor a row marker can carry a rule of its own (see
+ * `schema.ts`), so hiding the block around one would otherwise leave it
+ * floating between unrelated fields — or, for a row, leave an empty flex box
+ * contributing a gap. Collapsing leading, trailing and doubled dividers, and
+ * rows whose every field has hidden, is the cheap fix, and it is purely
+ * presentational: nothing here affects what is submitted.
+ *
+ * Doing the row collapse *here* rather than at render time is load-bearing for
+ * multi-step forms. `Form.tsx` decides which steps are live by asking whether a
+ * page has any visible elements left, so a page holding nothing but an
+ * all-hidden row has to come back empty or it would count as a step with
+ * nothing on it.
  *
  * The layout index rides along so React keys stay stable: keying decoration by
  * its position in the *filtered* list would remount a heading whenever a
  * sibling appeared or disappeared.
  */
-export function visibleElements(
-  page: FormPage,
-  visible: boolean[],
-): { el: FormElement; index: number }[] {
+export function visibleElements(page: FormPage, visible: boolean[]): LayoutEntry[] {
   const kept = page.elements
     .map((el, i) => ({ el, index: page.offset + i }))
     .filter(({ index }) => visible[index] !== false);
 
-  return kept.filter(({ el }, i) => {
+  // Rows first: a row that collapses can strand a divider beside it, and the
+  // divider pass below should see the list as it will actually render.
+  const rows: LayoutEntry[] = [];
+  for (let i = 0; i < kept.length; i += 1) {
+    const entry = kept[i]!;
+    if (entry.el.element === "row_start" && kept[i + 1]?.el.element === "row_end") {
+      i += 1; // drop the closer along with the opener
+      continue;
+    }
+    rows.push(entry);
+  }
+
+  return rows.filter(({ el }, i) => {
     if (el.element !== "divider") return true;
-    const prev = kept[i - 1];
-    const next = kept[i + 1];
+    const prev = rows[i - 1];
+    const next = rows[i + 1];
     return prev !== undefined && next !== undefined && prev.el.element !== "divider";
   });
 }

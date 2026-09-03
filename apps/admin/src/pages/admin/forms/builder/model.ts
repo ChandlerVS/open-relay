@@ -8,6 +8,7 @@ export type CustomFieldType = components["schemas"]["CustomFieldType"];
 export type VisibilityRule = components["schemas"]["VisibilityRule"];
 export type Condition = components["schemas"]["Condition"];
 export type ConditionOp = components["schemas"]["ConditionOp"];
+export type FieldWidth = components["schemas"]["FieldWidth"];
 
 /**
  * A layout element plus a client-side identity.
@@ -57,6 +58,10 @@ export function elementTitle(el: FormElement): string {
       return "Divider";
     case "page_break":
       return el.config.title?.trim() || "Page break";
+    case "row_start":
+      return el.config.label?.trim() || "Row";
+    case "row_end":
+      return "End of row";
   }
 }
 
@@ -170,7 +175,9 @@ export function elementRule(el: FormElement): VisibilityRule | null {
  *
  * `divider` cannot: it is a serde *unit* variant on the server, so giving it a
  * body would reject every layout already stored. `page_break` deliberately
- * cannot either — a conditional break would mean a conditional step count.
+ * cannot either — a conditional break would mean a conditional step count. Nor
+ * can a row marker: the fields in a row carry their own rules, and a row whose
+ * fields have all hidden is collapsed by the renderer.
  */
 export function canBeConditional(el: FormElement): boolean {
   return (
@@ -179,6 +186,16 @@ export function canBeConditional(el: FormElement): boolean {
     el.element === "heading" ||
     el.element === "paragraph"
   );
+}
+
+/** Is this element one half of a row marker pair? */
+export function isRowMarker(el: FormElement): boolean {
+  return el.element === "row_start" || el.element === "row_end";
+}
+
+/** May this element sit inside a row? Mirrors `FormElement::allowed_in_row`. */
+export function allowedInRow(el: FormElement): boolean {
+  return el.element === "standard" || el.element === "custom";
 }
 
 /**
@@ -403,6 +420,129 @@ export function newCustomElement(
     };
   }
   return { element: "custom", config: { ...base, type } };
+}
+
+/**
+ * A new, empty row: the marker pair, ready for fields to be dragged between.
+ *
+ * Two elements rather than one because a row is a flat marker pair on the wire
+ * (see `RowStartElement` on the server). That is what lets the canvas stay a
+ * single flat sortable list — dragging a field into a row is an ordinary
+ * reorder, not a cross-container drop.
+ */
+export function newRowElements(): FormElement[] {
+  return [{ element: "row_start", config: {} }, { element: "row_end" }];
+}
+
+/**
+ * Repair row markers after a reorder.
+ *
+ * A flat list is what makes drag-and-drop cheap, but it also lets a drag put
+ * the markers in an order that means nothing: a `row_end` above its
+ * `row_start`, a marker dragged inside another row, a row left holding a
+ * heading. Rather than blocking those drags — dnd-kit would have to know about
+ * rows, which is the nesting complexity this design avoids — we let the drop
+ * happen and tidy up after, the way the server's `normalize_layout` tidies an
+ * empty row instead of rejecting it.
+ *
+ * Four repairs, in one pass:
+ *  - a `row_end` with no open row is dropped;
+ *  - a `row_start` inside an open row closes the previous one rather than
+ *    nesting;
+ *  - anything that can't live in a row (a heading, a divider, a page break)
+ *    closes the row and lands after it;
+ *  - a row left with no fields, or never closed, is dropped entirely.
+ *
+ * The result always satisfies `service::validate_layout`'s row rules, so a
+ * reorder can never put the form into a state that won't save.
+ */
+export function normalizeRows(items: BuilderElement[]): BuilderElement[] {
+  const out: BuilderElement[] = [];
+  // Index in `out` of the open row's marker, and how many fields it holds.
+  let open: { at: number; fields: number } | null = null;
+
+  const closeRow = (closer: BuilderElement | null) => {
+    if (!open) return;
+    if (open.fields === 0) out.splice(open.at, 1);
+    else if (closer) out.push(closer);
+    else out.push({ id: newId(), element: { element: "row_end" } });
+    open = null;
+  };
+
+  for (const item of items) {
+    const el = item.element;
+
+    if (el.element === "row_end") {
+      // A closer with nothing open is debris from a drag; drop it.
+      if (open) closeRow(item);
+      continue;
+    }
+
+    if (el.element === "row_start") {
+      closeRow(null); // never nest — the previous row ends here
+      open = { at: out.length, fields: 0 };
+      out.push(item);
+      continue;
+    }
+
+    if (open && !allowedInRow(el)) {
+      closeRow(null);
+      out.push(item);
+      continue;
+    }
+
+    if (open) open.fields += 1;
+    out.push(item);
+  }
+
+  closeRow(null); // an unclosed row at the end
+  return out;
+}
+
+/**
+ * Remove a row marker *and its partner*, keeping the fields between them.
+ *
+ * Half a pair is a layout the server rejects, and the delete button acts on one
+ * element — so deleting either marker has to mean "un-row these fields", which
+ * is also the only reading a user could intend. The fields stay exactly where
+ * they are and go back to being full width.
+ */
+export function withoutRow(items: BuilderElement[], id: string): BuilderElement[] {
+  const at = items.findIndex((i) => i.id === id);
+  if (at === -1) return items;
+  const kind = items[at]!.element.element;
+  if (kind !== "row_start" && kind !== "row_end") return items;
+
+  const partner =
+    kind === "row_start"
+      ? items.findIndex((i, j) => j > at && i.element.element === "row_end")
+      : items.reduce(
+          (found, i, j) => (j < at && i.element.element === "row_start" ? j : found),
+          -1,
+        );
+  const drop = new Set([at, partner]);
+  return items.filter((_, j) => !drop.has(j));
+}
+
+/**
+ * Is the element at `index` between a `row_start` and its `row_end`?
+ *
+ * Derived from the flat list rather than stored, exactly as the canvas derives
+ * its indentation and its step numbers.
+ */
+export function isInsideRow(items: BuilderElement[], index: number): boolean {
+  // A marker is not "in" its own row: the opener precedes the run and the
+  // closer ends it. This has to agree with the canvas, which indents a row's
+  // fields but draws the two markers flush — the same derivation twice.
+  const self = items[index]?.element.element;
+  if (self === "row_start" || self === "row_end") return false;
+
+  let open = false;
+  for (const item of items.slice(0, Math.max(index, 0))) {
+    if (item.element.element === "row_start") open = true;
+    if (item.element.element === "row_end") open = false;
+  }
+  return open;
 }
 
 export function newDecorationElement(

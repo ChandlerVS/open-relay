@@ -915,9 +915,24 @@ export interface components {
         };
         /**
          * @description Fraction of a row a field occupies when rendered. Layout-only.
+         *
+         *     Read two ways by the renderer, which is why the vocabulary is fractions
+         *     rather than pixels:
+         *
+         *     - **Outside a row** it is a span of the six-track grid `.or-form__fields`
+         *       lays down — `Half` is three tracks, `Third` two. Adjacent fields whose
+         *       spans fit share a line by grid auto-placement, which is how the old
+         *       two-track grid already paired two `Half`s.
+         *     - **Inside a [`FormElement::RowStart`]/[`FormElement::RowEnd`] pair** it is a
+         *       flex weight over the same denominator. `Full` weighs six, so a row whose
+         *       fields all leave this alone splits evenly — the right default when three
+         *       fields are dropped into a row precisely so they sit side by side.
+         *
+         *     Never validated: an author can only pick from the catalogue, and a width
+         *     that does not tile is a cosmetic result, not a rejectable one.
          * @enum {string}
          */
-        FieldWidth: "full" | "half";
+        FieldWidth: "full" | "two_thirds" | "half" | "third";
         /**
          * @description Outbound representation of a form. `owner_id` is exposed to admins; the
          *     public-facing endpoint uses [`PublicFormDto`] instead.
@@ -991,6 +1006,13 @@ export interface components {
             config: components["schemas"]["PageBreakElement"];
             /** @enum {string} */
             element: "page_break";
+        } | {
+            config: components["schemas"]["RowStartElement"];
+            /** @enum {string} */
+            element: "row_start";
+        } | {
+            /** @enum {string} */
+            element: "row_end";
         };
         FormList: {
             items: components["schemas"]["FormDto"][];
@@ -1426,6 +1448,39 @@ export interface components {
             id: number;
             is_system: boolean;
             name: string;
+        };
+        /**
+         * @description Opens a row: everything up to the matching [`FormElement::RowEnd`] is laid
+         *     out on one line, sharing the width by each field's [`FieldWidth`].
+         *
+         *     A row is a **flat marker pair**, not a container holding `children`. The
+         *     whole layout system rests on one flat slot per element — `element_visibility`
+         *     returns a `Vec<bool>` positionally parallel to the layout, `splitIntoPages`
+         *     resolves a page's elements through that vec by `offset + i`, `coerce_custom`
+         *     reads earlier answers out of a `custom_fields` list that is in layout order,
+         *     and `service::validate_layout` resolves rules and country references in a
+         *     single forward pass. Nesting would break every one of those at once. Markers
+         *     break none of them: they register no key, so the passes walk straight past.
+         *
+         *     It is also what keeps the projection honest. Fields inside a row are still
+         *     top-level elements, so `service::legacy_from_layout` still writes them to
+         *     `standard_fields`/`custom_fields` and an embed bundle cached before rows
+         *     existed still renders them — stacked, since it ignores the markers, exactly
+         *     how `FieldWidth` already degrades there.
+         *
+         *     This is the same call `PageBreakElement` made, for the same reason.
+         *
+         *     A row carries no `visible_when`: its fields keep their own rules, and a row
+         *     whose fields all hide is collapsed by the renderer, which already does that
+         *     for a divider stranded between hidden neighbours.
+         */
+        RowStartElement: {
+            /**
+             * @description Names the group for assistive tech (`role="group"`), where the fields
+             *     share a subject their individual labels don't state — an address block's
+             *     city/state/postal trio being the case this was built for.
+             */
+            label?: string | null;
         };
         SetupStatus: {
             initialized: boolean;

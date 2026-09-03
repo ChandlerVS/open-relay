@@ -1,4 +1,10 @@
-import type { FormElement, PublicFormDto, StandardFieldsConfig, CustomField } from "./schema";
+import type {
+  FormElement,
+  PublicFormDto,
+  RowStartElement,
+  StandardFieldsConfig,
+  CustomField,
+} from "./schema";
 import { STANDARD_FIELDS } from "./standardFields";
 
 /**
@@ -64,6 +70,59 @@ export function splitIntoPages(layout: FormElement[]): FormPage[] {
     }
   });
   return pages;
+}
+
+/** A layout element paired with its index in the flat layout. */
+export interface LayoutEntry {
+  el: FormElement;
+  index: number;
+}
+
+/**
+ * One thing to draw: either a lone element, or a row of them sharing a line.
+ */
+export type RenderNode =
+  | { kind: "element"; entry: LayoutEntry }
+  | { kind: "row"; config: RowStartElement; index: number; children: LayoutEntry[] };
+
+/**
+ * Fold `row_start`/`row_end` marker pairs into row nodes for rendering.
+ *
+ * The layout itself stays flat — this is the *only* place the markers become a
+ * shape, and it happens after visibility has already been resolved over the
+ * flat list. That ordering is the whole reason rows cost the rest of this
+ * package nothing: `computeVisibility` still returns a `boolean[]` parallel to
+ * the layout, `splitIntoPages` still resolves a page through `offset + i`, and
+ * `stateBindings` still walks a flat list, because at every one of those points
+ * a row is still just two elements that contribute no key.
+ *
+ * Tolerant of unbalanced markers even though the server rejects them, because
+ * an embed bundle is long-lived and a malformed response should degrade to a
+ * drawn form rather than a thrown render: a stray `row_end` is dropped, and an
+ * unclosed `row_start` takes the rest of the page.
+ */
+export function groupRows(entries: LayoutEntry[]): RenderNode[] {
+  const out: RenderNode[] = [];
+  let open: { kind: "row"; config: RowStartElement; index: number; children: LayoutEntry[] } | null =
+    null;
+
+  for (const entry of entries) {
+    if (entry.el.element === "row_start") {
+      open = { kind: "row", config: entry.el.config, index: entry.index, children: [] };
+      out.push(open);
+      continue;
+    }
+    if (entry.el.element === "row_end") {
+      open = null;
+      continue;
+    }
+    if (open) open.children.push(entry);
+    else out.push({ kind: "element", entry });
+  }
+
+  // An empty row is normally collapsed by `visibleElements` before it reaches
+  // here; this catches the unbalanced case, where there was no closer to pair.
+  return out.filter((n) => n.kind === "element" || n.children.length > 0);
 }
 
 /**

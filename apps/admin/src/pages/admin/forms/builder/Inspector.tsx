@@ -10,6 +10,7 @@ import {
   type BuilderElement,
   type ControllerCandidate,
   type CustomTypeName,
+  type FieldWidth,
   type FormElement,
   type VisibilityRule,
 } from "./model";
@@ -30,6 +31,8 @@ export interface InspectorProps {
   countryCandidates: ControllerCandidate[];
   /** Elements after this one, for the rule editor's bulk apply. */
   ruleTargets: BuilderElement[];
+  /** Whether the selected element sits inside a row, which changes what width means. */
+  inRow: boolean;
   onApplyRuleToMany: (ids: string[], rule: VisibilityRule) => void;
 }
 
@@ -67,24 +70,48 @@ function Check({
   );
 }
 
+const WIDTHS: { value: FieldWidth; label: string }[] = [
+  { value: "full", label: "Full width" },
+  { value: "two_thirds", label: "Two thirds" },
+  { value: "half", label: "Half width" },
+  { value: "third", label: "One third" },
+];
+
+/**
+ * Width is read two ways, which is why the hint changes with context: outside a
+ * row it is a share of the form's six-column grid, and fields whose widths add
+ * up land on one line by themselves; inside a row it is a share of that row.
+ */
 function WidthRow({
   value,
+  inRow,
   onChange,
 }: {
-  value: "full" | "half" | undefined;
-  onChange: (v: "full" | "half") => void;
+  value: FieldWidth | undefined;
+  inRow: boolean;
+  onChange: (v: FieldWidth) => void;
 }) {
   return (
-    <Row label="Width">
-      <select
-        className={SELECT_CLASS}
-        value={value ?? "full"}
-        onChange={(e) => onChange(e.target.value as "full" | "half")}
-      >
-        <option value="full">Full width</option>
-        <option value="half">Half width</option>
-      </select>
-    </Row>
+    <>
+      <Row label="Width">
+        <select
+          className={SELECT_CLASS}
+          value={value ?? "full"}
+          onChange={(e) => onChange(e.target.value as FieldWidth)}
+        >
+          {WIDTHS.map((w) => (
+            <option key={w.value} value={w.value}>
+              {w.label}
+            </option>
+          ))}
+        </select>
+      </Row>
+      {inRow && (value ?? "full") === "full" && (
+        <p className="text-xs text-muted-foreground">
+          Fields in a row share the line evenly unless you narrow them.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -92,6 +119,7 @@ function WidthRow({
 export function Inspector({
   item,
   onChange,
+  inRow,
   candidates,
   countryCandidates,
   ruleTargets,
@@ -159,7 +187,7 @@ export function Inspector({
             onChange={(e) => patch({ default_value: e.target.value || null })}
           />
         </Row>
-        <WidthRow value={cfg.width} onChange={(width) => patch({ width })} />
+        <WidthRow value={cfg.width} inRow={inRow} onChange={(width) => patch({ width })} />
         <Check
           label="Required"
           checked={cfg.required ?? false}
@@ -315,7 +343,7 @@ export function Inspector({
             />
           </Row>
         )}
-        <WidthRow value={cfg.width} onChange={(width) => patch({ width })} />
+        <WidthRow value={cfg.width} inRow={inRow} onChange={(width) => patch({ width })} />
         <Check
           label="Required"
           checked={cfg.required ?? false}
@@ -401,6 +429,43 @@ export function Inspector({
           in the required fields on a step before moving on.
         </p>
       </div>
+    );
+  }
+
+  if (el.element === "row_start") {
+    const cfg = el.config;
+    return (
+      <div className="space-y-2">
+        <Row label="Group label">
+          <Input
+            className="h-8 text-sm"
+            value={cfg.label ?? ""}
+            placeholder="e.g. City, state, ZIP"
+            onChange={(e) =>
+              onChange({ element: "row_start", config: { label: e.target.value || null } })
+            }
+          />
+        </Row>
+        <p className="text-xs text-muted-foreground">
+          Fields between this and the end of the row sit on one line, sharing it
+          evenly unless you set their widths. The label is read out by screen
+          readers and is not shown on the form — leave it blank if the fields'
+          own labels already say what the group is.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          On narrow screens the fields stack, and a row whose fields are all
+          hidden by a rule disappears with them.
+        </p>
+      </div>
+    );
+  }
+
+  if (el.element === "row_end") {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Marks where the row above ends. Drag fields above this to add them to
+        the row.
+      </p>
     );
   }
 

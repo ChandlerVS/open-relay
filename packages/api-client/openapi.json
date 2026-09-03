@@ -2938,10 +2938,12 @@
       },
       "FieldWidth": {
         "type": "string",
-        "description": "Fraction of a row a field occupies when rendered. Layout-only.",
+        "description": "Fraction of a row a field occupies when rendered. Layout-only.\n\nRead two ways by the renderer, which is why the vocabulary is fractions\nrather than pixels:\n\n- **Outside a row** it is a span of the six-track grid `.or-form__fields`\n  lays down — `Half` is three tracks, `Third` two. Adjacent fields whose\n  spans fit share a line by grid auto-placement, which is how the old\n  two-track grid already paired two `Half`s.\n- **Inside a [`FormElement::RowStart`]/[`FormElement::RowEnd`] pair** it is a\n  flex weight over the same denominator. `Full` weighs six, so a row whose\n  fields all leave this alone splits evenly — the right default when three\n  fields are dropped into a row precisely so they sit side by side.\n\nNever validated: an author can only pick from the catalogue, and a width\nthat does not tile is a cosmetic result, not a rejectable one.",
         "enum": [
           "full",
-          "half"
+          "two_thirds",
+          "half",
+          "third"
         ]
       },
       "FormDto": {
@@ -3150,6 +3152,38 @@
                 "type": "string",
                 "enum": [
                   "page_break"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "element"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/RowStartElement"
+              },
+              "element": {
+                "type": "string",
+                "enum": [
+                  "row_start"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "element"
+            ],
+            "properties": {
+              "element": {
+                "type": "string",
+                "enum": [
+                  "row_end"
                 ]
               }
             }
@@ -4182,6 +4216,20 @@
             "type": "string"
           }
         }
+      },
+      "RowStartElement": {
+        "type": "object",
+        "description": "Opens a row: everything up to the matching [`FormElement::RowEnd`] is laid\nout on one line, sharing the width by each field's [`FieldWidth`].\n\nA row is a **flat marker pair**, not a container holding `children`. The\nwhole layout system rests on one flat slot per element — `element_visibility`\nreturns a `Vec<bool>` positionally parallel to the layout, `splitIntoPages`\nresolves a page's elements through that vec by `offset + i`, `coerce_custom`\nreads earlier answers out of a `custom_fields` list that is in layout order,\nand `service::validate_layout` resolves rules and country references in a\nsingle forward pass. Nesting would break every one of those at once. Markers\nbreak none of them: they register no key, so the passes walk straight past.\n\nIt is also what keeps the projection honest. Fields inside a row are still\ntop-level elements, so `service::legacy_from_layout` still writes them to\n`standard_fields`/`custom_fields` and an embed bundle cached before rows\nexisted still renders them — stacked, since it ignores the markers, exactly\nhow `FieldWidth` already degrades there.\n\nThis is the same call `PageBreakElement` made, for the same reason.\n\nA row carries no `visible_when`: its fields keep their own rules, and a row\nwhose fields all hide is collapsed by the renderer, which already does that\nfor a divider stranded between hidden neighbours.",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Names the group for assistive tech (`role=\"group\"`), where the fields\nshare a subject their individual labels don't state — an address block's\ncity/state/postal trio being the case this was built for."
+          }
+        },
+        "additionalProperties": false
       },
       "SetupStatus": {
         "type": "object",

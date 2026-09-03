@@ -7,6 +7,8 @@ export interface PaletteProps {
   onAddStandard: (key: string) => void;
   onAddCustom: (type: CustomTypeName) => void;
   onAddDecoration: (kind: "heading" | "paragraph" | "divider" | "page_break") => void;
+  /** Adds a row: two elements, so it doesn't go through `onAddDecoration`. */
+  onAddRow: () => void;
 }
 
 const DECORATIONS = [
@@ -59,6 +61,7 @@ export function Palette({
   onAddStandard,
   onAddCustom,
   onAddDecoration,
+  onAddRow,
 }: PaletteProps) {
   return (
     <div className="space-y-4">
@@ -87,6 +90,12 @@ export function Palette({
       </Group>
 
       <Group title="Layout">
+        <PaletteButton
+          onClick={onAddRow}
+          hint="Put several fields on one line, e.g. city, state and ZIP"
+        >
+          Row
+        </PaletteButton>
         {DECORATIONS.map((d) => (
           <PaletteButton key={d.kind} onClick={() => onAddDecoration(d.kind)}>
             {d.label}

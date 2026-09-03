@@ -31,7 +31,10 @@ export {
   splitIntoPages,
   stateBindings,
   pageFieldKeys,
+  groupRows,
   type FormPage,
+  type LayoutEntry,
+  type RenderNode,
 } from "./layout";
 export type {
   PublicFormDto,
@@ -43,6 +46,7 @@ export type {
   HeadingElement,
   ParagraphElement,
   PageBreakElement,
+  RowStartElement,
   FieldWidth,
   StandardInputVariant,
   PostSubmissionAction,

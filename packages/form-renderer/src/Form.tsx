@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { STANDARD_FIELDS } from "./standardFields";
 import { COUNTRIES, subdivisionsFor, type RegionOption } from "./regions";
-import { resolveLayout, splitIntoPages, stateBindings } from "./layout";
+import { groupRows, resolveLayout, splitIntoPages, stateBindings } from "./layout";
+import type { LayoutEntry } from "./layout";
 import { computeVisibility, visibleElements } from "./visibility";
 import type {
   CustomField,
+  FieldWidth,
   FormElement,
   PostSubmissionAction,
   ProgressStyle,
@@ -386,19 +388,32 @@ export function Form({
           a sibling appears or disappears.
         */}
         {page &&
-          visibleElements(page, visible).map(({ el, index }) => (
-            <LayoutElement
-              key={elementKey(el, index)}
-              element={el}
-              scope={schema.id}
-              values={values}
-              resolved={resolved}
-              bindings={bindings}
-              hiddenKeys={hiddenKeys}
-              regions={schema.regions}
-              onChange={set}
-            />
-          ))}
+          groupRows(visibleElements(page, visible)).map((node) => {
+            const draw = ({ el, index }: LayoutEntry) => (
+              <LayoutElement
+                key={elementKey(el, index)}
+                element={el}
+                scope={schema.id}
+                values={values}
+                resolved={resolved}
+                bindings={bindings}
+                hiddenKeys={hiddenKeys}
+                regions={schema.regions}
+                onChange={set}
+              />
+            );
+            if (node.kind === "element") return draw(node.entry);
+            return (
+              <div
+                key={`row-${node.index}`}
+                className="or-row"
+                role="group"
+                aria-label={node.config.label ?? undefined}
+              >
+                {node.children.map(draw)}
+              </div>
+            );
+          })}
         {/*
           Honeypot: a hidden field a real user never sees or tabs to, but many
           bots auto-fill. The server rejects a submission whose `_hp` is set.
@@ -636,6 +651,19 @@ function LayoutElement({
     case "page_break":
       // Consumed by splitIntoPages; never reaches a page's element list.
       return null;
+    case "row_start":
+    case "row_end":
+      // Consumed by groupRows, which folds the pair and everything between it
+      // into a single row node before anything gets here.
+      return null;
+    default: {
+      // A layout from a newer server than this bundle. Drawing nothing is the
+      // right failure: the form still renders and still submits, and the
+      // server revalidates whatever comes back regardless.
+      const unhandled: never = element;
+      void unhandled;
+      return null;
+    }
   }
 }
 
@@ -723,8 +751,16 @@ function StandardFieldInput({
   );
 }
 
-function fieldClass(width: "full" | "half" | undefined): string {
-  return width === "half" ? "or-field or-field--half" : "or-field";
+/**
+ * The grid/flex class for a field's width.
+ *
+ * `full` gets no modifier: it is the default in both layout contexts (all six
+ * grid tracks outside a row, the full flex weight inside one), so leaving the
+ * class off keeps the markup identical to what a form with no widths produces.
+ */
+function fieldClass(width: FieldWidth | undefined, extra?: string): string {
+  const modifier = width && width !== "full" ? ` or-field--${width.replace("_", "-")}` : "";
+  return `or-field${modifier}${extra ? ` ${extra}` : ""}`;
 }
 
 function CustomFieldInput({
@@ -746,7 +782,7 @@ function CustomFieldInput({
 
   if (field.type === "checkbox") {
     return (
-      <div className="or-field or-field--checkbox">
+      <div className={fieldClass(field.width, "or-field--checkbox")}>
         <label htmlFor={id} className="or-field__label">
           <input
             id={id}
@@ -771,7 +807,7 @@ function CustomFieldInput({
     // being checked, which is the per-group behaviour we want.
     const group = `or-${scope}-${field.key}`;
     return (
-      <div className={`${fieldClass(field.width)} or-field--radio`}>
+      <div className={fieldClass(field.width, "or-field--radio")}>
         <fieldset className="or-radio-group">
           <legend className="or-field__label">
             {field.label}

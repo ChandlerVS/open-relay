@@ -140,13 +140,18 @@
 }
 
 /*
-  Two-column grid, but every child spans both tracks by default — so the
-  rendered result is identical to the previous single-column flex layout
-  unless a field explicitly opts into half width.
+  Six-track grid, but every child spans all six by default — so the rendered
+  result is identical to the original single-column flex layout unless a field
+  explicitly opts into a narrower width.
+
+  Six rather than two so thirds are expressible at all (city / state / postal
+  code being the case this exists for). `half` was `span 1` of two tracks and
+  is now `span 3` of six: the same 50%, so nothing about an existing form's
+  rendering changes.
 */
 .or-form__fields {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(6, 1fr);
   gap: 0.875rem;
 }
 
@@ -155,14 +160,65 @@
   min-width: 0;
 }
 
-.or-field--half {
-  grid-column: span 1;
+.or-form__fields > .or-field--two-thirds {
+  grid-column: span 4;
 }
 
-/* Half-width fields stack on narrow viewports (and narrow host containers). */
+.or-form__fields > .or-field--half {
+  grid-column: span 3;
+}
+
+.or-form__fields > .or-field--third {
+  grid-column: span 2;
+}
+
+/*
+  A row block: an explicit `row_start`/`row_end` group, laid out with flex
+  rather than the grid above. Flex is what makes the *default* right — inside a
+  row `width` is a proportional weight and `full` weighs six, so fields that
+  leave it alone split the line evenly. That is what you want when three fields
+  were put in a row precisely so they'd sit side by side; grid auto-placement
+  would instead give each its own line.
+*/
+.or-form__fields > .or-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.875rem;
+  align-items: flex-start;
+}
+
+.or-row > * {
+  flex: 6 1 0;
+  min-width: 0;
+}
+
+.or-row > .or-field--two-thirds {
+  flex: 4 1 0;
+}
+
+.or-row > .or-field--half {
+  flex: 3 1 0;
+}
+
+.or-row > .or-field--third {
+  flex: 2 1 0;
+}
+
+/*
+  Narrow viewports stack everything. This is a viewport query, not a container
+  query: the form renders inside a shadow root on a host page we don't control,
+  so it is an approximation of "the form is narrow" — the same approximation
+  the half-width rule has always made.
+*/
 @media (max-width: 30rem) {
-  .or-field--half {
+  .or-form__fields > .or-field--two-thirds,
+  .or-form__fields > .or-field--half,
+  .or-form__fields > .or-field--third {
     grid-column: 1 / -1;
+  }
+
+  .or-row {
+    flex-direction: column;
   }
 }
 
