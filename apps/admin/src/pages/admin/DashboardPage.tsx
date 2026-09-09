@@ -23,7 +23,9 @@ import {
   AlertTitle,
   AlertDescription,
 } from "@open-relay/ui";
+import type { Permission } from "../../lib/auth/AuthContext";
 import { useAuth } from "../../lib/auth/useAuth";
+import { usePermissions } from "../../lib/auth/usePermissions";
 import { useDashboardOverview } from "../../lib/dashboard/useDashboard";
 
 function formatDate(value: string) {
@@ -37,11 +39,25 @@ type Totals = {
   backends: number;
 };
 
-const STAT_CARDS: { key: keyof Totals; label: string; icon: LucideIcon }[] = [
-  { key: "forms", label: "Forms", icon: FileText },
-  { key: "submissions", label: "Submissions", icon: Inbox },
-  { key: "users", label: "Users", icon: UsersIcon },
-  { key: "backends", label: "Backends", icon: Server },
+// `GET /dashboard` is authenticated-only and returns all four totals
+// regardless of permission, so the filtering has to happen here: a reader who
+// can't open /users has no use for a user count, and every card is a number
+// they can't drill into.
+const STAT_CARDS: {
+  key: keyof Totals;
+  label: string;
+  icon: LucideIcon;
+  perm: Permission;
+}[] = [
+  { key: "forms", label: "Forms", icon: FileText, perm: "forms:read" },
+  {
+    key: "submissions",
+    label: "Submissions",
+    icon: Inbox,
+    perm: "submissions:read",
+  },
+  { key: "users", label: "Users", icon: UsersIcon, perm: "users:read" },
+  { key: "backends", label: "Backends", icon: Server, perm: "backends:read" },
 ];
 
 // Friendly labels for the raw delivery-status slugs the worker writes.
@@ -55,8 +71,15 @@ const DELIVERY_STATUS_LABELS: Record<string, string> = {
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const { has } = usePermissions();
   const name = user?.display_name?.trim() || user?.email || "there";
   const { data, isLoading, isError, error } = useDashboardOverview();
+
+  const cards = STAT_CARDS.filter((c) => has(c.perm));
+  // Every form link here points at /submissions, which is guarded. Without the
+  // permission the name still has to render — just not as a link into a
+  // no-access panel.
+  const canLinkToSubmissions = has("submissions:read");
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -79,27 +102,29 @@ export function DashboardPage() {
       ) : null}
 
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {STAT_CARDS.map(({ key, label, icon: Icon }) => (
-          <Card key={key}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {label}
-              </CardTitle>
-              <Icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <Skeleton className="h-8 w-16" />
-              ) : (
-                <div className="text-3xl font-semibold tabular-nums">
-                  {data?.totals[key] ?? 0}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {cards.length > 0 && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {cards.map(({ key, label, icon: Icon }) => (
+            <Card key={key}>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  {label}
+                </CardTitle>
+                <Icon className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                {isLoading ? (
+                  <Skeleton className="h-8 w-16" />
+                ) : (
+                  <div className="text-3xl font-semibold tabular-nums">
+                    {data?.totals[key] ?? 0}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         {/* Delivery status breakdown */}
@@ -153,12 +178,16 @@ export function DashboardPage() {
                     key={f.form_id}
                     className="flex items-center justify-between text-sm"
                   >
-                    <Link
-                      to={`/submissions?form_id=${f.form_id}`}
-                      className="truncate hover:underline"
-                    >
-                      {f.form_name}
-                    </Link>
+                    {canLinkToSubmissions ? (
+                      <Link
+                        to={`/submissions?form_id=${f.form_id}`}
+                        className="truncate hover:underline"
+                      >
+                        {f.form_name}
+                      </Link>
+                    ) : (
+                      <span className="truncate">{f.form_name}</span>
+                    )}
                     <span className="font-medium tabular-nums">{f.count}</span>
                   </li>
                 ))}

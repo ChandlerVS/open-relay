@@ -19,6 +19,8 @@ import {
 } from "@open-relay/ui";
 import { api } from "../../../lib/api/client";
 import { useForm, useFormEmbed, type FormDto } from "../../../lib/forms/useForms";
+import { PermissionNotice } from "../../../lib/auth/PermissionNotice";
+import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useRepsList, type RepDto } from "../../../lib/reps/useReps";
 import { useTheme } from "../../../lib/theme/useTheme";
 
@@ -136,7 +138,7 @@ export function FormPreviewPage() {
                     </p>
                   )}
                 </div>
-              </>
+          </>
             )}
             {result?.kind === "error" && (
               <Alert variant="destructive">
@@ -189,7 +191,11 @@ export function FormPreviewPage() {
  * associated with this form.
  */
 function RepLinksCard({ form }: { form: FormDto }) {
-  const { data: reps } = useRepsList();
+  // The rep keys the links are built from live on the rep rows, so without
+  // `reps:read` there is nothing to generate — say that rather than render an
+  // empty generator.
+  const canReadReps = usePermissions().has("reps:read");
+  const { data: reps } = useRepsList({ enabled: canReadReps });
   const [landingUrl, setLandingUrl] = useState("");
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
 
@@ -219,54 +225,67 @@ function RepLinksCard({ form }: { form: FormDto }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <FormField
-            id="rep-landing-url"
-            label="Landing page URL"
-            hint="The page where the form is embedded — without query params."
-          >
-            <Input
-              value={landingUrl}
-              placeholder="https://example.com/contact"
-              onChange={(e) => setLandingUrl(e.target.value)}
-            />
-          </FormField>
-          {form.source_params.map((sp) => (
-            <FormField
-              key={sp.param}
-              id={`rep-param-${sp.param}`}
-              label={sp.param}
-              hint="Captured as a tag on every scan of these links."
-            >
-              <Input
-                value={paramValues[sp.param] ?? ""}
-                placeholder={sp.param === "event" ? "mjbiz-2026" : sp.param}
-                onChange={(e) =>
-                  setParamValues((v) => ({ ...v, [sp.param]: e.target.value }))
-                }
-              />
-            </FormField>
-          ))}
-        </div>
-
-        {formReps.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No reps attached to this form yet. Edit the form to attach reps.
-          </p>
-        ) : !landingUrl.trim() ? (
-          <p className="text-sm text-muted-foreground">
-            Enter a landing page URL to generate links.
-          </p>
+        {!canReadReps ? (
+          <PermissionNotice
+            perm="reps:read"
+            action="generate the per-rep links for this form"
+            current={`${form.reps.length} rep${form.reps.length === 1 ? " is" : "s are"} attached.`}
+          />
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {formReps.map((rep) => (
-              <RepQrTile
-                key={rep.id}
-                rep={rep}
-                url={buildRepUrl(landingUrl, rep.key, extraParams())}
-              />
-            ))}
-          </div>
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                id="rep-landing-url"
+                label="Landing page URL"
+                hint="The page where the form is embedded — without query params."
+              >
+                <Input
+                  value={landingUrl}
+                  placeholder="https://example.com/contact"
+                  onChange={(e) => setLandingUrl(e.target.value)}
+                />
+              </FormField>
+              {form.source_params.map((sp) => (
+                <FormField
+                  key={sp.param}
+                  id={`rep-param-${sp.param}`}
+                  label={sp.param}
+                  hint="Captured as a tag on every scan of these links."
+                >
+                  <Input
+                    value={paramValues[sp.param] ?? ""}
+                    placeholder={sp.param === "event" ? "mjbiz-2026" : sp.param}
+                    onChange={(e) =>
+                      setParamValues((v) => ({
+                        ...v,
+                        [sp.param]: e.target.value,
+                      }))
+                    }
+                  />
+                </FormField>
+              ))}
+            </div>
+
+            {formReps.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No reps attached to this form yet. Edit the form to attach reps.
+              </p>
+            ) : !landingUrl.trim() ? (
+              <p className="text-sm text-muted-foreground">
+                Enter a landing page URL to generate links.
+              </p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {formReps.map((rep) => (
+                  <RepQrTile
+                    key={rep.id}
+                    rep={rep}
+                    url={buildRepUrl(landingUrl, rep.key, extraParams())}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </CardContent>
     </Card>

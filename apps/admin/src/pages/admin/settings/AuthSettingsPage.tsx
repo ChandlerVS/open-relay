@@ -24,6 +24,8 @@ import {
   useUpsertOAuthConfig,
   type DiscoveryPrefill,
 } from "../../../lib/oauth/useOAuth";
+import { PermissionNotice } from "../../../lib/auth/PermissionNotice";
+import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useRoleSelectList } from "../../../lib/roles/useRoles";
 
 const schema = z.object({
@@ -70,7 +72,13 @@ const defaults: FormValues = {
 
 export function AuthSettingsPage() {
   const cfg = useOAuthAdminConfig();
-  const roles = useRoleSelectList();
+  // `auth_config:write` does not imply `roles:read`. Without it the picker
+  // would render every option missing — and, because an unmatched <select>
+  // value submits as "", silently clear a configured default role. Skip the
+  // request and drop the control instead; react-hook-form keeps the value
+  // that `reset` seeded, so the save round-trips it untouched.
+  const canReadRoles = usePermissions().has("roles:read");
+  const roles = useRoleSelectList({ enabled: canReadRoles });
   const upsert = useUpsertOAuthConfig();
   const remove = useDeleteOAuthConfig();
   const discover = useOAuthDiscover();
@@ -319,18 +327,30 @@ export function AuthSettingsPage() {
               hint="Assigned when an OAuth sign-in arrives for an email with no existing user."
               error={form.formState.errors.default_role_id?.message}
             >
-              <select
-                id="default_role_id"
-                className="w-full h-9 rounded border border-border bg-background px-2 text-sm"
-                {...form.register("default_role_id")}
-              >
-                <option value="">— No default role —</option>
-                {(roles.data ?? []).map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
+              {canReadRoles ? (
+                <select
+                  id="default_role_id"
+                  className="w-full h-9 rounded border border-border bg-background px-2 text-sm"
+                  {...form.register("default_role_id")}
+                >
+                  <option value="">— No default role —</option>
+                  {(roles.data ?? []).map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <PermissionNotice
+                  perm="roles:read"
+                  action="see or change the default role"
+                  current={
+                    cfg.data?.default_role_id != null
+                      ? `Role #${cfg.data.default_role_id} is configured and will be kept.`
+                      : "No default role is configured."
+                  }
+                />
+              )}
             </FormField>
 
             <details className="rounded border border-border p-3">

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@open-relay/api-client";
 import { api } from "../api/client";
-import { extractApiErrorMessage } from "../api/errors";
+import { throwApiError } from "../api/errors";
 
 export type UserDto = components["schemas"]["UserDto"];
 export type UserList = components["schemas"]["UserList"];
@@ -20,11 +20,11 @@ export function useUsersList(params: UsersListParams = {}) {
       const query: Record<string, number> = {};
       if (typeof limit === "number") query.limit = limit;
       if (typeof offset === "number") query.offset = offset;
-      const { data, error } = await api.client.GET("/users", {
+      const { data, error, response } = await api.client.GET("/users", {
         params: { query },
       });
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load users."));
+      throwApiError(error, response, "Failed to load users.");
     },
     staleTime: 30_000,
   });
@@ -35,11 +35,11 @@ export function useUser(id: number | null) {
     queryKey: ["users", "detail", id],
     enabled: id != null,
     queryFn: async () => {
-      const { data, error } = await api.client.GET("/users/{id}", {
+      const { data, error, response } = await api.client.GET("/users/{id}", {
         params: { path: { id: id as number } },
       });
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load user."));
+      throwApiError(error, response, "Failed to load user.");
     },
   });
 }
@@ -48,9 +48,9 @@ export function useUserSelectList() {
   return useQuery<UserSelectOption[]>({
     queryKey: ["users", "select-list"],
     queryFn: async () => {
-      const { data, error } = await api.client.GET("/users/select-list");
+      const { data, error, response } = await api.client.GET("/users/select-list");
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load users."));
+      throwApiError(error, response, "Failed to load users.");
     },
     staleTime: 60_000,
   });

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@open-relay/api-client";
 import { api } from "../api/client";
-import { extractApiErrorMessage } from "../api/errors";
+import { throwApiError } from "../api/errors";
 
 export type SubmissionDto = components["schemas"]["SubmissionDto"];
 export type SubmissionList = components["schemas"]["SubmissionList"];
@@ -22,11 +22,11 @@ export function useSubmissionsList(params: SubmissionsListParams = {}) {
       if (typeof formId === "number") query.form_id = formId;
       if (typeof limit === "number") query.limit = limit;
       if (typeof offset === "number") query.offset = offset;
-      const { data, error } = await api.client.GET("/submissions", {
+      const { data, error, response } = await api.client.GET("/submissions", {
         params: { query },
       });
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load submissions."));
+      throwApiError(error, response, "Failed to load submissions.");
     },
     staleTime: 10_000,
   });
@@ -37,11 +37,11 @@ export function useSubmission(id: number | null) {
     queryKey: ["submissions", "detail", id],
     enabled: id != null,
     queryFn: async () => {
-      const { data, error } = await api.client.GET("/submissions/{id}", {
+      const { data, error, response } = await api.client.GET("/submissions/{id}", {
         params: { path: { id: id as number } },
       });
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load submission."));
+      throwApiError(error, response, "Failed to load submission.");
     },
   });
 }

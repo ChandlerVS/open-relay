@@ -1,9 +1,6 @@
 import { useState } from "react";
 import { MoreHorizontal, Plus, Shield } from "lucide-react";
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Button,
   ConfirmDialog,
   DropdownMenu,
@@ -19,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@open-relay/ui";
+import { QueryErrorAlert } from "../../../lib/api/QueryErrorAlert";
 import { RequirePermission } from "../../../lib/auth/RequirePermission";
 import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useRolesList, type RoleDto } from "../../../lib/roles/useRoles";
@@ -56,21 +54,11 @@ export function RolesPage() {
         </RequirePermission>
       </div>
 
-      {isError && (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load roles</AlertTitle>
-          <AlertDescription>
-            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
-            <button
-              type="button"
-              className="underline font-medium"
-              onClick={() => refetch()}
-            >
-              Try again
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <QueryErrorAlert
+        error={isError ? error : null}
+        title="Couldn't load roles"
+        onRetry={() => refetch()}
+      />
 
       <div className="border border-border rounded-lg bg-background">
         <Table>

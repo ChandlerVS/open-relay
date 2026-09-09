@@ -2,9 +2,6 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, MoreHorizontal, Plus } from "lucide-react";
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Button,
   ConfirmDialog,
   DropdownMenu,
@@ -20,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@open-relay/ui";
+import { QueryErrorAlert } from "../../../lib/api/QueryErrorAlert";
 import { RequirePermission } from "../../../lib/auth/RequirePermission";
 import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useFormsList, type FormDto } from "../../../lib/forms/useForms";
@@ -78,21 +76,11 @@ export function FormsPage() {
         </RequirePermission>
       </div>
 
-      {isError && (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load forms</AlertTitle>
-          <AlertDescription>
-            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
-            <button
-              type="button"
-              className="underline font-medium"
-              onClick={() => refetch()}
-            >
-              Try again
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <QueryErrorAlert
+        error={isError ? error : null}
+        title="Couldn't load forms"
+        onRetry={() => refetch()}
+      />
 
       <div className="border border-border rounded-lg bg-background">
         <Table>

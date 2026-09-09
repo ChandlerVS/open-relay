@@ -1,9 +1,6 @@
 import { useMemo, useState } from "react";
 import { MoreHorizontal, Plug, Plus } from "lucide-react";
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Button,
   ConfirmDialog,
   DropdownMenu,
@@ -19,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@open-relay/ui";
+import { QueryErrorAlert } from "../../../lib/api/QueryErrorAlert";
 import { RequirePermission } from "../../../lib/auth/RequirePermission";
 import { usePermissions } from "../../../lib/auth/usePermissions";
 import {
@@ -69,21 +67,11 @@ export function BackendsPage() {
         </RequirePermission>
       </div>
 
-      {isError && (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load backends</AlertTitle>
-          <AlertDescription>
-            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
-            <button
-              type="button"
-              className="underline font-medium"
-              onClick={() => refetch()}
-            >
-              Try again
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <QueryErrorAlert
+        error={isError ? error : null}
+        title="Couldn't load backends"
+        onRetry={() => refetch()}
+      />
 
       <div className="border border-border rounded-lg bg-background">
         <Table>

@@ -20,11 +20,14 @@ import {
   FormField,
   Input,
 } from "@open-relay/ui";
+import { QueryErrorAlert } from "../../../lib/api/QueryErrorAlert";
 import {
   useCreateForm,
   useUpdateForm,
 } from "../../../lib/forms/useFormMutations";
 import type { FormDto } from "../../../lib/forms/useForms";
+import { PermissionNotice } from "../../../lib/auth/PermissionNotice";
+import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useBackendsList } from "../../../lib/backends/useBackends";
 import { useRepsList } from "../../../lib/reps/useReps";
 
@@ -481,8 +484,16 @@ function DeliveryDestinations({
   value: BackendBinding[];
   onChange: (next: BackendBinding[]) => void;
 }) {
-  const { data, isLoading, isError, error, refetch } = useBackendsList();
+  // A `forms:write` user does not necessarily hold `backends:read`. Skip the
+  // request rather than render its 403, and say what is already bound so the
+  // notice doesn't read as "your destinations were dropped" — `value` is
+  // submitted untouched either way.
+  const canReadBackends = usePermissions().has("backends:read");
+  const { data, isLoading, isError, error, refetch } = useBackendsList({
+    enabled: canReadBackends,
+  });
   const selectedKeys = new Set(value.map(bindingKey));
+  const hiddenCount = value.filter((b) => b.instance_id != null).length;
 
   const toggle = (next: BackendBinding) => {
     const key = bindingKey(next);
@@ -509,21 +520,11 @@ function DeliveryDestinations({
 
   return (
     <div className="space-y-2">
-      {isError && (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load backends</AlertTitle>
-          <AlertDescription>
-            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
-            <button
-              type="button"
-              className="underline font-medium"
-              onClick={() => refetch()}
-            >
-              Try again
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <QueryErrorAlert
+        error={isError ? error : null}
+        title="Couldn't load backends"
+        onRetry={() => refetch()}
+      />
       <div className="border border-border rounded-md divide-y divide-border">
         {items.map(({ binding, label, description }) => {
           const key = bindingKey(binding);
@@ -546,13 +547,24 @@ function DeliveryDestinations({
             </label>
           );
         })}
-        {!isLoading && (data?.items?.length ?? 0) === 0 && (
+        {canReadBackends && !isLoading && (data?.items?.length ?? 0) === 0 && (
           <div className="px-3 py-2 text-xs text-muted-foreground">
             No configured backends yet. Add one in the Backends section to
             relay submissions to a CRM.
           </div>
         )}
       </div>
+      {!canReadBackends && (
+        <PermissionNotice
+          perm="backends:read"
+          action="see or change the other delivery destinations"
+          current={
+            hiddenCount > 0
+              ? `${hiddenCount} other destination${hiddenCount === 1 ? " is" : "s are"} attached and will be kept.`
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }
@@ -684,7 +696,12 @@ function RepsSelector({
   value: number[];
   onChange: (next: number[]) => void;
 }) {
-  const { data, isLoading, isError, error, refetch } = useRepsList();
+  // Same shape as DeliveryDestinations: `forms:write` doesn't imply
+  // `reps:read`.
+  const canReadReps = usePermissions().has("reps:read");
+  const { data, isLoading, isError, error, refetch } = useRepsList({
+    enabled: canReadReps,
+  });
   const selected = new Set(value);
 
   const toggle = (id: number) => {
@@ -697,49 +714,52 @@ function RepsSelector({
 
   return (
     <div className="space-y-2">
-      {isError && (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load reps</AlertTitle>
-          <AlertDescription>
-            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
-            <button
-              type="button"
-              className="underline font-medium"
-              onClick={() => refetch()}
+      <QueryErrorAlert
+        error={isError ? error : null}
+        title="Couldn't load reps"
+        onRetry={() => refetch()}
+      />
+      {canReadReps && (
+        <div className="border border-border rounded-md divide-y divide-border">
+          {(data?.items ?? []).map((r) => (
+            <label
+              key={r.id}
+              className="flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-accent/40"
             >
-              Try again
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
-      <div className="border border-border rounded-md divide-y divide-border">
-        {(data?.items ?? []).map((r) => (
-          <label
-            key={r.id}
-            className="flex items-start gap-3 px-3 py-2 cursor-pointer hover:bg-accent/40"
-          >
-            <input
-              type="checkbox"
-              className="mt-1 h-4 w-4"
-              checked={selected.has(r.id)}
-              onChange={() => toggle(r.id)}
-            />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium">{r.name}</div>
-              <div className="text-xs text-muted-foreground">
-                <code className="rounded bg-muted px-1 py-0.5">?rep={r.key}</code>
-                {r.ghl_user_id ? " · GHL owner set" : " · no GHL owner id"}
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4"
+                checked={selected.has(r.id)}
+                onChange={() => toggle(r.id)}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">{r.name}</div>
+                <div className="text-xs text-muted-foreground">
+                  <code className="rounded bg-muted px-1 py-0.5">?rep={r.key}</code>
+                  {r.ghl_user_id ? " · GHL owner set" : " · no GHL owner id"}
+                </div>
               </div>
+            </label>
+          ))}
+          {!isLoading && (data?.items?.length ?? 0) === 0 && (
+            <div className="px-3 py-2 text-xs text-muted-foreground">
+              No reps yet. Add reps in the Sales reps section, then attach them
+              here.
             </div>
-          </label>
-        ))}
-        {!isLoading && (data?.items?.length ?? 0) === 0 && (
-          <div className="px-3 py-2 text-xs text-muted-foreground">
-            No reps yet. Add reps in the Sales reps section, then attach them
-            here.
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
+      {!canReadReps && (
+        <PermissionNotice
+          perm="reps:read"
+          action="see or change the attached reps"
+          current={
+            value.length > 0
+              ? `${value.length} rep${value.length === 1 ? " is" : "s are"} attached and will be kept.`
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }

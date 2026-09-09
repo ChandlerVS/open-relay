@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@open-relay/api-client";
 import { api } from "../api/client";
-import { extractApiErrorMessage } from "../api/errors";
+import { throwApiError } from "../api/errors";
+import type { GatedQueryOptions } from "../api/queryClient";
 
 export type FormDto = components["schemas"]["FormDto"];
 export type FormList = components["schemas"]["FormList"];
@@ -21,11 +22,11 @@ export function useFormsList(params: FormsListParams = {}) {
       const query: Record<string, number> = {};
       if (typeof limit === "number") query.limit = limit;
       if (typeof offset === "number") query.offset = offset;
-      const { data, error } = await api.client.GET("/forms", {
+      const { data, error, response } = await api.client.GET("/forms", {
         params: { query },
       });
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load forms."));
+      throwApiError(error, response, "Failed to load forms.");
     },
     staleTime: 30_000,
   });
@@ -36,11 +37,11 @@ export function useForm(id: number | null) {
     queryKey: ["forms", "detail", id],
     enabled: id != null,
     queryFn: async () => {
-      const { data, error } = await api.client.GET("/forms/{id}", {
+      const { data, error, response } = await api.client.GET("/forms/{id}", {
         params: { path: { id: id as number } },
       });
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load form."));
+      throwApiError(error, response, "Failed to load form.");
     },
   });
 }
@@ -50,25 +51,24 @@ export function useFormEmbed(id: number | null) {
     queryKey: ["forms", "embed", id],
     enabled: id != null,
     queryFn: async () => {
-      const { data, error } = await api.client.GET("/forms/{id}/embed", {
+      const { data, error, response } = await api.client.GET("/forms/{id}/embed", {
         params: { path: { id: id as number } },
       });
       if (data) return data;
-      throw new Error(
-        extractApiErrorMessage(error, "Failed to load embed code."),
-      );
+      throwApiError(error, response, "Failed to load embed code.");
     },
     staleTime: 60_000,
   });
 }
 
-export function useFormSelectList() {
+export function useFormSelectList({ enabled = true }: GatedQueryOptions = {}) {
   return useQuery<FormSelectOption[]>({
     queryKey: ["forms", "select-list"],
+    enabled,
     queryFn: async () => {
-      const { data, error } = await api.client.GET("/forms/select-list");
+      const { data, error, response } = await api.client.GET("/forms/select-list");
       if (data) return data;
-      throw new Error(extractApiErrorMessage(error, "Failed to load forms."));
+      throwApiError(error, response, "Failed to load forms.");
     },
     staleTime: 60_000,
   });

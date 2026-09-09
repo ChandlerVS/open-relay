@@ -2,9 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Button,
   ConfirmDialog,
   DropdownMenu,
@@ -19,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@open-relay/ui";
+import { QueryErrorAlert } from "../../../lib/api/QueryErrorAlert";
 import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useFormSelectList } from "../../../lib/forms/useForms";
 import {
@@ -51,7 +49,9 @@ export function SubmissionsPage() {
     limit: PAGE_SIZE,
     offset,
   });
-  const { data: forms } = useFormSelectList();
+  // Form names are enrichment only — the table falls back to `Form #N`, so
+  // a reader without `forms:read` loses the label, not the row.
+  const { data: forms } = useFormSelectList({ enabled: has("forms:read") });
   const formNameById = useMemo(() => {
     const map = new Map<number, string>();
     forms?.forEach((f) => map.set(f.id, f.label));
@@ -136,21 +136,11 @@ export function SubmissionsPage() {
         </div>
       </div>
 
-      {isError && (
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load submissions</AlertTitle>
-          <AlertDescription>
-            {(error as Error | undefined)?.message ?? "Unknown error."}{" "}
-            <button
-              type="button"
-              className="underline font-medium"
-              onClick={() => refetch()}
-            >
-              Try again
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <QueryErrorAlert
+        error={isError ? error : null}
+        title="Couldn't load submissions"
+        onRetry={() => refetch()}
+      />
 
       <div className="border border-border rounded-lg bg-background">
         <Table>

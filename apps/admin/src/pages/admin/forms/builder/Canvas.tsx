@@ -34,6 +34,13 @@ export interface CanvasProps {
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
   onReorder: (next: BuilderElement[]) => void;
+  /**
+   * Viewing without `forms:write`. Selection stays live — the Inspector is
+   * still worth reading — but reordering and removal are gone. A `fieldset`
+   * can't express this the way it does for the Palette and Inspector: the
+   * drag handle and the row body are buttons that must stay half-alive.
+   */
+  readOnly?: boolean;
 }
 
 const KIND_LABEL: Record<BuilderElement["element"]["element"], string> = {
@@ -53,6 +60,7 @@ function ElementRow({
   error,
   stepNumber,
   inRow,
+  readOnly,
   onSelect,
   onRemove,
 }: {
@@ -62,11 +70,13 @@ function ElementRow({
   stepNumber: number | null;
   /** Sits between a `row_start` and its `row_end`, so it is drawn indented. */
   inRow: boolean;
+  readOnly: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
+    disabled: readOnly,
   });
   const el = item.element;
   const isBreak = el.element === "page_break";
@@ -89,15 +99,20 @@ function ElementRow({
         inRow && "ml-5 border-l-2 border-l-primary/40",
       )}
     >
-      <button
-        type="button"
-        className="cursor-grab text-muted-foreground hover:text-foreground touch-none"
-        aria-label={`Reorder ${elementTitle(el)}`}
-        {...attributes}
-        {...listeners}
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
+      {readOnly ? (
+        // A spacer, so read-only rows keep the same left edge as editable ones.
+        <span className="w-4 shrink-0" aria-hidden="true" />
+      ) : (
+        <button
+          type="button"
+          className="cursor-grab text-muted-foreground hover:text-foreground touch-none"
+          aria-label={`Reorder ${elementTitle(el)}`}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+      )}
 
       <button
         type="button"
@@ -134,16 +149,18 @@ function ElementRow({
         {error && <p className="text-xs text-destructive mt-0.5">{error}</p>}
       </button>
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 w-7 p-0 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-        aria-label={`Remove ${elementTitle(el)}`}
-        onClick={onRemove}
-      >
-        <Trash2 className="h-4 w-4" />
-      </Button>
+      {!readOnly && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label={`Remove ${elementTitle(el)}`}
+          onClick={onRemove}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      )}
     </div>
   );
 }
@@ -167,6 +184,7 @@ export function Canvas({
   onSelect,
   onRemove,
   onReorder,
+  readOnly = false,
 }: CanvasProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -187,7 +205,9 @@ export function Canvas({
   if (items.length === 0) {
     return (
       <div className="rounded border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-        No fields yet. Add one from the palette on the left.
+        {readOnly
+          ? "This form has no fields yet."
+          : "No fields yet. Add one from the palette on the left."}
       </div>
     );
   }
@@ -219,6 +239,7 @@ export function Canvas({
                 error={errors[item.id]}
                 stepNumber={stepNumber}
                 inRow={indented}
+                readOnly={readOnly}
                 onSelect={() => onSelect(item.id)}
                 onRemove={() => onRemove(item.id)}
               />

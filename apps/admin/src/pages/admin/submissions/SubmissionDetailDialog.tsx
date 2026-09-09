@@ -7,6 +7,7 @@ import {
   Skeleton,
 } from "@open-relay/ui";
 import { useSubmission } from "../../../lib/submissions/useSubmissions";
+import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useRepsList } from "../../../lib/reps/useReps";
 import { DeliveryStatusBadges, DuplicateBadge } from "./DeliveryStatusBadges";
 
@@ -41,7 +42,11 @@ export function SubmissionDetailDialog({
   formNameById,
 }: Props) {
   const { data, isLoading } = useSubmission(id);
-  const { data: reps } = useRepsList();
+  // Rep names are enrichment only — the `Rep #N` fallback below covers a
+  // reader without `reps:read`.
+  const { data: reps } = useRepsList({
+    enabled: usePermissions().has("reps:read"),
+  });
   const repName =
     data?.sales_rep_id != null
       ? (reps?.items.find((r) => r.id === data.sales_rep_id)?.name ??

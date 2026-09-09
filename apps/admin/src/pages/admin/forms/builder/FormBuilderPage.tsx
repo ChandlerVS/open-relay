@@ -17,6 +17,7 @@ import {
   Skeleton,
 } from "@open-relay/ui";
 import { api } from "../../../../lib/api/client";
+import { usePermissions } from "../../../../lib/auth/usePermissions";
 import { useForm } from "../../../../lib/forms/useForms";
 import { useUpdateForm } from "../../../../lib/forms/useFormMutations";
 import { useTheme } from "../../../../lib/theme/useTheme";
@@ -59,6 +60,10 @@ export function FormBuilderPage() {
   const { resolved: theme } = useTheme();
   const { data: form, isLoading } = useForm(valid ? formId : null);
   const update = useUpdateForm();
+  // `forms:read` is enough to reach this page — the route guard asks for no
+  // more — so the whole builder degrades to read-only rather than 403ing at
+  // Save after the layout has already been reorganised.
+  const canEdit = usePermissions().has("forms:write");
 
   const [items, setItems] = useState<BuilderElement[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -158,7 +163,7 @@ export function FormBuilderPage() {
   };
 
   const save = () => {
-    if (!items || errorCount > 0) return;
+    if (!canEdit || !items || errorCount > 0) return;
     setSaveError(null);
     // Only `layout` goes up — the server derives standard_fields/custom_fields
     // from it, and sending both is rejected.
@@ -236,14 +241,29 @@ export function FormBuilderPage() {
           )}
           {showPreview ? "Hide preview" : "Show preview"}
         </Button>
-        <Button
-          size="sm"
-          onClick={save}
-          disabled={!dirty || errorCount > 0 || update.isPending}
-        >
-          {update.isPending ? "Saving…" : "Save layout"}
-        </Button>
+        {canEdit && (
+          <Button
+            size="sm"
+            onClick={save}
+            disabled={!dirty || errorCount > 0 || update.isPending}
+          >
+            {update.isPending ? "Saving…" : "Save layout"}
+          </Button>
+        )}
       </div>
+
+      {!canEdit && (
+        <Alert>
+          <AlertDescription>
+            Read-only — you can inspect this layout and preview it, but
+            changing it needs the{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
+              forms:write
+            </code>{" "}
+            permission.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {errorCount > 0 && (
         <Alert variant="destructive">
@@ -277,15 +297,17 @@ export function FormBuilderPage() {
             <CardTitle className="text-sm">Add</CardTitle>
           </CardHeader>
           <CardContent>
-            <Palette
-              usedStandard={usedStandardKeys(items)}
-              onAddStandard={(key) => append(newStandardElement(key))}
-              onAddCustom={(type: CustomTypeName) =>
-                append(newCustomElement(type, items.length, items))
-              }
-              onAddDecoration={(kind) => append(newDecorationElement(kind))}
-              onAddRow={() => appendMany(newRowElements())}
-            />
+            <fieldset disabled={!canEdit} className="min-w-0 border-0 p-0 m-0">
+              <Palette
+                usedStandard={usedStandardKeys(items)}
+                onAddStandard={(key) => append(newStandardElement(key))}
+                onAddCustom={(type: CustomTypeName) =>
+                  append(newCustomElement(type, items.length, items))
+                }
+                onAddDecoration={(kind) => append(newDecorationElement(kind))}
+                onAddRow={() => appendMany(newRowElements())}
+              />
+            </fieldset>
           </CardContent>
         </Card>
 
@@ -304,6 +326,7 @@ export function FormBuilderPage() {
                 setItems(next);
                 setSavedAt(null);
               }}
+              readOnly={!canEdit}
             />
           </CardContent>
         </Card>
@@ -313,7 +336,8 @@ export function FormBuilderPage() {
             <CardTitle className="text-sm">Settings</CardTitle>
           </CardHeader>
           <CardContent>
-            <Inspector
+            <fieldset disabled={!canEdit} className="min-w-0 border-0 p-0 m-0">
+              <Inspector
                 item={selected}
                 onChange={patchSelected}
                 inRow={isInsideRow(items, selectedIndex)}
@@ -322,6 +346,7 @@ export function FormBuilderPage() {
                 ruleTargets={items.slice(selectedIndex + 1)}
                 onApplyRuleToMany={applyRuleToMany}
               />
+            </fieldset>
           </CardContent>
         </Card>
 
