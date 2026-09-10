@@ -14,3 +14,8 @@ node_modules/
 *.log
 
 .DS_Store
+
+# Claude Code worktrees: real git worktrees of this repo live here, and a bare
+# `git add .` stages one as an embedded-repo gitlink. Shared .claude config
+# (settings.json, skills, agents) is deliberately still committable.
+.claude/worktrees/

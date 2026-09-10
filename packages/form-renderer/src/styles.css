@@ -7,6 +7,8 @@
  * Public tokens (set these to theme the form):
  *   --or-font                    font family (defaults to the host page font)
  *   --or-radius                  corner radius for the form and its controls
+ *   --or-max-width               cap the form's width (defaults to none — it
+ *                                fills the container it was embedded in)
  *   --or-color-text              body text
  *   --or-color-muted             help / secondary text
  *   --or-color-background        form surface (default transparent)
@@ -31,6 +33,14 @@
 
 :host {
   all: initial;
+  /*
+    `all: initial` resets `display` to `inline`, which makes the host element
+    shrink to its content and take part in the host page's inline formatting —
+    so put it back to a block that fills the slot the snippet was dropped into.
+    Everything below sizes against this, so it has to come first.
+  */
+  display: block;
+  width: 100%;
   /* Adopt the host page's font by default; --or-font overrides it. */
   font-family: var(
     --or-font,
@@ -68,7 +78,14 @@
   padding: 1rem;
   border: 1px solid var(--or-border);
   border-radius: var(--or-radius, 0.5rem);
-  max-width: 32rem;
+  /*
+    Fill the container the embed snippet sits in. This used to be a hard
+    `max-width: 32rem`, which left the form floating at 512px inside a wider
+    host column with no way for the host page to say otherwise — a cap is the
+    embedding page's call, so it is a public token now and defaults to off.
+  */
+  width: 100%;
+  max-width: var(--or-max-width, none);
   box-sizing: border-box;
   background: var(--or-bg);
   color: var(--or-fg);
