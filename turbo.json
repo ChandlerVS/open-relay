@@ -18,6 +18,9 @@
     "lint": {
       "outputs": []
     },
+    "test": {
+      "outputs": []
+    },
     "gen:api": {
       "cache": false,
       "outputs": ["src/generated/**", "openapi.json"]

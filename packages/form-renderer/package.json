@@ -9,6 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/*.test.ts",
     "lint": "echo 'no lint configured'"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "typescript": "^6.0.0"
+    "typescript": "^6.0.0",
+    "@types/node": "^22.10.0"
   }
 }

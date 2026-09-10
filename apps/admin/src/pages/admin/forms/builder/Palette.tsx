@@ -6,7 +6,9 @@ export interface PaletteProps {
   usedStandard: Set<string>;
   onAddStandard: (key: string) => void;
   onAddCustom: (type: CustomTypeName) => void;
-  onAddDecoration: (kind: "heading" | "paragraph" | "divider" | "page_break") => void;
+  onAddDecoration: (
+    kind: "heading" | "paragraph" | "rich_text" | "divider" | "page_break",
+  ) => void;
   /** Adds a row: two elements, so it doesn't go through `onAddDecoration`. */
   onAddRow: () => void;
 }
@@ -14,6 +16,7 @@ export interface PaletteProps {
 const DECORATIONS = [
   { kind: "heading", label: "Heading" },
   { kind: "paragraph", label: "Paragraph" },
+  { kind: "rich_text", label: "Rich text" },
   { kind: "divider", label: "Divider" },
   { kind: "page_break", label: "Page break" },
 ] as const;

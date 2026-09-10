@@ -557,6 +557,60 @@ pub struct ParagraphElement {
     pub visible_when: Option<VisibilityRule>,
 }
 
+/// A block of author-written copy, stored as markdown and rendered as formatted
+/// content — emphasis, links, and lists between the fields.
+///
+/// [`ParagraphElement`] remains the plain-text block and is not going away: it
+/// is rendered as a single escaped text node, which is the right thing for copy
+/// that should never be parsed. This is the one that carries markup.
+///
+/// The markdown is never turned into an HTML string. The renderer parses it to
+/// an AST and maps that to React elements, so React's own escaping is the
+/// safety property and no sanitizer is needed in a bundle that cannot afford
+/// one. The one attacker-reachable sink left is a link destination, which is
+/// checked here on write *and* again in the renderer before an `<a>` is built.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RichTextElement {
+    pub markdown: String,
+    /// Colour role, resolved against the form theme rather than stored as a
+    /// literal colour, so a themed form stays legible. The default collapses to
+    /// absent on the wire — see [`RichTextTone::is_default`].
+    #[serde(default, skip_serializing_if = "RichTextTone::is_default")]
+    pub tone: RichTextTone,
+    /// Show this element only when earlier answers match. `None` is
+    /// unconditional. See [`VisibilityRule`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<VisibilityRule>,
+}
+
+/// How a [`RichTextElement`] is coloured. Semantic, not literal: each maps to a
+/// theme token in the renderer's stylesheet, so a host page that themes the form
+/// themes these too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RichTextTone {
+    #[default]
+    Normal,
+    Muted,
+    Info,
+    Warning,
+    Danger,
+}
+
+impl RichTextTone {
+    /// `Normal` is the default, and a default writes back as *absent* rather
+    /// than as an explicit `"normal"`. Two reasons: it matches the stance
+    /// `post_submission_action` takes (never configured and reverted are the
+    /// same stored value), and the admin builder's dirty check is a
+    /// `JSON.stringify` comparison against what the server sent — a key the
+    /// server echoes but the builder omits would make a pristine form look
+    /// edited on load.
+    pub fn is_default(&self) -> bool {
+        matches!(self, RichTextTone::Normal)
+    }
+}
+
 /// Splits the form into steps. Everything after this break, up to the next one,
 /// is one page; `title` names *that* page, not the one before it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize, ToSchema)]
@@ -621,6 +675,7 @@ pub enum FormElement {
     Custom(CustomField),
     Heading(HeadingElement),
     Paragraph(ParagraphElement),
+    RichText(RichTextElement),
     Divider,
     PageBreak(PageBreakElement),
     RowStart(RowStartElement),
@@ -654,6 +709,7 @@ impl FormElement {
             FormElement::Custom(c) => c.visible_when.as_ref(),
             FormElement::Heading(h) => h.visible_when.as_ref(),
             FormElement::Paragraph(p) => p.visible_when.as_ref(),
+            FormElement::RichText(r) => r.visible_when.as_ref(),
             FormElement::Divider
             | FormElement::PageBreak(_)
             | FormElement::RowStart(_)
@@ -669,6 +725,7 @@ impl FormElement {
             FormElement::Custom(c) => Some(&mut c.visible_when),
             FormElement::Heading(h) => Some(&mut h.visible_when),
             FormElement::Paragraph(p) => Some(&mut p.visible_when),
+            FormElement::RichText(r) => Some(&mut r.visible_when),
             FormElement::Divider
             | FormElement::PageBreak(_)
             | FormElement::RowStart(_)

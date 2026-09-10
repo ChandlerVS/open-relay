@@ -443,6 +443,94 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test layout_rows -- --ignored
 ```
 
+### Rich text: markdown in, React out — never HTML
+
+`FormElement::RichText` holds **markdown source** in a `markdown: String`. It is
+the block that carries markup; `Paragraph` stays what it always was, a single
+escaped text node, and is not going away (every stored layout may contain one,
+and `deny_unknown_fields` means it must keep deserialising). Five things aren't
+obvious from the code:
+
+1. **The renderer builds React elements, so HTML injection is structurally
+   impossible and the attack surface reduces to one attribute.**
+   `packages/form-renderer/src/markdown.ts` parses to an AST of plain objects
+   and `RichText.tsx` maps that to JSX, so every leaf is a React text child that
+   React escapes — `<script>x</script>` in a block renders as those characters.
+   That is what lets the embed skip a sanitiser it cannot afford: `marked` plus
+   `DOMPurify` is 30 KB+ against a bundle of 66 KB, while the whole parser,
+   component and CSS came to **2.0 KB gzipped** (measured, 67,545 → 69,637 B).
+   Nobody may reach for `dangerouslySetInnerHTML` to simplify a preview; that
+   one change reinstates every class of injection this design assumes away.
+
+2. **There are two link checks and they point in opposite directions on
+   purpose.** `service::validate_markdown_links` finds every `](…)` in the
+   source — including inside a code span, inside `![]()`, inside text the
+   renderer draws literally — and runs each through `validate_http_url`, the
+   same function `validate_redirect_url` uses. The renderer checks each
+   destination with `isHttpUrl` (`packages/form-renderer/src/url.ts`, hoisted
+   out of `Form.tsx` now that it has two callers) and renders plain text rather
+   than an `<a>` when it fails. The invariant is containment —
+   **flagged-by-server ⊇ linked-by-renderer** — so drift can only cost an author
+   a save error naming the exact string, never produce a live `javascript:`
+   href.
+
+   This is deliberately *not* the `visibility.rs`/`visibility.ts` situation.
+   There both copies must agree exactly, because either direction of
+   disagreement is a bug. Here only one direction is a bug, and the safe
+   direction is the cheap one to guarantee. What holds it up is that the
+   renderer's link grammar is **frozen at one production**, `[text](dest)` — no
+   reference links, no autolinks, no angle-bracket destinations, no titles.
+   Adding any of those to the parser breaks containment silently, because the
+   scanner would keep passing markdown the renderer had newly started linking.
+   Freeze the grammar; don't chase it with a broader scanner.
+
+3. **Unsupported syntax renders literally; nothing is ever dropped.** A pasted
+   table, an image, a blockquote, a raw tag — all drawn as the characters the
+   author typed. A block that renders half of what was typed is a worse failure
+   than one that renders it verbatim, and `markdown.test.ts` machine-checks the
+   property: every alphanumeric run in the source must survive into some text
+   node. That test is also why an empty emphasis span (`**` inside `*…*`) is
+   refused rather than matched — matching it would consume the delimiters and
+   emit nothing.
+
+4. **Tone is a named role, never a colour, and the default stays off the wire.**
+   `RichTextTone` (`normal | muted | info | warning | danger`) resolves to theme
+   tokens, because the embed draws on a host page whose palette we don't
+   control; there are deliberately no inline colour spans. `Normal` is skipped
+   on serialisation (`RichTextTone::is_default`), the same stance
+   `post_submission_action` takes — and here it has a second, concrete
+   consequence: the builder's dirty check is a `JSON.stringify` comparison
+   against what the server sent, so the admin's `withTone` must **delete** the
+   key on `normal` rather than write it, or every form with a block reads as
+   edited on load. The three loud tones tint their own background rather than
+   only colouring text, because `--or-bg` defaults to `transparent` and coloured
+   text on an unknown host background has unknowable contrast.
+
+5. **An old cached bundle draws nothing where the block is.** A bundle that
+   knows `layout` falls through the render switch's `never` guard to `null`; one
+   predating `layout` never sees it, since `legacy_from_layout` drops it like
+   every other decoration. Both mean *invisible* — a harder degradation than a
+   row (which stacks) or a `width` (which goes full-width). So **don't put
+   legally load-bearing copy in a rich-text block** until host pages have cycled
+   their bundles: on an old one the visitor never sees the notice and submits
+   anyway.
+
+`normalize_layout` folds CRLF and trims the ends only — interior blank lines are
+paragraph breaks and leading spaces are list indentation, so anything more
+aggressive would rewrite the author's document. The block is excluded from rows
+by `allowed_in_row` for free, being a flow of block-level content.
+
+The parser is the first genuinely algorithmic thing in the TS half with no Rust
+twin behind it, so it is also the repo's first JS test suite: `node --test` with
+type stripping, **no new dependency** (`@types/node` is dev-only).
+
+```bash
+pnpm --filter @open-relay/form-renderer test
+
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test rich_text -- --ignored
+```
+
 ### Backend delivery is a registry of trait objects
 
 `open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.

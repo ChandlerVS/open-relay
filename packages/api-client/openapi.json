@@ -3127,6 +3127,24 @@
           {
             "type": "object",
             "required": [
+              "config",
+              "element"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/RichTextElement"
+              },
+              "element": {
+                "type": "string",
+                "enum": [
+                  "rich_text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
               "element"
             ],
             "properties": {
@@ -4161,6 +4179,45 @@
             "description": "Ids already `pending`/`in_progress` — left alone."
           }
         }
+      },
+      "RichTextElement": {
+        "type": "object",
+        "description": "A block of author-written copy, stored as markdown and rendered as formatted\ncontent — emphasis, links, and lists between the fields.\n\n[`ParagraphElement`] remains the plain-text block and is not going away: it\nis rendered as a single escaped text node, which is the right thing for copy\nthat should never be parsed. This is the one that carries markup.\n\nThe markdown is never turned into an HTML string. The renderer parses it to\nan AST and maps that to React elements, so React's own escaping is the\nsafety property and no sanitizer is needed in a bundle that cannot afford\none. The one attacker-reachable sink left is a link destination, which is\nchecked here on write *and* again in the renderer before an `<a>` is built.",
+        "required": [
+          "markdown"
+        ],
+        "properties": {
+          "markdown": {
+            "type": "string"
+          },
+          "tone": {
+            "$ref": "#/components/schemas/RichTextTone",
+            "description": "Colour role, resolved against the form theme rather than stored as a\nliteral colour, so a themed form stays legible. The default collapses to\nabsent on the wire — see [`RichTextTone::is_default`]."
+          },
+          "visible_when": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityRule",
+                "description": "Show this element only when earlier answers match. `None` is\nunconditional. See [`VisibilityRule`]."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RichTextTone": {
+        "type": "string",
+        "description": "How a [`RichTextElement`] is coloured. Semantic, not literal: each maps to a\ntheme token in the renderer's stylesheet, so a host page that themes the form\nthemes these too.",
+        "enum": [
+          "normal",
+          "muted",
+          "info",
+          "warning",
+          "danger"
+        ]
       },
       "RoleDto": {
         "type": "object",

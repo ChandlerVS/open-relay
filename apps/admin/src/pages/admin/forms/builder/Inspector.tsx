@@ -2,18 +2,22 @@ import { Input, Label } from "@open-relay/ui";
 import { STANDARD_FIELDS } from "@open-relay/form-renderer";
 import {
   CUSTOM_FIELD_TYPES,
+  RICH_TEXT_TONES,
   canBeConditional,
   elementRule,
   fieldHasOptions,
   retypeCustomField,
   withRule,
+  withTone,
   type BuilderElement,
   type ControllerCandidate,
   type CustomTypeName,
   type FieldWidth,
   type FormElement,
+  type RichTextTone,
   type VisibilityRule,
 } from "./model";
+import { MarkdownEditor } from "./MarkdownEditor";
 import { VisibilityRuleEditor } from "./VisibilityRuleEditor";
 
 export interface InspectorProps {
@@ -381,6 +385,39 @@ export function Inspector({
             {[1, 2, 3, 4, 5, 6].map((l) => (
               <option key={l} value={l}>
                 H{l}
+              </option>
+            ))}
+          </select>
+        </Row>
+        {visibility}
+      </div>
+    );
+  }
+
+  if (el.element === "rich_text") {
+    const cfg = el.config;
+    return (
+      <div className="space-y-3">
+        <Row label="Content">
+          <MarkdownEditor
+            value={cfg.markdown}
+            tone={cfg.tone ?? "normal"}
+            // Spread the existing config: rebuilding it as `{ markdown }` alone
+            // would silently drop the tone and the visibility rule below.
+            onChange={(markdown) =>
+              onChange({ element: "rich_text", config: { ...cfg, markdown } })
+            }
+          />
+        </Row>
+        <Row label="Tone">
+          <select
+            className={SELECT_CLASS}
+            value={cfg.tone ?? "normal"}
+            onChange={(e) => onChange(withTone(el, e.target.value as RichTextTone))}
+          >
+            {RICH_TEXT_TONES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
               </option>
             ))}
           </select>

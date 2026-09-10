@@ -4,6 +4,8 @@ import { COUNTRIES, subdivisionsFor, type RegionOption } from "./regions";
 import { groupRows, resolveLayout, splitIntoPages, stateBindings } from "./layout";
 import type { LayoutEntry } from "./layout";
 import { computeVisibility, visibleElements } from "./visibility";
+import { Markdown, richTextClass } from "./RichText";
+import { isHttpUrl } from "./url";
 import type {
   CustomField,
   FieldWidth,
@@ -509,25 +511,6 @@ export const DEFAULT_THANKS = "Thanks — we've received your submission.";
 export const DEFAULT_RESUBMIT_LABEL = "Submit another response";
 
 /**
- * Absolute http(s) only. Mirrors `service::validate_redirect_url` on the
- * server; duplicated here because this value reaches `window.location` on a
- * page we don't own.
- */
-function isHttpUrl(url: string): boolean {
-  const trimmed = url.trim();
-  if (trimmed !== url || url === "") return false;
-  if (/[\s\u0000-\u001f\u007f]/.test(url)) return false;
-  const lower = url.toLowerCase();
-  const rest = lower.startsWith("https://")
-    ? lower.slice(8)
-    : lower.startsWith("http://")
-      ? lower.slice(7)
-      : null;
-  if (rest === null || rest === "") return false;
-  return !/^[/?#]/.test(rest);
-}
-
-/**
  * The terminal state of a form. Message copy is rendered as a text node with
  * `white-space: pre-line` — never as markup, because this draws inside
  * third-party host pages.
@@ -646,6 +629,13 @@ function LayoutElement({
     }
     case "paragraph":
       return <p className="or-paragraph">{element.config.text}</p>;
+    case "rich_text":
+      return (
+        <Markdown
+          source={element.config.markdown}
+          className={richTextClass(element.config.tone)}
+        />
+      );
     case "divider":
       return <hr className="or-divider" />;
     case "page_break":

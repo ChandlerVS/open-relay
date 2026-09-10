@@ -1,4 +1,4 @@
-import { STANDARD_FIELDS } from "@open-relay/form-renderer";
+import { STANDARD_FIELDS, isHttpUrl } from "@open-relay/form-renderer";
 import {
   allowedInRow,
   elementRule,
@@ -14,9 +14,20 @@ const MAX_KEY_LEN = 64;
 const MAX_LABEL_LEN = 200;
 const MAX_CONDITIONS = 10;
 const MAX_ROW_CHILDREN = 4;
+const MAX_RICH_TEXT_LEN = 10000;
 const VALUE_OPS = new Set(["equals", "not_equals", "contains"]);
 const CHECKBOX_OPS = new Set(["is_checked", "is_not_checked"]);
 const STANDARD_KEYS = new Set(STANDARD_FIELDS.map((f) => f.key));
+
+/**
+ * Link destinations in a markdown source. Mirrors
+ * `service::validate_markdown_links`, and over-approximates in the same
+ * direction and for the same reason — the renderer's own href check is the real
+ * boundary, so drifting from the parser can only ever flag something early.
+ */
+function linkDestinations(md: string): string[] {
+  return [...md.matchAll(/\]\(([^)]*)\)/g)].map((m) => m[1] ?? "");
+}
 
 /**
  * Mirrors `open_relay_core::forms::service::validate_layout` so the builder can
@@ -188,6 +199,23 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
     }
     if (el.element === "paragraph" && !el.config.text.trim() && !errors[item.id]) {
       errors[item.id] = "Paragraph text is required.";
+    }
+    if (el.element === "rich_text" && !errors[item.id]) {
+      const md = el.config.markdown.trim();
+      if (!md) {
+        errors[item.id] = "Rich text content is required.";
+      } else if ([...md].length > MAX_RICH_TEXT_LEN) {
+        // Code points, not UTF-16 units: the server counts `chars()`, so
+        // measuring `.length` here would pass an emoji-heavy block that the
+        // save then rejects.
+        errors[item.id] = `Rich text must be at most ${MAX_RICH_TEXT_LEN} characters.`;
+      } else {
+        const bad = linkDestinations(md).find((d) => d.trim() !== "" && !isHttpUrl(d));
+        if (bad !== undefined) {
+          errors[item.id] =
+            `Links must be full http(s) addresses — "${bad.slice(0, 40)}" isn't one.`;
+        }
+      }
     }
     if (el.element === "page_break") {
       const prev = items[index - 1];

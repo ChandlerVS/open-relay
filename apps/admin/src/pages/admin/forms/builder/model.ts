@@ -54,6 +54,8 @@ export function elementTitle(el: FormElement): string {
       return el.config.text || "Heading";
     case "paragraph":
       return el.config.text || "Paragraph";
+    case "rich_text":
+      return markdownTitle(el.config.markdown) || "Rich text";
     case "divider":
       return "Divider";
     case "page_break":
@@ -63,6 +65,42 @@ export function elementTitle(el: FormElement): string {
     case "row_end":
       return "End of row";
   }
+}
+
+export type RichTextTone = components["schemas"]["RichTextTone"];
+
+export const RICH_TEXT_TONES: { value: RichTextTone; label: string }[] = [
+  { value: "normal", label: "Normal" },
+  { value: "muted", label: "Muted — fine print" },
+  { value: "info", label: "Info callout" },
+  { value: "warning", label: "Warning callout" },
+  { value: "danger", label: "Danger callout" },
+];
+
+/**
+ * Set a block's tone without disturbing the rest of its config.
+ *
+ * `normal` *deletes* the key rather than writing it, because the server omits a
+ * default tone entirely (`RichTextTone::is_default`) and the dirty check below
+ * is a `JSON.stringify` comparison — the same reason `withRule` deletes.
+ */
+export function withTone(el: FormElement, tone: RichTextTone): FormElement {
+  if (el.element !== "rich_text") return el;
+  const { tone: _drop, ...rest } = el.config;
+  return {
+    ...el,
+    config: tone === "normal" ? rest : { ...rest, tone },
+  } as FormElement;
+}
+
+/** First meaningful line of markdown, with its markers stripped, for a summary row. */
+function markdownTitle(md: string): string {
+  const line = md.split("\n").find((l) => l.trim() && !/^\s*[-*_]{3,}\s*$/.test(l)) ?? "";
+  return line
+    .replace(/^\s*(?:#{1,6} +|[-*+] +|\d{1,9}[.)] +|> ?)/, "")
+    .replace(/[*_`]/g, "")
+    .trim()
+    .slice(0, 60);
 }
 
 export const CUSTOM_FIELD_TYPES = [
@@ -164,6 +202,7 @@ export function elementRule(el: FormElement): VisibilityRule | null {
     case "custom":
     case "heading":
     case "paragraph":
+    case "rich_text":
       return el.config.visible_when ?? null;
     default:
       return null;
@@ -184,7 +223,8 @@ export function canBeConditional(el: FormElement): boolean {
     el.element === "standard" ||
     el.element === "custom" ||
     el.element === "heading" ||
-    el.element === "paragraph"
+    el.element === "paragraph" ||
+    el.element === "rich_text"
   );
 }
 
@@ -211,7 +251,8 @@ export function withRule(el: FormElement, rule: VisibilityRule | null): FormElem
     el.element !== "standard" &&
     el.element !== "custom" &&
     el.element !== "heading" &&
-    el.element !== "paragraph"
+    el.element !== "paragraph" &&
+    el.element !== "rich_text"
   ) {
     return el;
   }
@@ -546,13 +587,17 @@ export function isInsideRow(items: BuilderElement[], index: number): boolean {
 }
 
 export function newDecorationElement(
-  kind: "heading" | "paragraph" | "divider" | "page_break",
+  kind: "heading" | "paragraph" | "rich_text" | "divider" | "page_break",
 ): FormElement {
   switch (kind) {
     case "heading":
       return { element: "heading", config: { text: "Section", level: 2 } };
     case "paragraph":
       return { element: "paragraph", config: { text: "" } };
+    case "rich_text":
+      // No `tone` key: the default is absent on the wire, so writing it here
+      // would make a freshly added block read as dirty against a saved form.
+      return { element: "rich_text", config: { markdown: "" } };
     case "divider":
       return { element: "divider" };
     case "page_break":

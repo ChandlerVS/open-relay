@@ -6,6 +6,9 @@ export {
   type FormTheme,
 } from "./Form";
 export { ShadowForm } from "./ShadowForm";
+export { Markdown, richTextClass } from "./RichText";
+export { parseMarkdown, type MdBlock, type MdInline } from "./markdown";
+export { isHttpUrl } from "./url";
 export {
   STANDARD_FIELDS,
   type CountryOption,
@@ -45,6 +48,8 @@ export type {
   StandardElement,
   HeadingElement,
   ParagraphElement,
+  RichTextElement,
+  RichTextTone,
   PageBreakElement,
   RowStartElement,
   FieldWidth,

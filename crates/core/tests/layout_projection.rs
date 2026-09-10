@@ -135,6 +135,7 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
                 FormElement::Custom(c) => format!("custom:{}", c.key),
                 FormElement::Heading(h) => format!("heading:{}", h.text),
                 FormElement::Paragraph(p) => format!("paragraph:{}", p.text),
+                FormElement::RichText(r) => format!("rich_text:{}", r.markdown),
                 FormElement::Divider => "divider".into(),
                 FormElement::PageBreak(b) => {
                     format!("page_break:{}", b.title.clone().unwrap_or_default())

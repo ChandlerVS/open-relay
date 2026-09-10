@@ -1000,6 +1000,10 @@ export interface components {
             /** @enum {string} */
             element: "paragraph";
         } | {
+            config: components["schemas"]["RichTextElement"];
+            /** @enum {string} */
+            element: "rich_text";
+        } | {
             /** @enum {string} */
             element: "divider";
         } | {
@@ -1426,6 +1430,37 @@ export interface components {
             /** @description Ids already `pending`/`in_progress` — left alone. */
             skipped: number[];
         };
+        /**
+         * @description A block of author-written copy, stored as markdown and rendered as formatted
+         *     content — emphasis, links, and lists between the fields.
+         *
+         *     [`ParagraphElement`] remains the plain-text block and is not going away: it
+         *     is rendered as a single escaped text node, which is the right thing for copy
+         *     that should never be parsed. This is the one that carries markup.
+         *
+         *     The markdown is never turned into an HTML string. The renderer parses it to
+         *     an AST and maps that to React elements, so React's own escaping is the
+         *     safety property and no sanitizer is needed in a bundle that cannot afford
+         *     one. The one attacker-reachable sink left is a link destination, which is
+         *     checked here on write *and* again in the renderer before an `<a>` is built.
+         */
+        RichTextElement: {
+            markdown: string;
+            /**
+             * @description Colour role, resolved against the form theme rather than stored as a
+             *     literal colour, so a themed form stays legible. The default collapses to
+             *     absent on the wire — see [`RichTextTone::is_default`].
+             */
+            tone?: components["schemas"]["RichTextTone"];
+            visible_when?: null | components["schemas"]["VisibilityRule"];
+        };
+        /**
+         * @description How a [`RichTextElement`] is coloured. Semantic, not literal: each maps to a
+         *     theme token in the renderer's stylesheet, so a host page that themes the form
+         *     themes these too.
+         * @enum {string}
+         */
+        RichTextTone: "normal" | "muted" | "info" | "warning" | "danger";
         /**
          * @description Full role detail — name, description, grants. Returned by `GET /roles/{id}`
          *     and used by the role editor in the admin SPA.

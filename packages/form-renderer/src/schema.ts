@@ -129,6 +129,30 @@ export interface ParagraphElement {
   visible_when?: VisibilityRule | null;
 }
 
+/**
+ * How a rich-text block is coloured. Absent means `"normal"`.
+ *
+ * This is how "a whole paragraph in red" is expressed — there are deliberately
+ * no inline colour spans, so the form theme keeps control of the palette and a
+ * host page can retheme every warning at once via `--or-color-warning`.
+ *
+ * Mirrors `open_relay_core::forms::RichTextTone`.
+ */
+export type RichTextTone = "normal" | "muted" | "info" | "warning" | "danger";
+
+export interface RichTextElement {
+  /**
+   * Markdown source — the stored source of truth, never HTML. The supported
+   * subset is small and precisely specified; see `markdown.ts`, which is the
+   * only thing that ever interprets it. The server stores it opaquely and
+   * checks only its length and its link destinations.
+   */
+  markdown: string;
+  tone?: RichTextTone | null;
+  /** Show this field only when earlier answers match. Absent is unconditional. */
+  visible_when?: VisibilityRule | null;
+}
+
 export interface PageBreakElement {
   title?: string | null;
 }
@@ -155,7 +179,14 @@ export interface RowStartElement {
  * flat marker pair, not a container with `children`, which is what keeps this
  * list one slot per element — `computeVisibility` returns a `boolean[]`
  * positionally parallel to it and `FormPage.offset` indexes through that, so
- * nesting would break both. Neither marker carries a rule: the fields keep
+ * nesting would break both.
+ *
+ * `paragraph` is not going away now that `rich_text` exists: every stored
+ * layout may contain one and the server's `deny_unknown_fields` means it must
+ * keep deserialising. Note also that a bundle cached before `rich_text` existed
+ * draws **nothing** where such a block sits — it falls through the render
+ * switch's `never` guard — so a block must never be the only thing carrying
+ * instructions a visitor has to read. Neither marker carries a rule: the fields keep
  * their own, and a row whose fields have all hidden is collapsed the same way a
  * stranded divider is. Same call `page_break` made, for the same reason.
  */
@@ -164,6 +195,7 @@ export type FormElement =
   | { element: "custom"; config: CustomField }
   | { element: "heading"; config: HeadingElement }
   | { element: "paragraph"; config: ParagraphElement }
+  | { element: "rich_text"; config: RichTextElement }
   | { element: "divider" }
   | { element: "page_break"; config: PageBreakElement }
   | { element: "row_start"; config: RowStartElement }

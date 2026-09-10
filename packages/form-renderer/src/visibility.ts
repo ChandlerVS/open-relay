@@ -82,9 +82,21 @@ function ruleOf(el: FormElement): VisibilityRule | null {
     case "custom":
     case "heading":
     case "paragraph":
+    case "rich_text":
       return el.config.visible_when ?? null;
-    default:
+    case "divider":
+    case "page_break":
+    case "row_start":
+    case "row_end":
       return null;
+    default: {
+      // Spelled out rather than left as a bare `default:`, which is how a new
+      // conditional element ships silently unconditional: the rule round-trips
+      // through the server and is simply never evaluated in the browser.
+      const unhandled: never = el;
+      void unhandled;
+      return null;
+    }
   }
 }
 

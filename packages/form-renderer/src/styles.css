@@ -19,6 +19,10 @@
  *   --or-color-error             errors / required marks
  *   --or-color-progress          multi-step progress fill (defaults to accent)
  *   --or-color-progress-track    progress track behind the fill (defaults to border)
+ *   --or-color-link              links inside a rich-text block (defaults to info)
+ *   --or-color-info              rich-text `info` tone
+ *   --or-color-warning           rich-text `warning` tone
+ *   --or-color-danger            rich-text `danger` tone (defaults to error)
  *
  * A public override applies in both light and dark mode. For mode-specific
  * values, scope them with your own `@media (prefers-color-scheme: dark)` on
@@ -56,6 +60,10 @@
   --or-submit-fg: var(--or-color-accent-text, #fff);
   --or-progress-fill: var(--or-color-progress, var(--or-submit-bg));
   --or-progress-track: var(--or-color-progress-track, var(--or-border));
+  --or-info: var(--or-color-info, #1d4ed8);
+  --or-warning: var(--or-color-warning, #b45309);
+  --or-danger: var(--or-color-danger, var(--or-error));
+  --or-link: var(--or-color-link, var(--or-info));
 
   padding: 1rem;
   border: 1px solid var(--or-border);
@@ -84,6 +92,10 @@
   /* A touch lighter than --or-border, which is near-invisible on the dark
      surface once it's a solid 6px bar rather than a hairline. */
   --or-progress-track: var(--or-color-progress-track, #4b5563);
+  --or-info: var(--or-color-info, #93c5fd);
+  --or-warning: var(--or-color-warning, #fcd34d);
+  --or-danger: var(--or-color-danger, var(--or-error));
+  --or-link: var(--or-color-link, var(--or-info));
 }
 
 .or-form--loading,
@@ -241,6 +253,122 @@
   border-top: 1px solid var(--or-border, #d4d4d8);
   margin: 0.25rem 0;
   width: 100%;
+}
+
+/*
+  A rich-text block: markdown parsed to React elements (see `markdown.ts`).
+
+  `:host { all: initial }` resets the host, not its descendants, so these would
+  inherit UA defaults inside the shadow root — but the admin's inline preview
+  renders under Tailwind's preflight, which zeroes list markers and heading
+  sizes. Everything visual is therefore stated outright rather than inherited,
+  which is what lets one stylesheet serve both surfaces identically.
+*/
+.or-richtext {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+/* The grid gap owns the outer spacing; the end children must not double it. */
+.or-richtext > *:first-child {
+  margin-top: 0;
+}
+
+.or-richtext > *:last-child {
+  margin-bottom: 0;
+}
+
+.or-richtext p {
+  margin: 0.5rem 0;
+}
+
+.or-richtext h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.or-richtext h3 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.or-richtext ul,
+.or-richtext ol {
+  margin: 0.5rem 0;
+  padding-inline-start: 1.25rem;
+}
+
+.or-richtext ul {
+  list-style-type: disc;
+}
+
+.or-richtext ol {
+  list-style-type: decimal;
+}
+
+.or-richtext li {
+  margin: 0.125rem 0;
+}
+
+.or-richtext hr {
+  border: 0;
+  border-top: 1px solid var(--or-border);
+  margin: 0.75rem 0;
+}
+
+/* Always underlined: colour alone is not an affordance, and a pasted URL used
+   as its own link text has to be able to wrap. */
+.or-richtext a {
+  color: var(--or-link);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+/* Derived from --or-fg, so it needs no token of its own and works in both
+   modes. */
+.or-richtext code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.3em;
+  border-radius: 0.25em;
+  background: color-mix(in srgb, var(--or-fg) 8%, transparent);
+}
+
+/* Tones. `normal` has no class at all — see `richTextClass`. */
+.or-richtext--muted {
+  color: var(--or-muted);
+}
+
+/*
+  --or-bg defaults to `transparent`, i.e. the block sits on a host page
+  background we cannot see, so coloured text alone would have unknowable
+  contrast. The three loud tones lay down their own tint and read against that
+  instead. `currentColor` in `background` resolves against this element's own
+  `color`, so one rule tints all three.
+*/
+.or-richtext--info,
+.or-richtext--warning,
+.or-richtext--danger {
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--or-radius, 0.5rem);
+  border-inline-start: 3px solid currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.or-richtext--info {
+  color: var(--or-info);
+}
+
+.or-richtext--warning {
+  color: var(--or-warning);
+}
+
+.or-richtext--danger {
+  color: var(--or-danger);
 }
 
 .or-form__steps {

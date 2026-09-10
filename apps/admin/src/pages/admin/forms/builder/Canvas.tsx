@@ -48,6 +48,7 @@ const KIND_LABEL: Record<BuilderElement["element"]["element"], string> = {
   custom: "Custom",
   heading: "Heading",
   paragraph: "Text",
+  rich_text: "Rich text",
   divider: "Divider",
   page_break: "Page break",
   row_start: "Row",

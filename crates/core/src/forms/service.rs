@@ -30,6 +30,10 @@ const MAX_KEY_LEN: usize = 64;
 const MAX_CUSTOM_FIELDS: usize = 100;
 const MAX_LAYOUT_ELEMENTS: usize = 300;
 const MAX_PARAGRAPH_LEN: usize = 2000;
+/// A rich-text block holds the long explanatory copy a form needs — payment
+/// terms, eligibility rules — so it gets far more room than a plain paragraph.
+/// `MAX_LAYOUT_ELEMENTS` bounds the worst case for a whole layout.
+const MAX_RICH_TEXT_LEN: usize = 10_000;
 const MAX_PAGES: usize = 20;
 /// Fields on one row. The renderer's width vocabulary bottoms out at a third of
 /// the row, so four is already past the point where the controls stay usable;
@@ -392,22 +396,28 @@ fn trimmed_within(value: Option<&str>, max: usize, label: &str) -> CoreResult<Op
 /// Deliberately hand-rolled rather than pulling in a URL parser — we only need
 /// to *reject*, and the checks below are stricter than a parser's would be.
 fn validate_redirect_url(raw: &str) -> CoreResult<String> {
+    validate_http_url(raw, "redirect url")
+}
+
+/// The shared absolute-http(s) check. `label` names the subject so the same
+/// rule can report on a redirect target or on a link inside a rich-text block.
+fn validate_http_url(raw: &str, label: &str) -> CoreResult<String> {
     let url = raw.trim();
     if url.is_empty() {
-        return Err(CoreError::BadRequest("redirect url is required".into()));
+        return Err(CoreError::BadRequest(format!("{label} is required")));
     }
     if url.len() > MAX_REDIRECT_URL_LEN {
         return Err(CoreError::BadRequest(format!(
-            "redirect url exceeds {MAX_REDIRECT_URL_LEN} characters"
+            "{label} exceeds {MAX_REDIRECT_URL_LEN} characters"
         )));
     }
     // Whitespace and control characters are stripped or collapsed by browsers
     // during URL parsing, so `java\nscript:...` would pass a naive scheme check
     // and then re-form into a live scheme. Reject them outright, before it.
     if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(CoreError::BadRequest(
-            "redirect url must not contain whitespace or control characters".into(),
-        ));
+        return Err(CoreError::BadRequest(format!(
+            "{label} must not contain whitespace or control characters"
+        )));
     }
     let lower = url.to_ascii_lowercase();
     // Also rejects scheme-relative "//evil.example", which would otherwise
@@ -415,16 +425,70 @@ fn validate_redirect_url(raw: &str) -> CoreResult<String> {
     let rest = match lower.strip_prefix("http://") {
         Some(r) => r,
         None => lower.strip_prefix("https://").ok_or_else(|| {
-            CoreError::BadRequest("redirect url must be an absolute http(s) URL".into())
+            CoreError::BadRequest(format!("{label} must be an absolute http(s) URL"))
         })?,
     };
     // An empty authority ("https:///path") resolves against the current origin.
     if rest.is_empty() || rest.starts_with(['/', '?', '#']) {
-        return Err(CoreError::BadRequest(
-            "redirect url must include a host".into(),
-        ));
+        return Err(CoreError::BadRequest(format!("{label} must include a host")));
     }
     Ok(url.to_string())
+}
+
+/// Reject unsafe link destinations in a rich-text block's markdown.
+///
+/// This scan **over-approximates on purpose**: it flags anything shaped like a
+/// markdown link destination, including one inside a code span that the
+/// renderer would draw literally, and it does not implement the parser's
+/// escaping rules.
+///
+/// That asymmetry is the design, not a shortcut. The renderer — not this — is
+/// the security boundary: `markdown.ts` re-checks every destination with the
+/// same rule before it builds an `<a>`, exactly as `Form.tsx` re-checks the
+/// post-submission redirect URL, because a form response is untrusted input on
+/// a page we don't own. So this scanner drifting from the parser can only ever
+/// produce a *stricter* authoring error, never an unsafe render.
+///
+/// Do not "fix" it by teaching it the parser's grammar. That would turn it into
+/// a second implementation of one spec — the `visibility.rs` / `visibility.ts`
+/// trap — where a divergence becomes a correctness bug instead of a harmless
+/// false positive.
+///
+/// Rejecting rather than repairing is right here: unlike the legacy write
+/// paths, the caller explicitly sent this markdown and can see the text the
+/// error names.
+fn validate_markdown_links(md: &str) -> CoreResult<()> {
+    let bytes: Vec<char> = md.chars().collect();
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] != ']' || bytes[i + 1] != '(' {
+            i += 1;
+            continue;
+        }
+        // Take everything to the closing paren. A destination containing a
+        // paren is not supported syntax, so stopping at the first one matches
+        // what the renderer will do with it.
+        let start = i + 2;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != ')' {
+            end += 1;
+        }
+        if end >= bytes.len() {
+            // Unclosed: the renderer draws it as literal text, so there is no
+            // destination to check.
+            break;
+        }
+        let dest: String = bytes[start..end].iter().collect();
+        // An empty destination renders as plain text rather than a link.
+        if !dest.trim().is_empty() {
+            validate_http_url(&dest, "link url").map_err(|e| match e {
+                CoreError::BadRequest(m) => CoreError::BadRequest(format!("{m} (in rich text)")),
+                other => other,
+            })?;
+        }
+        i = end + 1;
+    }
+    Ok(())
 }
 
 /// Parse the `post_submission_action` JSON column from a form model. `NULL` →
@@ -794,6 +858,19 @@ fn normalize_layout(mut layout: Vec<FormElement>) -> Vec<FormElement> {
             FormElement::Paragraph(p) => {
                 p.text = p.text.trim().to_string();
             }
+            FormElement::RichText(r) => {
+                // Ends only, and CRLF folded first. Interior blank lines are
+                // paragraph breaks and leading spaces are list indentation, so
+                // anything more aggressive would rewrite the author's document
+                // rather than tidy it. The fold matters because a textarea
+                // always yields `\n` but a scripted caller can send `\r\n`,
+                // and a parser splitting on `\n` would carry a stray `\r` into
+                // every rendered line.
+                if r.markdown.contains('\r') {
+                    r.markdown = r.markdown.replace("\r\n", "\n").replace('\r', "\n");
+                }
+                r.markdown = r.markdown.trim().to_string();
+            }
             FormElement::PageBreak(b) => {
                 b.title = b.title.as_ref().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
             }
@@ -1062,6 +1139,7 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
             let owner = el.field_key().unwrap_or(match el {
                 FormElement::Heading(_) => "heading",
                 FormElement::Paragraph(_) => "paragraph",
+                FormElement::RichText(_) => "rich text",
                 _ => "element",
             });
             validate_visible_when(rule, owner, &seen_fields)?;
@@ -1142,6 +1220,14 @@ pub fn validate_layout(layout: &[FormElement]) -> CoreResult<()> {
                         "paragraph text must be 1..={MAX_PARAGRAPH_LEN} characters"
                     )));
                 }
+            }
+            FormElement::RichText(r) => {
+                if r.markdown.is_empty() || r.markdown.chars().count() > MAX_RICH_TEXT_LEN {
+                    return Err(CoreError::BadRequest(format!(
+                        "rich text must be 1..={MAX_RICH_TEXT_LEN} characters"
+                    )));
+                }
+                validate_markdown_links(&r.markdown)?;
             }
             FormElement::PageBreak(_) => {
                 // A break before any content, or two in a row, would render an
@@ -1705,6 +1791,7 @@ pub async fn backfill_default_backends<C: ConnectionTrait>(conn: &C) -> CoreResu
 mod tests {
     use super::*;
     use crate::forms::ProgressStyle;
+    use crate::forms::{RichTextElement, RichTextTone};
 
     use crate::forms::{
         FieldWidth, HeadingElement, PageBreakElement, ParagraphElement, RowStartElement,
@@ -1789,6 +1876,14 @@ mod tests {
         StandardFieldConfig { enabled: true, required, label: None }
     }
 
+    fn rich(md: &str) -> FormElement {
+        FormElement::RichText(RichTextElement {
+            markdown: md.into(),
+            tone: RichTextTone::Normal,
+            visible_when: None,
+        })
+    }
+
     // ---- wire format ----------------------------------------------------
     //
     // The whole layout design rests on `FormElement` surviving a JSON round
@@ -1809,12 +1904,152 @@ mod tests {
                 text: "Tell us more.".into(),
                 visible_when: None,
             }),
+            FormElement::RichText(RichTextElement {
+                markdown: "**Credit Card**: see [terms](https://e.com/t).".into(),
+                tone: RichTextTone::Warning,
+                visible_when: None,
+            }),
             FormElement::Divider,
             FormElement::PageBreak(PageBreakElement { title: Some("Step 2".into()) }),
         ];
         let json = serde_json::to_string(&elements).unwrap();
         let back: Vec<FormElement> = serde_json::from_str(&json).unwrap();
         assert_eq!(elements, back);
+    }
+
+    // ---- rich text ------------------------------------------------------
+
+    #[test]
+    fn rich_text_tone_default_stays_off_the_wire() {
+        // The builder's dirty check is a `JSON.stringify` comparison against
+        // what the server sent, so a tone the server echoes but the builder
+        // omits would make a pristine form read as edited on load.
+        let normal = serde_json::to_value(rich("hi")).unwrap();
+        assert!(normal["config"].get("tone").is_none(), "{normal}");
+
+        let warned = FormElement::RichText(RichTextElement {
+            markdown: "hi".into(),
+            tone: RichTextTone::Warning,
+            visible_when: None,
+        });
+        let v = serde_json::to_value(&warned).unwrap();
+        assert_eq!(v["config"]["tone"], "warning");
+        // And an absent tone reads back as the default.
+        let back: FormElement = serde_json::from_value(normal).unwrap();
+        assert_eq!(back, rich("hi"));
+    }
+
+    #[test]
+    fn rich_text_rejects_an_unknown_config_key() {
+        // The regression guard on `deny_unknown_fields`, which is the reason
+        // the enum is adjacently tagged in the first place.
+        let v = serde_json::json!({
+            "element": "rich_text",
+            "config": { "markdown": "x", "colour": "red" }
+        });
+        assert!(serde_json::from_value::<FormElement>(v).is_err());
+    }
+
+    #[test]
+    fn normalize_layout_trims_rich_text_and_folds_crlf() {
+        let out = normalize_layout(vec![rich("\r\n  # Hi\r\n\r\n- a\r\n  b  \r\n")]);
+        let FormElement::RichText(r) = &out[0] else { panic!("kind") };
+        // Ends trimmed, CRLF folded, and the interior blank line and list
+        // indentation left exactly as the author typed them.
+        assert_eq!(r.markdown, "# Hi\n\n- a\n  b");
+    }
+
+    #[test]
+    fn validate_layout_rejects_empty_and_oversize_rich_text() {
+        assert!(validate_layout(&normalize_layout(vec![rich("   ")])).is_err());
+        let long = "x".repeat(MAX_RICH_TEXT_LEN + 1);
+        assert!(validate_layout(&[rich(&long)]).is_err());
+        // Codepoints, not bytes: a multibyte block at the cap must pass.
+        let multi = "é".repeat(MAX_RICH_TEXT_LEN);
+        assert!(validate_layout(&[rich(&multi)]).is_ok());
+    }
+
+    #[test]
+    fn validate_layout_rejects_a_dangerous_link_in_rich_text() {
+        for bad in [
+            "javascript:alert(1)",
+            "JaVaScRiPt:alert(1)",
+            "java\nscript:alert(1)",
+            "java\tscript:alert(1)",
+            "data:text/html,<script>x</script>",
+            "vbscript:msgbox(1)",
+            "//evil.example/x",
+            "/relative",
+            "#frag",
+            "https:///path",
+            "https:/x",
+        ] {
+            let md = format!("see [click]({bad}) now");
+            assert!(
+                validate_layout(&[rich(&md)]).is_err(),
+                "should have rejected {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_layout_accepts_ordinary_markdown_links() {
+        for good in [
+            "**a** [x](https://e.com) b",
+            "[x](http://e.com:8080/p?q=1#f)",
+            "- [x](https://e.com/a) and [y](https://e.com/b)",
+            "no links at all",
+            "an empty destination [x]() renders as text",
+        ] {
+            assert!(validate_layout(&[rich(good)]).is_ok(), "rejected {good}");
+        }
+    }
+
+    #[test]
+    fn markdown_link_scan_over_approximates_on_purpose() {
+        // It flags a destination inside a code span, which the renderer would
+        // draw literally. That is the design, not an oversight: the renderer's
+        // own href check is the security boundary, so a scanner that drifts
+        // from the parser can only ever produce a stricter authoring error.
+        // Do not "fix" this by teaching it the parser's grammar.
+        let md = "`[x](javascript:alert(1))`";
+        assert!(validate_layout(&[rich(md)]).is_err());
+    }
+
+    #[test]
+    fn validate_layout_names_a_rich_text_block_as_a_rule_owner() {
+        // The only guard on the rule-owner label, which is a `_ => "element"`
+        // fallthrough the compiler will not help with.
+        let el = FormElement::RichText(RichTextElement {
+            markdown: "hi".into(),
+            tone: RichTextTone::Normal,
+            visible_when: Some(rule(&[("nope", ConditionOp::Equals, Some("x"))])),
+        });
+        let err = validate_layout(&[el]).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("rich text"), "unhelpful message: {msg}");
+    }
+
+    #[test]
+    fn legacy_from_layout_drops_a_rich_text_block() {
+        // Decoration has no legacy home, so an embed bundle predating `layout`
+        // simply never sees it — exactly what happens to a heading.
+        let layout = vec![std_el("email"), rich("**hi**"), FormElement::Custom(custom("c", 0))];
+        let (sf, cf) = legacy_from_layout(&layout);
+        assert!(sf.email.enabled);
+        assert_eq!(cf.len(), 1);
+        assert_eq!(cf[0].key, "c");
+    }
+
+    #[test]
+    fn rich_text_is_not_allowed_in_a_row() {
+        let layout = vec![
+            FormElement::RowStart(RowStartElement { label: None }),
+            std_el("email"),
+            rich("hi"),
+            FormElement::RowEnd,
+        ];
+        assert!(validate_layout(&layout).is_err());
     }
 
     #[test]
