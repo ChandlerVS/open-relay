@@ -665,6 +665,36 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test file_uploads -- --ignored
 ```
 
+### GoHighLevel custom fields are matched by id, not by the key you configured
+
+The admin sets an OpenRelay custom field's `key` to name the GHL field it
+should land in, and `delivery_data` hands that key through verbatim. What goes
+on the wire is *not* that key. Three things about it aren't obvious:
+
+1. **GHL resolves a `customFields` entry by `id`.** `id` is the only required
+   member of the entry schema, and an entry it can't resolve is answered with a
+   plain `200` and no stored value — the failure is completely silent, which is
+   why a misconfigured key looks like a working delivery with empty fields. So
+   `GoHighLevelBackend` reads the location's catalog
+   (`GET /locations/{id}/customFields?model=contact`) and sends
+   `{ id, key, field_value }`.
+2. **The `key` GHL wants is the *bare* key, never the `contact.`-prefixed form
+   its own UI prints.** `normalize_field_key` lower-cases, strips `{{…}}` and
+   strips the model prefix, so `{{contact.billing_city}}`, `contact.billing_city`
+   and `billing_city` are one field. The catalog index falls back to the display
+   name, but `fieldKey` always wins — two fields can share a name.
+3. **The catalog read degrades rather than fails.** A PIT without the
+   `locations.readonly` scope is the common case; losing the whole contact over
+   an unresolvable *custom* field would be worse than delivering it key-only, so
+   a failed read logs a warning and yields an empty index (deliberately
+   *uncached*, so a scope fix takes effect on the next delivery rather than in
+   five minutes). Successful reads are cached per location for
+   `FIELD_CACHE_TTL` on the **factory** — `BackendFactory::build` runs once per
+   delivery, so a cache on the backend would never be hit.
+
+Note `field_value` (snake) is correct despite the docs *site* rendering
+`fieldValue`; GHL's published OpenAPI for `/contacts/upsert` says `field_value`.
+
 ### Backend delivery is a registry of trait objects
 
 `open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.

@@ -29,14 +29,25 @@
 //! | address_line_2   | customFields[]    |
 //! | <custom keys>    | customFields[]    |
 //!
-//! All custom fields are sent as `{ "key": "<openrelay_key>", "field_value": <value> }`
-//! entries — GHL accepts both numeric IDs and string keys here, and string
-//! keys keep configuration in OpenRelay rather than mirroring GHL's id
-//! catalog (admins can map them on the GHL side using their custom-field
-//! "Unique Key").
+//! Custom fields are resolved to GoHighLevel field **ids** before sending.
+//! The admin configures an OpenRelay custom field key that names the GHL
+//! field — its "Unique Key" (`contact.billing_city`, with or without the
+//! `contact.` prefix and with or without the `{{…}}` braces the UI prints),
+//! or its display name. At delivery time the backend reads the location's
+//! catalog (`GET /locations/{id}/customFields`, cached for
+//! [`FIELD_CACHE_TTL`]) and emits
+//! `{ "id": "<ghl id>", "key": "<bare key>", "field_value": <value> }`.
+//!
+//! Sending the id is what makes this work at all. `id` is the only required
+//! member of the entry schema, and GHL matches a `key` against the field's
+//! *bare* key — never the `contact.`-prefixed form the UI displays — while
+//! answering an entry it cannot resolve with a plain `200` and no record of
+//! the value. That silence is why the resolution failure is logged loudly
+//! and reported per key rather than shrugged off.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -49,6 +60,10 @@ pub const KIND: &str = "gohighlevel";
 const BASE_URL: &str = "https://services.leadconnectorhq.com";
 const API_VERSION: &str = "2021-07-28";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a location's custom-field catalog is reused before being re-read.
+/// Long enough that a burst of deliveries costs one extra request, short
+/// enough that a field added in the GHL UI starts landing without a restart.
+pub const FIELD_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Wire shape of the `backend_instance.config` JSON for a GoHighLevel row.
 ///
@@ -121,8 +136,110 @@ fn top_level_key(open_relay_key: &str) -> Option<&'static str> {
     })
 }
 
+/// Reduces a GHL custom-field identifier to the form both sides of the
+/// lookup can agree on: lower-cased, stripped of the `{{…}}` braces the
+/// "Unique Key" column prints, and stripped of the `contact.` / `opportunity.`
+/// model prefix that the catalog carries but an entry's `key` must not.
+///
+/// So `{{contact.billing_city}}`, `contact.billing_city` and `billing_city`
+/// all resolve to the same field, which is the point — the admin pastes
+/// whichever form the GHL UI put in front of them.
+fn normalize_field_key(raw: &str) -> String {
+    let mut k = raw.trim();
+    k = k.trim_start_matches("{{").trim_end_matches("}}").trim();
+    let lowered = k.to_ascii_lowercase();
+    for prefix in ["contact.", "opportunity."] {
+        if let Some(rest) = lowered.strip_prefix(prefix) {
+            return rest.to_string();
+        }
+    }
+    lowered
+}
+
+/// One location's custom-field catalog, flattened to `normalized key -> id`.
+type FieldIndex = Arc<HashMap<String, String>>;
+
+struct CacheEntry {
+    fetched_at: Instant,
+    index: FieldIndex,
+}
+
+/// Per-location catalog cache, shared by every backend the factory builds.
+/// `BackendFactory::build` runs once per delivery, so the cache has to live
+/// on the factory (registered once at boot) rather than on the backend.
+#[derive(Clone, Default)]
+struct FieldCache {
+    inner: Arc<Mutex<HashMap<String, CacheEntry>>>,
+}
+
+impl FieldCache {
+    fn get(&self, location_id: &str) -> Option<FieldIndex> {
+        let guard = self.inner.lock().ok()?;
+        let entry = guard.get(location_id)?;
+        (entry.fetched_at.elapsed() < FIELD_CACHE_TTL).then(|| Arc::clone(&entry.index))
+    }
+
+    fn put(&self, location_id: &str, index: FieldIndex) {
+        if let Ok(mut guard) = self.inner.lock() {
+            guard.insert(
+                location_id.to_string(),
+                CacheEntry {
+                    fetched_at: Instant::now(),
+                    index,
+                },
+            );
+        }
+    }
+}
+
+/// Shape of one entry in `GET /locations/{id}/customFields`. Only the three
+/// members the lookup needs are decoded; the rest of the catalog row
+/// (dataType, picklistOptions, …) is deliberately ignored.
+#[derive(Debug, Deserialize)]
+struct CatalogField {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, rename = "fieldKey")]
+    field_key: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CatalogResponse {
+    #[serde(default, rename = "customFields")]
+    custom_fields: Vec<CatalogField>,
+}
+
+/// Builds the lookup from a catalog response. `fieldKey` wins over `name`:
+/// two fields can share a display name, but the key is unique, so a name
+/// match is only ever a convenience fallback and never overwrites a real one.
+fn index_catalog(fields: Vec<CatalogField>) -> HashMap<String, String> {
+    let mut by_key: HashMap<String, String> = HashMap::with_capacity(fields.len());
+    let mut by_name: HashMap<String, String> = HashMap::new();
+    for f in fields {
+        // The catalog carries opportunity fields too; a contact upsert can
+        // only address the contact ones.
+        if f.model.as_deref().is_some_and(|m| m != "contact") {
+            continue;
+        }
+        if let Some(key) = f.field_key.as_deref() {
+            by_key.insert(normalize_field_key(key), f.id.clone());
+        }
+        if let Some(name) = f.name.as_deref() {
+            by_name.entry(normalize_field_key(name)).or_insert(f.id);
+        }
+    }
+    for (name, id) in by_name {
+        by_key.entry(name).or_insert(id);
+    }
+    by_key
+}
+
 pub struct GoHighLevelFactory {
     http: reqwest::Client,
+    fields: FieldCache,
 }
 
 impl GoHighLevelFactory {
@@ -134,7 +251,10 @@ impl GoHighLevelFactory {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest client builds with default config");
-        Self { http }
+        Self {
+            http,
+            fields: FieldCache::default(),
+        }
     }
 }
 
@@ -167,6 +287,7 @@ impl BackendFactory for GoHighLevelFactory {
         Ok(Arc::new(GoHighLevelBackend {
             http: self.http.clone(),
             config: cfg,
+            fields: self.fields.clone(),
         }))
     }
 }
@@ -174,10 +295,67 @@ impl BackendFactory for GoHighLevelFactory {
 pub struct GoHighLevelBackend {
     http: reqwest::Client,
     config: GoHighLevelConfig,
+    fields: FieldCache,
 }
 
 impl GoHighLevelBackend {
-    fn build_body(&self, payload: &DeliveryPayload) -> Value {
+    /// Reads the location's contact custom-field catalog, memoised per
+    /// location for [`FIELD_CACHE_TTL`].
+    ///
+    /// Returns an empty index rather than an error when the catalog can't be
+    /// read — a PIT without the `locations.readonly` scope is the common case,
+    /// and losing the whole contact over an unresolvable *custom* field would
+    /// be a worse outcome than delivering it with those fields keyed only.
+    /// Every such miss is warned about, because GHL itself will not complain.
+    async fn field_index(&self) -> FieldIndex {
+        let location = &self.config.location_id;
+        if let Some(hit) = self.fields.get(location) {
+            return hit;
+        }
+        let url = format!("{BASE_URL}/locations/{location}/customFields");
+        let fetched = async {
+            let resp = self
+                .http
+                .get(&url)
+                .bearer_auth(&self.config.private_integration_token)
+                .header("Version", API_VERSION)
+                .header("Accept", "application/json")
+                .query(&[("model", "contact")])
+                .send()
+                .await
+                .map_err(|e| format!("network error: {e}"))?;
+            let status = resp.status();
+            let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+            if !status.is_success() {
+                let snippet = text.chars().take(300).collect::<String>();
+                return Err(format!("status {}: {snippet}", status.as_u16()));
+            }
+            serde_json::from_str::<CatalogResponse>(&text).map_err(|e| format!("decode: {e}"))
+        }
+        .await;
+
+        match fetched {
+            Ok(catalog) => {
+                let index: FieldIndex = Arc::new(index_catalog(catalog.custom_fields));
+                self.fields.put(location, Arc::clone(&index));
+                index
+            }
+            Err(err) => {
+                warn!(
+                    location_id = %location,
+                    error = %err,
+                    "could not read gohighlevel custom-field catalog; custom fields \
+                     will be sent without a field id and may be silently discarded \
+                     (the PIT needs the locations.readonly scope)"
+                );
+                // Deliberately not cached: a scope fix or a transient blip
+                // should take effect on the next delivery, not in five minutes.
+                Arc::new(HashMap::new())
+            }
+        }
+    }
+
+    fn build_body(&self, payload: &DeliveryPayload, fields: &FieldIndex) -> Value {
         let mut body = Map::new();
         body.insert(
             "locationId".to_string(),
@@ -202,10 +380,34 @@ impl GoHighLevelBackend {
                     }
                     body.insert(top.to_string(), value.clone());
                 } else {
-                    custom_fields.push(json!({
-                        "key": key,
-                        "field_value": value,
-                    }));
+                    // The entry's `key` is the bare form too, never the
+                    // prefixed/braced one — it rides along with the id so a
+                    // request stays self-describing in a support ticket.
+                    let bare = normalize_field_key(key);
+                    match fields.get(&bare) {
+                        Some(id) => custom_fields.push(json!({
+                            "id": id,
+                            "key": bare,
+                            "field_value": value,
+                        })),
+                        None => {
+                            // GHL answers an unresolvable entry with a 200 and
+                            // no stored value, so this warning is the only
+                            // signal the admin will ever get.
+                            warn!(
+                                submission_id = payload.submission_id,
+                                form_id = payload.form_id,
+                                location_id = %self.config.location_id,
+                                field_key = %key,
+                                "no gohighlevel custom field matches this key; \
+                                 sending it by key alone"
+                            );
+                            custom_fields.push(json!({
+                                "key": bare,
+                                "field_value": value,
+                            }));
+                        }
+                    }
                 }
             }
         }
@@ -236,7 +438,8 @@ impl Backend for GoHighLevelBackend {
     }
 
     async fn deliver(&self, payload: &DeliveryPayload) -> Result<(), DeliveryError> {
-        let body = self.build_body(payload);
+        let fields = self.field_index().await;
+        let body = self.build_body(payload, &fields);
         let url = format!("{BASE_URL}/contacts/upsert");
         let resp = self
             .http
@@ -313,7 +516,22 @@ mod tests {
                 location_id: "loc_abc".to_string(),
                 private_integration_token: "pit_xyz".to_string(),
             },
+            fields: FieldCache::default(),
         }
+    }
+
+    /// No catalog read in a unit test — stand in for one.
+    fn index(pairs: &[(&str, &str)]) -> FieldIndex {
+        Arc::new(
+            pairs
+                .iter()
+                .map(|(k, v)| (normalize_field_key(k), v.to_string()))
+                .collect(),
+        )
+    }
+
+    fn empty_index() -> FieldIndex {
+        Arc::new(HashMap::new())
     }
 
     #[test]
@@ -330,7 +548,7 @@ mod tests {
             "state": "England",
             "postal_code": "SW1",
             "country": "United Kingdom",
-        })));
+        })), &empty_index());
         let obj = body.as_object().unwrap();
         assert_eq!(obj["locationId"], "loc_abc");
         assert_eq!(obj["source"], "OpenRelay");
@@ -352,7 +570,7 @@ mod tests {
     fn country_is_normalized_to_iso_alpha2() {
         // The reported bug: submitters type "USA", which GHL rejects.
         for raw in ["USA", "usa", "United States", "  United States of America  ", "US"] {
-            let body = backend().build_body(&payload(json!({ "country": raw })));
+            let body = backend().build_body(&payload(json!({ "country": raw })), &empty_index());
             assert_eq!(
                 body.as_object().unwrap()["country"],
                 "US",
@@ -363,7 +581,7 @@ mod tests {
 
     #[test]
     fn country_unknown_value_passes_through() {
-        let body = backend().build_body(&payload(json!({ "country": "Atlantis" })));
+        let body = backend().build_body(&payload(json!({ "country": "Atlantis" })), &empty_index());
         assert_eq!(body.as_object().unwrap()["country"], "Atlantis");
     }
 
@@ -375,7 +593,7 @@ mod tests {
             "job_title": "Mathematician",
             "address_line_2": "Unit 4",
             "favorite_color": "violet",
-        })));
+        })), &empty_index());
         let obj = body.as_object().unwrap();
         assert_eq!(obj["firstName"], "Ada");
         let custom = obj["customFields"].as_array().unwrap();
@@ -394,7 +612,7 @@ mod tests {
         let body = backend().build_body(&payload(json!({
             "first_name": "Ada",
             "phone": serde_json::Value::Null,
-        })));
+        })), &empty_index());
         let obj = body.as_object().unwrap();
         assert_eq!(obj["firstName"], "Ada");
         assert!(obj.get("phone").is_none());
@@ -404,7 +622,7 @@ mod tests {
     fn body_includes_tags_when_present() {
         let mut p = payload(json!({ "first_name": "Ada" }));
         p.tags = vec!["hot-lead".to_string(), "webinar".to_string()];
-        let body = backend().build_body(&p);
+        let body = backend().build_body(&p, &empty_index());
         let obj = body.as_object().unwrap();
         let tags = obj["tags"].as_array().unwrap();
         assert_eq!(tags.len(), 2);
@@ -414,7 +632,7 @@ mod tests {
 
     #[test]
     fn body_omits_tags_when_empty() {
-        let body = backend().build_body(&payload(json!({ "first_name": "Ada" })));
+        let body = backend().build_body(&payload(json!({ "first_name": "Ada" })), &empty_index());
         let obj = body.as_object().unwrap();
         assert!(obj.get("tags").is_none());
     }
@@ -423,7 +641,7 @@ mod tests {
     fn body_includes_assigned_to_when_present() {
         let mut p = payload(json!({ "first_name": "Ada" }));
         p.assigned_to = Some("usr_jane123".to_string());
-        let body = backend().build_body(&p);
+        let body = backend().build_body(&p, &empty_index());
         let obj = body.as_object().unwrap();
         assert_eq!(obj["assignedTo"], "usr_jane123");
     }
@@ -431,13 +649,113 @@ mod tests {
     #[test]
     fn body_omits_assigned_to_when_absent_or_blank() {
         let obj = backend()
-            .build_body(&payload(json!({ "first_name": "Ada" })));
+            .build_body(&payload(json!({ "first_name": "Ada" })), &empty_index());
         assert!(obj.as_object().unwrap().get("assignedTo").is_none());
 
         let mut p = payload(json!({ "first_name": "Ada" }));
         p.assigned_to = Some("   ".to_string());
-        let body = backend().build_body(&p);
+        let body = backend().build_body(&p, &empty_index());
         assert!(body.as_object().unwrap().get("assignedTo").is_none());
+    }
+
+    #[test]
+    fn custom_fields_carry_the_resolved_ghl_id_and_a_bare_key() {
+        // The reported bug: the admin configures the key exactly as GHL's
+        // "Unique Key" column prints it, and the whole entry is discarded.
+        let idx = index(&[("contact.billing_city", "fld_city")]);
+        let body = backend().build_body(
+            &payload(json!({ "contact.billing_city": "London" })),
+            &idx,
+        );
+        let custom = body.as_object().unwrap()["customFields"]
+            .as_array()
+            .unwrap();
+        assert_eq!(custom.len(), 1);
+        assert_eq!(custom[0]["id"], "fld_city");
+        assert_eq!(custom[0]["key"], "billing_city");
+        assert_eq!(custom[0]["field_value"], "London");
+    }
+
+    #[test]
+    fn every_spelling_of_a_key_resolves_to_the_same_field() {
+        let idx = index(&[("contact.billing_city", "fld_city")]);
+        for spelling in [
+            "contact.billing_city",
+            "billing_city",
+            "{{contact.billing_city}}",
+            "Contact.Billing_City",
+        ] {
+            let body = backend().build_body(&payload(json!({ spelling: "London" })), &idx);
+            let custom = body.as_object().unwrap()["customFields"]
+                .as_array()
+                .unwrap();
+            assert_eq!(custom[0]["id"], "fld_city", "spelling {spelling:?}");
+        }
+    }
+
+    #[test]
+    fn unresolved_key_still_ships_by_bare_key() {
+        // No id to send, but dropping the answer outright would lose data the
+        // admin can still recover from the submission record.
+        let body = backend().build_body(
+            &payload(json!({ "contact.nope": "value" })),
+            &empty_index(),
+        );
+        let custom = body.as_object().unwrap()["customFields"]
+            .as_array()
+            .unwrap();
+        assert!(custom[0].get("id").is_none());
+        assert_eq!(custom[0]["key"], "nope");
+        assert_eq!(custom[0]["field_value"], "value");
+    }
+
+    #[test]
+    fn catalog_indexes_field_key_over_name_and_skips_opportunities() {
+        let catalog: CatalogResponse = serde_json::from_value(json!({
+            "customFields": [
+                {
+                    "id": "fld_city",
+                    "name": "Billing City",
+                    "fieldKey": "contact.billing_city",
+                    "model": "contact",
+                },
+                {
+                    "id": "opp_city",
+                    "name": "Billing City",
+                    "fieldKey": "opportunity.billing_city",
+                    "model": "opportunity",
+                },
+                {
+                    // Older payloads omit `model`; treat those as contact.
+                    "id": "fld_po",
+                    "name": "Purchase Order",
+                    "fieldKey": "contact.purchase_order",
+                },
+            ]
+        }))
+        .unwrap();
+        let idx = index_catalog(catalog.custom_fields);
+        assert_eq!(idx.get("billing_city").map(String::as_str), Some("fld_city"));
+        assert_eq!(idx.get("purchase_order").map(String::as_str), Some("fld_po"));
+        // The display name is a fallback, and it must not have shadowed the
+        // key match with the opportunity field.
+        assert!(!idx.values().any(|v| v == "opp_city"));
+    }
+
+    #[test]
+    fn catalog_falls_back_to_the_display_name() {
+        let catalog: CatalogResponse = serde_json::from_value(json!({
+            "customFields": [
+                { "id": "fld_po", "name": "Purchase Order", "fieldKey": "contact.po_2" }
+            ]
+        }))
+        .unwrap();
+        let idx = index_catalog(catalog.custom_fields);
+        assert_eq!(idx.get("po_2").map(String::as_str), Some("fld_po"));
+        assert_eq!(
+            idx.get("purchase order").map(String::as_str),
+            Some("fld_po")
+        );
     }
 
     #[test]

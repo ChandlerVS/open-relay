@@ -628,12 +628,18 @@ function GoHighLevelKeyNotice() {
     <Alert>
       <AlertTitle>Matching GoHighLevel custom fields</AlertTitle>
       <AlertDescription>
-        GoHighLevel only stores a custom value when its key matches a custom
-        field that already exists in your location — unknown keys are silently
-        dropped. Set each custom field's <strong>Key</strong> to the exact
-        GoHighLevel field <em>unique key</em> (e.g.{" "}
-        <code>contact.how_did_you_hear</code>) or field id. Standard fields map
-        automatically.
+        GoHighLevel only stores a custom value when it can match the field in
+        your location — anything it can't match is silently dropped. Set each
+        custom field's <strong>Key</strong> to the GoHighLevel field's{" "}
+        <em>unique key</em> (<code>contact.how_did_you_hear</code>,{" "}
+        <code>{"{{contact.how_did_you_hear}}"}</code> and{" "}
+        <code>how_did_you_hear</code> all work), its display name, or its field
+        id. Standard fields map automatically.
+        <br />
+        The Private Integration Token needs the{" "}
+        <code>locations.readonly</code> scope so OpenRelay can read your custom
+        field list and send GoHighLevel the field id it wants; without it,
+        custom values may not land.
       </AlertDescription>
     </Alert>
   );
