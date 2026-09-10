@@ -149,6 +149,7 @@ function CreateForm({
 }) {
   const create = useCreateForm();
   const [name, setName] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [slug, setSlug] = useState("");
   const [backends, setBackends] = useState<BackendBinding[]>([openRelayBinding()]);
   const [tags, setTags] = useState<string[]>([]);
@@ -186,6 +187,9 @@ function CreateForm({
         create.mutate(
           {
             name: name.trim(),
+            // Blank means "no display name" — the server stores NULL and the
+            // form keeps showing `name` to visitors.
+            display_name: displayName.trim() ? displayName.trim() : null,
             slug: slug.trim() ? slug.trim() : null,
             backends,
             tags,
@@ -210,7 +214,14 @@ function CreateForm({
           <AlertDescription>{formError}</AlertDescription>
         </Alert>
       )}
-      <BasicsSection name={name} slug={slug} onNameChange={setName} onSlugChange={setSlug} />
+      <BasicsSection
+        name={name}
+        displayName={displayName}
+        slug={slug}
+        onNameChange={setName}
+        onDisplayNameChange={setDisplayName}
+        onSlugChange={setSlug}
+      />
       <Section
         title="Fields"
         hint="A new form starts with name and email. Arrange the rest in the field builder once it's created."
@@ -288,6 +299,7 @@ function EditForm({
 }) {
   const update = useUpdateForm();
   const [name, setName] = useState(form.name);
+  const [displayName, setDisplayName] = useState(form.display_name ?? "");
   const [slug, setSlug] = useState(form.slug);
   const [backends, setBackends] = useState<BackendBinding[]>(form.backends);
   const [tags, setTags] = useState<string[]>(form.tags);
@@ -350,6 +362,14 @@ function EditForm({
             id: form.id,
             input: {
               name: name.trim() !== form.name ? name.trim() : undefined,
+              // Both sides normalise "no display name" to null before
+              // comparing, so a form that never had one doesn't read as
+              // edited on load. Sending "" is how the server is told to clear
+              // the column back to NULL.
+              display_name:
+                (displayName.trim() || null) !== (form.display_name ?? null)
+                  ? displayName.trim()
+                  : undefined,
               slug: slug.trim() !== form.slug ? slug.trim() : undefined,
               backends: backendsChanged ? backends : undefined,
               tags: tagsChanged ? tags : undefined,
@@ -379,7 +399,14 @@ function EditForm({
           <AlertDescription>{formError}</AlertDescription>
         </Alert>
       )}
-      <BasicsSection name={name} slug={slug} onNameChange={setName} onSlugChange={setSlug} />
+      <BasicsSection
+        name={name}
+        displayName={displayName}
+        slug={slug}
+        onNameChange={setName}
+        onDisplayNameChange={setDisplayName}
+        onSlugChange={setSlug}
+      />
       <Section title="Fields" hint="Add, reorder and configure fields in the builder.">
         {hasGoHighLevel(backends) && <GoHighLevelKeyNotice />}
         <Button type="button" variant="outline" size="sm" asChild>
@@ -444,22 +471,43 @@ function EditForm({
 
 function BasicsSection({
   name,
+  displayName,
   slug,
   onNameChange,
+  onDisplayNameChange,
   onSlugChange,
 }: {
   name: string;
+  displayName: string;
   slug: string;
   onNameChange: (s: string) => void;
+  onDisplayNameChange: (s: string) => void;
   onSlugChange: (s: string) => void;
 }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <FormField id="form-name" label="Name">
+      <FormField
+        id="form-name"
+        label="Name"
+        hint="How this form is listed here in the admin. Visitors never see it."
+      >
         <Input
           value={name}
           placeholder="Contact us"
           onChange={(e) => onNameChange(e.target.value)}
+        />
+      </FormField>
+      <FormField
+        id="form-display-name"
+        label="Display name"
+        hint="The heading visitors see above the fields. Leave blank to use the name."
+      >
+        <Input
+          value={displayName}
+          // Echoing the admin name makes the fallback visible rather than
+          // something you have to save to discover.
+          placeholder={name.trim() || "Contact us"}
+          onChange={(e) => onDisplayNameChange(e.target.value)}
         />
       </FormField>
       <FormField

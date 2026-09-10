@@ -863,6 +863,9 @@ pub struct RedirectAction {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct NewForm {
     pub name: String,
+    /// Public-facing title. Omitted (or blank) means the visitor sees `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -912,6 +915,10 @@ pub struct FormDto {
     pub id: i32,
     pub owner_id: i32,
     pub name: String,
+    /// The form's public-facing title as stored — `None` when the admin never
+    /// set one, in which case visitors see `name`. Admins get the raw column
+    /// rather than the resolved value so the editor can show a blank field.
+    pub display_name: Option<String>,
     pub slug: String,
     pub standard_fields: StandardFieldsConfig,
     pub custom_fields: Vec<CustomField>,
@@ -941,6 +948,12 @@ pub struct FormDto {
 pub struct UpdateForm {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// `None` leaves the display name untouched. An explicit empty (or
+    /// whitespace-only) string clears it back to `NULL`, so the form falls back
+    /// to showing `name` again — the same "blank means clear" idiom
+    /// [`crate::reps::UpdateRep`] uses for its optional text fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1005,6 +1018,10 @@ pub struct FormSelectOption {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PublicFormDto {
     pub id: i32,
+    /// The title the visitor sees. This is the form's `display_name` when one
+    /// is set and its `name` otherwise — the fallback is resolved here, on the
+    /// server, rather than in the renderer, so that embed bundles already
+    /// cached on host pages honour a display name with no upgrade.
     pub name: String,
     pub slug: String,
     /// Retained for embed bundles cached on host pages before `layout`

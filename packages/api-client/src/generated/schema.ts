@@ -942,6 +942,12 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             custom_fields: components["schemas"]["CustomField"][];
+            /**
+             * @description The form's public-facing title as stored — `None` when the admin never
+             *     set one, in which case visitors see `name`. Admins get the raw column
+             *     rather than the resolved value so the editor can show a blank field.
+             */
+            display_name?: string | null;
             /** Format: int32 */
             id: number;
             /**
@@ -1137,6 +1143,8 @@ export interface components {
              */
             backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][];
+            /** @description Public-facing title. Omitted (or blank) means the visitor sees `name`. */
+            display_name?: string | null;
             /**
              * @description Ordered layout. When present it is the source of truth and
              *     `standard_fields`/`custom_fields` are derived from it; sending both is
@@ -1329,6 +1337,12 @@ export interface components {
             id: number;
             /** @description Ordered layout — what current renderers consume. */
             layout: components["schemas"]["FormElement"][];
+            /**
+             * @description The title the visitor sees. This is the form's `display_name` when one
+             *     is set and its `name` otherwise — the fallback is resolved here, on the
+             *     server, rather than in the renderer, so that embed bundles already
+             *     cached on host pages honour a display name with no upgrade.
+             */
             name: string;
             /**
              * @description What the renderer does once a submission is accepted. Always populated;
@@ -1699,6 +1713,13 @@ export interface components {
         UpdateForm: {
             backends?: components["schemas"]["BackendBinding"][] | null;
             custom_fields?: components["schemas"]["CustomField"][] | null;
+            /**
+             * @description `None` leaves the display name untouched. An explicit empty (or
+             *     whitespace-only) string clears it back to `NULL`, so the form falls back
+             *     to showing `name` again — the same "blank means clear" idiom
+             *     [`crate::reps::UpdateRep`] uses for its optional text fields.
+             */
+            display_name?: string | null;
             /**
              * @description Replaces the whole layout. Mutually exclusive with
              *     `standard_fields`/`custom_fields` — a request carrying both is a 400,

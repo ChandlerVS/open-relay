@@ -42,6 +42,7 @@ fn registry() -> BackendRegistry {
 fn new_form(slug: &str, layout: Vec<FormElement>) -> NewForm {
     NewForm {
         name: "Conditional fields integration".into(),
+        display_name: None,
         slug: Some(slug.into()),
         standard_fields: None,
         custom_fields: vec![],

@@ -183,7 +183,10 @@ export function FormBuilderPage() {
     if (!form || !items) return null;
     return {
       id: form.id,
-      name: form.name,
+      // The same fallback `public_dto_from_model` applies. The admin DTO keeps
+      // the two apart, so the preview has to resolve them or it would show the
+      // internal name where the live embed shows the display name.
+      name: form.display_name || form.name,
       slug: form.slug,
       standard_fields: form.standard_fields as PublicFormDto["standard_fields"],
       custom_fields: [],

@@ -91,6 +91,7 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
         1,
         NewForm {
             name: "Layout integration".into(),
+            display_name: None,
             slug: Some(slug.clone()),
             standard_fields: None,
             custom_fields: vec![],

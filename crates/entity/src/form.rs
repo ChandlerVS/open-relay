@@ -22,6 +22,13 @@ pub struct Model {
     /// application code (see `open_relay_core::users::service::delete_user`).
     pub owner_id: i32,
     pub name: String,
+    /// Public-facing title, drawn as the form's heading by the renderer.
+    ///
+    /// `NULL` means "use `name`" — which is what every form written before this
+    /// column did, so there is deliberately no backfill. The fallback is
+    /// resolved server-side into `PublicFormDto.name`, so embed bundles cached
+    /// on third-party host pages honour a display name without an upgrade.
+    pub display_name: Option<String>,
     #[sea_orm(unique)]
     pub slug: String,
     #[sea_orm(column_type = "Json")]

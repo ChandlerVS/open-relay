@@ -1425,6 +1425,7 @@ pub async fn dto_from_model<C: ConnectionTrait>(
         id: m.id,
         owner_id: m.owner_id,
         name: m.name,
+        display_name: m.display_name,
         slug: m.slug,
         standard_fields,
         custom_fields,
@@ -1451,7 +1452,10 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
     let regions = needs_subdivisions(&layout).then(regions::packed_subdivisions);
     Ok(PublicFormDto {
         id: m.id,
-        name: m.name,
+        // The display-name fallback lives here rather than in the renderer, so
+        // an embed bundle cached on a host page before display names existed
+        // honours one anyway — it is just reading the `name` it always read.
+        name: m.display_name.unwrap_or(m.name),
         slug: m.slug,
         standard_fields,
         custom_fields,
@@ -1500,6 +1504,7 @@ pub async fn create_form<C: ConnectionTrait>(
     input: NewForm,
 ) -> CoreResult<entity::form::Model> {
     let name = validate_name(&input.name)?;
+    let display_name = trimmed_within(input.display_name.as_deref(), MAX_NAME_LEN, "display name")?;
 
     let slug_input = input
         .slug
@@ -1546,6 +1551,9 @@ pub async fn create_form<C: ConnectionTrait>(
     let model = entity::form::ActiveModel {
         owner_id: ActiveValue::Set(owner_id),
         name: ActiveValue::Set(name),
+        // Blank collapses to NULL, so "never set a display name" and "set one,
+        // then cleared it" are the same row and both fall back to `name`.
+        display_name: ActiveValue::Set(display_name),
         slug: ActiveValue::Set(slug),
         standard_fields: ActiveValue::Set(json_or_internal(&standard_fields)?),
         custom_fields: ActiveValue::Set(json_or_internal(&custom_fields)?),
@@ -1651,6 +1659,16 @@ pub async fn update_form<C: ConnectionTrait>(
     if let Some(name_raw) = input.name {
         let name = validate_name(&name_raw)?;
         active.name = ActiveValue::Set(name);
+    }
+
+    // Presence is tested on the *input*, but the *normalized* value is stored:
+    // an explicit blank string is how a caller clears the column back to NULL.
+    if input.display_name.is_some() {
+        active.display_name = ActiveValue::Set(trimmed_within(
+            input.display_name.as_deref(),
+            MAX_NAME_LEN,
+            "display name",
+        )?);
     }
 
     if let Some(slug_raw) = input.slug {
@@ -2838,6 +2856,48 @@ mod tests {
             visible_when: None,
         }];
         assert!(validate_custom_fields(&fields).is_err());
+    }
+
+    // ---- display name -----------------------------------------------------
+
+    #[test]
+    fn a_blank_display_name_normalizes_to_unset() {
+        // The whole "clear it back to NULL" contract in one function: a caller
+        // with nothing to say and a caller explicitly clearing the field are
+        // indistinguishable by the time this returns.
+        let f = |v: Option<&str>| trimmed_within(v, MAX_NAME_LEN, "display name").unwrap();
+        assert_eq!(f(None), None);
+        assert_eq!(f(Some("")), None);
+        assert_eq!(f(Some("   ")), None);
+        assert_eq!(f(Some("  Book a demo  ")), Some("Book a demo".to_string()));
+    }
+
+    #[test]
+    fn an_oversize_display_name_is_rejected() {
+        let long = "x".repeat(MAX_NAME_LEN + 1);
+        assert!(trimmed_within(Some(&long), MAX_NAME_LEN, "display name").is_err());
+        let exact = "x".repeat(MAX_NAME_LEN);
+        assert!(trimmed_within(Some(&exact), MAX_NAME_LEN, "display name").is_ok());
+    }
+
+    #[test]
+    fn an_unset_display_name_stays_off_the_wire() {
+        // `skip_serializing_if` keeps the key out of the JSON entirely, which is
+        // what lets the admin's dirty check compare against a plain absence.
+        let json = serde_json::to_string(&UpdateForm {
+            name: Some("Renamed".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"name":"Renamed"}"#);
+        assert_eq!(
+            serde_json::from_str::<UpdateForm>(r#"{"display_name":""}"#)
+                .unwrap()
+                .display_name
+                .as_deref(),
+            Some(""),
+            "an explicit blank must survive deserialization — it is the clear signal"
+        );
     }
 
     // ---- progress indicator ----------------------------------------------
