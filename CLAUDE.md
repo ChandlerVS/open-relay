@@ -157,6 +157,43 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test post_submission_action -- --ignored
 ```
 
+### Display names: the fallback resolves on the server, not in the renderer
+
+A form has two names. `form.name` is the admin's own label — the forms list, the
+select dropdowns, the builder header, the dashboard's `form_name` columns. The
+nullable `form.display_name` is the heading a visitor sees. Two things about it
+are not obvious from the code:
+
+1. **The fallback is applied in `public_dto_from_model`, so `PublicFormDto.name`
+   carries `display_name.unwrap_or(name)`.** The public DTO gained no field, and
+   `packages/form-renderer` was not touched at all — `Form.tsx` still renders
+   `schema.name` into the `<h2>` exactly as before. That is the entire point: an
+   embed bundle cached on a third-party host page **honours a display name with
+   no upgrade**, because it is reading the same key it always read. Adding a
+   `display_name?` to `schema.ts` and coalescing in the renderer would be a
+   regression, not an improvement — it would create a second copy of the
+   fallback that only *new* bundles honour.
+
+   The one place the admin has to repeat the fallback by hand is
+   `FormBuilderPage`'s `previewSchema`, which assembles a `PublicFormDto`
+   locally rather than fetching one. `FormPreviewPage` needs nothing: its
+   `<ShadowForm>` fetches the public endpoint itself.
+
+2. **`NULL` means "use `name`", and a blank string is how you get back to
+   `NULL`.** Same no-backfill stance as `layout` and `post_submission_action`:
+   never-configured and configured-then-cleared are the same row. `UpdateForm`
+   carries a single `Option<String>` (absent = untouched) and runs it through
+   `trimmed_within`, the idiom `UpdateRep`'s optional text fields already use —
+   deliberately not `Option<Option<T>>`, which appears nowhere in the codebase.
+
+`crates/core/tests/display_name.rs` guards the round trip and, in particular,
+that the public read path and the admin read path disagree on purpose:
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test display_name -- --ignored
+```
+
 ### Multi-step forms: `PageBreak` splits, `progress_indicator` decorates
 
 A form is multi-step when its `layout` contains `FormElement::PageBreak`. The list

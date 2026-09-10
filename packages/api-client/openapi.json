@@ -2984,6 +2984,13 @@
               "$ref": "#/components/schemas/CustomField"
             }
           },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The form's public-facing title as stored — `None` when the admin never\nset one, in which case visitors see `name`. Admins get the raw column\nrather than the resolved value so the editor can show a blank field."
+          },
           "id": {
             "type": "integer",
             "format": "int32"
@@ -3517,6 +3524,13 @@
               "$ref": "#/components/schemas/CustomField"
             }
           },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public-facing title. Omitted (or blank) means the visitor sees `name`."
+          },
           "layout": {
             "type": [
               "array",
@@ -3972,7 +3986,8 @@
             "description": "Ordered layout — what current renderers consume."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "The title the visitor sees. This is the form's `display_name` when one\nis set and its `name` otherwise — the fallback is resolved here, on the\nserver, rather than in the renderer, so that embed bundles already\ncached on host pages honour a display name with no upgrade."
           },
           "post_submission_action": {
             "$ref": "#/components/schemas/PostSubmissionAction",
@@ -4758,6 +4773,13 @@
             "items": {
               "$ref": "#/components/schemas/CustomField"
             }
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`None` leaves the display name untouched. An explicit empty (or\nwhitespace-only) string clears it back to `NULL`, so the form falls back\nto showing `name` again — the same \"blank means clear\" idiom\n[`crate::reps::UpdateRep`] uses for its optional text fields."
           },
           "layout": {
             "type": [
