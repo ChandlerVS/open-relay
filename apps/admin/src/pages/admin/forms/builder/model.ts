@@ -103,6 +103,15 @@ function markdownTitle(md: string): string {
     .slice(0, 60);
 }
 
+/**
+ * Default per-file cap, matching `storage::DEFAULT_MAX_FILE_MB`. The hard
+ * ceiling is enforced server-side (`MAX_UPLOAD_MB`); this is just the value a
+ * fresh field starts at.
+ */
+export const DEFAULT_MAX_FILE_MB = 10;
+/** Ceiling the server clamps to, mirrored so the editor can bound its input. */
+export const MAX_UPLOAD_MB = 100;
+
 export const CUSTOM_FIELD_TYPES = [
   { type: "text", label: "Text" },
   { type: "email", label: "Email" },
@@ -115,6 +124,7 @@ export const CUSTOM_FIELD_TYPES = [
   { type: "checkbox", label: "Checkbox" },
   { type: "country", label: "Country" },
   { type: "state", label: "State / province" },
+  { type: "file", label: "File upload" },
 ] as const;
 
 export type CustomTypeName = (typeof CUSTOM_FIELD_TYPES)[number]["type"];
@@ -190,6 +200,14 @@ export function retypeCustomField(field: CustomField, type: CustomTypeName): Cus
       ...base,
       type,
       country_field: "country_field" in field ? field.country_field : undefined,
+    };
+  }
+  if (type === "file") {
+    return {
+      ...base,
+      type,
+      accept: "accept" in field ? (field.accept ?? []) : [],
+      max_size_mb: "max_size_mb" in field ? field.max_size_mb : DEFAULT_MAX_FILE_MB,
     };
   }
   return { ...base, type };

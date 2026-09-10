@@ -15,6 +15,7 @@ import { BackendsPage } from "../pages/admin/backends/BackendsPage";
 import { RepsPage } from "../pages/admin/reps/RepsPage";
 import { SubmissionsPage } from "../pages/admin/submissions/SubmissionsPage";
 import { AuthSettingsPage } from "../pages/admin/settings/AuthSettingsPage";
+import { StorageSettingsPage } from "../pages/admin/settings/StorageSettingsPage";
 import { ProfilePage } from "../pages/admin/profile/ProfilePage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 
@@ -88,6 +89,19 @@ export const router = createBrowserRouter([
               />
             ),
             children: [{ path: "settings/auth", element: <AuthSettingsPage /> }],
+          },
+          {
+            // Same shape as auth: there is no `storage_config:read`, so write
+            // is the read gate for this page too.
+            element: (
+              <RequirePermissionRoute
+                perm="storage_config:write"
+                action="manage file storage"
+              />
+            ),
+            children: [
+              { path: "settings/storage", element: <StorageSettingsPage /> },
+            ],
           },
         ],
       },

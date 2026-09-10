@@ -206,6 +206,32 @@ pub enum CustomFieldType {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         country_field: Option<String>,
     },
+    /// A single-file upload. The submitted value is the URL of the stored
+    /// object, so it lands in `custom_data` as a plain string and every
+    /// backend forwards it verbatim with no special-casing.
+    ///
+    /// One file per field, deliberately: an array value would be a new shape
+    /// for `coerce_custom`, `custom_data`, the admin table and every backend
+    /// mapping to learn. An author who wants a résumé *and* a cover letter
+    /// adds two fields.
+    ///
+    /// Bytes never pass through this server — see [`crate::storage`]. What the
+    /// browser submits here is a sealed [`crate::storage::receipt`], not a
+    /// URL, because the endpoint that mints it is unauthenticated.
+    File {
+        /// Accepted file types, as the HTML `accept` attribute spells them:
+        /// extensions (`.pdf`) or MIME patterns (`image/*`). Empty means any.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        accept: Vec<String>,
+        /// Per-file cap in MB. Clamped to [`crate::storage::MAX_UPLOAD_MB`]
+        /// at validation — a field may lower the ceiling, never raise it.
+        #[serde(default = "default_max_file_mb")]
+        max_size_mb: u32,
+    },
+}
+
+fn default_max_file_mb() -> u32 {
+    crate::storage::DEFAULT_MAX_FILE_MB
 }
 
 impl CustomFieldType {
@@ -241,6 +267,35 @@ impl CustomFieldType {
 
     pub fn is_checkbox(&self) -> bool {
         matches!(self, CustomFieldType::Checkbox)
+    }
+
+    /// Whether this field's answer is an uploaded object. The submission path
+    /// needs to know because a file answer arrives as a sealed receipt and has
+    /// to be exchanged for a URL, which is the one coercion that needs the
+    /// storage provider.
+    pub fn is_file(&self) -> bool {
+        matches!(self, CustomFieldType::File { .. })
+    }
+
+    /// The per-file byte cap, bounded by the global ceiling regardless of what
+    /// the stored config says — an older row (or a hand-edited one) must not
+    /// be able to raise it.
+    pub fn max_upload_bytes(&self) -> Option<u64> {
+        match self {
+            CustomFieldType::File { max_size_mb, .. } => Some(
+                (*max_size_mb).clamp(1, crate::storage::MAX_UPLOAD_MB) as u64
+                    * crate::storage::BYTES_PER_MB,
+            ),
+            _ => None,
+        }
+    }
+
+    /// The `accept` patterns, for the one variant that has them.
+    pub fn accept(&self) -> Option<&[String]> {
+        match self {
+            CustomFieldType::File { accept, .. } => Some(accept),
+            _ => None,
+        }
     }
 
     /// Whether this field's answer is an ISO 3166-1 alpha-2 code, and so can
@@ -1049,6 +1104,14 @@ pub struct PublicFormDto {
     /// A bundle too old to know the field just ignores it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regions: Option<&'static str>,
+    /// `true` when this form has a file field **and** a storage provider is
+    /// configured, i.e. an upload can actually succeed. The renderer uses it
+    /// to say so up front rather than letting a visitor pick a file and fail.
+    ///
+    /// Skipped when false so the payload is unchanged for the overwhelming
+    /// majority of forms, and absent for a bundle talking to an older server.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uploads_enabled: bool,
 }
 
 /// A ready-to-paste embed snippet for a form, returned to admins so they can

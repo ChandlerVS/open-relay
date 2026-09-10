@@ -20,6 +20,60 @@ services:
       timeout: 3s
       retries: 20
 
+  # Local S3-compatible store, so file uploads can be developed and tested
+  # without an AWS account. Not started by default — bring it up explicitly:
+  #
+  #   docker compose -f infra/docker-compose.yml --profile storage up -d
+  #
+  # Then in the admin under Settings -> File storage:
+  #   Endpoint      http://localhost:9000
+  #   Bucket        open-relay-uploads
+  #   Region        us-east-1
+  #   Access key    openrelay        Secret  openrelay
+  #   Advanced      tick "Use path-style addressing"
+  #
+  # The `minio-init` service below creates the bucket and applies the CORS and
+  # public-read rules the admin page describes, so "Test connection" and a real
+  # browser upload both work immediately.
+  minio:
+    image: minio/minio:latest
+    container_name: open-relay-minio
+    profiles: ["storage"]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: openrelay
+      MINIO_ROOT_PASSWORD: openrelay
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: open-relay-minio-init
+    profiles: ["storage"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    # Idempotent: `mb --ignore-existing` and the two set commands can all be
+    # re-run, so this is safe on every `up`.
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 openrelay openrelay &&
+      mc mb --ignore-existing local/open-relay-uploads &&
+      mc anonymous set download local/open-relay-uploads &&
+      echo 'minio ready: bucket open-relay-uploads is public-read'
+      "
+
 volumes:
   mysql-data:
     name: open-relay-mysql-data
+  minio-data:
+    name: open-relay-minio-data

@@ -33,6 +33,11 @@ pub enum AppError {
 
     #[error("bad gateway: {0}")]
     BadGateway(String),
+    /// A dependency the request needs isn't configured or is down. Distinct
+    /// from 400: the caller did nothing wrong and retrying may work once an
+    /// operator acts.
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl From<CoreError> for AppError {
@@ -77,6 +82,7 @@ impl IntoResponse for AppError {
                 (StatusCode::INTERNAL_SERVER_ERROR, "database error".into())
             }
             AppError::BadGateway(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
         };
         (status, Json(json!({ "error": message }))).into_response()
     }

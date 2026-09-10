@@ -508,6 +508,33 @@
   font-weight: 400;
 }
 
+.or-field__error {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--or-error);
+}
+
+/* A successful attachment reads as confirmation, not decoration, so it takes
+   the body colour rather than a green nobody chose — the host page's palette
+   is unknown and `--or-bg` may be transparent. */
+.or-field--file .or-field__help--ok {
+  color: var(--or-fg);
+}
+
+/* File inputs get no border/padding of their own: the browser draws the
+   button chrome, and boxing it produces a control that matches nothing else
+   on the host page. */
+.or-field--file input[type="file"] {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.875rem;
+}
+
+.or-field--file input[type="file"]:disabled {
+  opacity: 0.6;
+}
+
 .or-form__error {
   color: var(--or-error);
   font-size: 0.875rem;

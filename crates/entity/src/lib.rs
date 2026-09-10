@@ -35,6 +35,7 @@ pub mod refresh_token;
 pub mod role;
 pub mod role_permission;
 pub mod sales_rep;
+pub mod storage_provider;
 pub mod submission;
 pub mod submission_delivery;
 pub mod user;

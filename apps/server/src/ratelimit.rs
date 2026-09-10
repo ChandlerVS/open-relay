@@ -51,6 +51,15 @@ pub fn login_layer() -> PeerGovernorLayer {
 /// Looser limiter for the public form surface: burst 20 then 1/s per IP —
 /// generous enough for a legitimate page load (schema GET + one submit) while
 /// blunting floods.
+/// Presigning an upload is the only unauthenticated route that causes a write
+/// into the operator's object store, so it gets its own, much tighter bucket
+/// rather than sharing the public surface's allowance with schema GETs. Five
+/// attachments back-to-back covers any honest form; a scripted flood doesn't
+/// get to mint tickets at 20/s.
+pub fn upload_layer() -> PeerGovernorLayer {
+    build_layer(1, 5)
+}
+
 pub fn public_layer() -> PeerGovernorLayer {
     build_layer(1, 20)
 }

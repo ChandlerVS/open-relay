@@ -404,6 +404,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/forms/{id}/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a presigned upload for one `file` field.
+         * @description Unauthenticated by necessity — embedded forms run on host pages we don't
+         *     own — so it carries its own, tighter rate limit and every control described
+         *     in `open_relay_core::storage::uploads`. Bytes never reach this server: the
+         *     browser PUTs them straight to the configured store.
+         */
+        post: operations["create_upload_ticket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reps": {
         parameters: {
             query?: never;
@@ -510,6 +533,60 @@ export interface paths {
         get: operations["status"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_storage_config"];
+        put?: never;
+        post: operations["upsert_storage_config"];
+        delete: operations["delete_storage_config"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_storage_kinds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/storage/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Probe the saved credentials by round-tripping a real object.
+         * @description Always 200 when a provider is configured — a reachable-but-rejecting store
+         *     is the *answer* to this request, carried in `StorageTestResult::error`, not
+         *     an error in serving it. That keeps the admin UI's failure copy on one path.
+         */
+        post: operations["test_storage_config"];
         delete?: never;
         options?: never;
         head?: never;
@@ -842,6 +919,20 @@ export interface components {
             country_field?: string | null;
             /** @enum {string} */
             type: "state";
+        } | {
+            /**
+             * @description Accepted file types, as the HTML `accept` attribute spells them:
+             *     extensions (`.pdf`) or MIME patterns (`image/*`). Empty means any.
+             */
+            accept?: string[];
+            /**
+             * Format: int32
+             * @description Per-file cap in MB. Clamped to [`crate::storage::MAX_UPLOAD_MB`]
+             *     at validation — a field may lower the ceiling, never raise it.
+             */
+            max_size_mb?: number;
+            /** @enum {string} */
+            type: "file";
         };
         /**
          * @description Aggregate payload backing the admin dashboard. `recent_submissions` is
@@ -1265,7 +1356,7 @@ export interface components {
             visible_when?: null | components["schemas"]["VisibilityRule"];
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "auth_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "auth_config:write" | "storage_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
@@ -1372,6 +1463,15 @@ export interface components {
              *     existed. Always a faithful projection of `layout`.
              */
             standard_fields: components["schemas"]["StandardFieldsConfig"];
+            /**
+             * @description `true` when this form has a file field **and** a storage provider is
+             *     configured, i.e. an upload can actually succeed. The renderer uses it
+             *     to say so up front rather than letting a visitor pick a file and fail.
+             *
+             *     Skipped when false so the payload is unchanged for the overwhelming
+             *     majority of forms, and absent for a bundle talking to an older server.
+             */
+            uploads_enabled?: boolean;
         };
         /**
          * @description A condensed submission row for the recent-activity feed. Deliberately
@@ -1610,6 +1710,55 @@ export interface components {
          */
         StandardInputVariant: "text" | "select";
         /**
+         * @description Admin-facing config. Secret-bearing keys (declared per kind via
+         *     [`crate::storage::FileStoreFactory::secret_keys`]) are **stripped** from
+         *     `config` and surfaced as presence booleans in `secret_fields`, so the live
+         *     credential never reaches the client, the browser cache, or the generated
+         *     OpenAPI client. Mirrors `BackendInstanceDto`.
+         */
+        StorageConfigDto: {
+            /** @description Non-secret config keys, verbatim. Secret keys are removed. */
+            config: unknown;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            id: number;
+            kind: string;
+            name: string;
+            /**
+             * @description For each secret key this kind declares: `true` if a non-empty value is
+             *     on record. Lets the admin UI render "set / not set" without leaking it.
+             */
+            secret_fields: {
+                [key: string]: boolean;
+            };
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description Catalog entry returned by [`StorageRegistry::kinds`] — drives the admin's
+         *     provider picker.
+         */
+        StorageKindInfo: {
+            kind: string;
+            /**
+             * @description Human label, so the admin UI doesn't hand-maintain a second copy of the
+             *     kind → display-name mapping the way the backends dialog does.
+             */
+            label: string;
+            /**
+             * @description Secret-bearing config keys, so the UI knows which inputs to render as
+             *     write-only password fields without hardcoding them per kind.
+             */
+            secret_keys: string[];
+        };
+        /** @description Result of the admin's "Test connection" probe. */
+        StorageTestResult: {
+            /** @description Present only on failure, and phrased for an admin to act on. */
+            error?: string | null;
+            ok: boolean;
+        };
+        /**
          * @description Returned to the embed SDK on a successful POST. Deliberately minimal —
          *     the public caller already has the data it sent us; echoing it back wastes
          *     bytes and leaks side effects (e.g. trim normalisation) the SDK doesn't
@@ -1780,6 +1929,37 @@ export interface components {
             email?: string | null;
             role_ids?: number[] | null;
         };
+        /** @description What it gets back. */
+        UploadTicketDto: {
+            /** Format: date-time */
+            expires_at: string;
+            /**
+             * @description Headers the client must send verbatim on the `PUT` — they are part of
+             *     the signature.
+             */
+            headers: {
+                [key: string]: string;
+            };
+            method: string;
+            /**
+             * @description Opaque sealed receipt. Submit this as the field's value; the server
+             *     exchanges it for the stored URL.
+             */
+            token: string;
+            upload_url: string;
+        };
+        /** @description What the browser asks for once a visitor picks a file. */
+        UploadTicketRequest: {
+            content_type: string;
+            /** @description Key of the `file` field being filled in. */
+            field_key: string;
+            filename: string;
+            /**
+             * Format: int64
+             * @description Exact byte length. Signed into the URL, so it has to be honest.
+             */
+            size: number;
+        };
         /**
          * @description Upsert input. `client_secret: None` means "keep the existing value";
          *     `Some(non_empty)` replaces. The service rejects creating a new config
@@ -1800,6 +1980,16 @@ export interface components {
             subject_claim?: string | null;
             token_url: string;
             userinfo_url?: string | null;
+        };
+        /**
+         * @description Upsert input. A secret key omitted from `config` (or sent empty) means
+         *     "keep the existing value" — the admin UI can't echo back what it was never
+         *     given. Creating a config with no secret fails in the factory instead.
+         */
+        UpsertStorageConfig: {
+            config: unknown;
+            kind: string;
+            name: string;
         };
         /**
          * @description Outbound representation of a user — what callers see in API responses.
@@ -3098,6 +3288,54 @@ export interface operations {
             };
         };
     };
+    create_upload_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Form id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadTicketRequest"];
+            };
+        };
+        responses: {
+            /** @description Presigned upload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadTicketDto"];
+                };
+            };
+            /** @description Not a file field, too large, or wrong type */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Form not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No storage provider is configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     list_reps: {
         parameters: {
             query?: never;
@@ -3655,6 +3893,206 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SetupStatus"];
                 };
+            };
+        };
+    };
+    get_storage_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active storage provider */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageConfigDto"];
+                };
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing storage_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No storage provider configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    upsert_storage_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertStorageConfig"];
+            };
+        };
+        responses: {
+            /** @description Storage provider saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageConfigDto"];
+                };
+            };
+            /** @description Config rejected by the provider */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing storage_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_storage_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Storage provider removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing storage_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No storage provider configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_storage_kinds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Supported storage kinds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageKindInfo"][];
+                };
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing storage_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    test_storage_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Probe result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageTestResult"];
+                };
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing storage_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No storage provider configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

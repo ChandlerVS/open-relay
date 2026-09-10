@@ -7,7 +7,7 @@ use sea_orm::{
 
 use super::{
     BackendInstanceDto, BackendInstanceFormRef, BackendInstanceInUse, BackendInstanceList,
-    NewBackendInstance, UpdateBackendInstance, value_is_empty,
+    NewBackendInstance, UpdateBackendInstance,
 };
 use crate::backend::{BackendBuildError, BackendRegistry};
 use crate::crypto::SecretCipher;
@@ -85,7 +85,7 @@ pub async fn create<C: ConnectionTrait>(
     // then encrypt secret-bearing keys before they touch the DB.
     validate_config(registry, &kind, &input.config)?;
     let mut config = input.config;
-    encrypt_secret_keys(registry, &kind, &mut config, cipher)?;
+    crate::secrets::encrypt_in_place(registry.secret_keys(&kind), &mut config, cipher)?;
 
     let active = entity::backend_instance::ActiveModel {
         kind: ActiveValue::Set(kind),
@@ -119,82 +119,18 @@ pub async fn update<C: ConnectionTrait>(
         // (mirrors OAuth `client_secret: None`) rather than clobbering the token.
         // `existing.config` holds *encrypted* secret blobs, so the carried-over
         // values are ciphertext at this point.
-        preserve_secrets(registry, &existing.kind, &existing.config, &mut config);
+        let secret_keys = registry.secret_keys(&existing.kind);
+        crate::secrets::preserve(secret_keys, &existing.config, &mut config);
         // Bring every secret key to a uniform plaintext view (newly-supplied
         // values pass through untouched; carried-over ciphertext is decrypted),
         // validate against plaintext, then re-encrypt before persisting.
-        decrypt_secret_keys(registry, &existing.kind, &mut config, cipher)?;
+        crate::secrets::decrypt_in_place(secret_keys, &mut config, cipher)?;
         validate_config(registry, &existing.kind, &config)?;
-        encrypt_secret_keys(registry, &existing.kind, &mut config, cipher)?;
+        crate::secrets::encrypt_in_place(secret_keys, &mut config, cipher)?;
         active.config = ActiveValue::Set(config);
     }
 
     Ok(active.update(conn).await?)
-}
-
-/// For each secret key the kind declares, if `incoming` omits it (absent, null,
-/// or empty string) but `existing` has a value, carry the existing value over.
-fn preserve_secrets(
-    registry: &BackendRegistry,
-    kind: &str,
-    existing: &serde_json::Value,
-    incoming: &mut serde_json::Value,
-) {
-    let Some(incoming_obj) = incoming.as_object_mut() else {
-        return;
-    };
-    for key in registry.secret_keys(kind) {
-        let incoming_empty = incoming_obj.get(*key).map(value_is_empty).unwrap_or(true);
-        if !incoming_empty {
-            continue;
-        }
-        if let Some(existing_val) = existing.get(*key).filter(|v| !value_is_empty(v)) {
-            incoming_obj.insert((*key).to_string(), existing_val.clone());
-        }
-    }
-}
-
-/// Encrypt each declared secret key in `config` that holds a non-empty string
-/// and isn't already ciphertext. Idempotent — safe to call on a config whose
-/// secrets are already encrypted.
-pub(crate) fn encrypt_secret_keys(
-    registry: &BackendRegistry,
-    kind: &str,
-    config: &mut serde_json::Value,
-    cipher: &SecretCipher,
-) -> CoreResult<()> {
-    let Some(obj) = config.as_object_mut() else {
-        return Ok(());
-    };
-    for key in registry.secret_keys(kind) {
-        if let Some(serde_json::Value::String(s)) = obj.get(*key) {
-            if !s.trim().is_empty() && !SecretCipher::is_encrypted(s) {
-                let enc = cipher.encrypt(s)?;
-                obj.insert((*key).to_string(), serde_json::Value::String(enc));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Decrypt each declared secret key in `config` back to plaintext. A legacy
-/// plaintext value (no `enc:v1:` prefix) passes through unchanged.
-pub(crate) fn decrypt_secret_keys(
-    registry: &BackendRegistry,
-    kind: &str,
-    config: &mut serde_json::Value,
-    cipher: &SecretCipher,
-) -> CoreResult<()> {
-    let Some(obj) = config.as_object_mut() else {
-        return Ok(());
-    };
-    for key in registry.secret_keys(kind) {
-        if let Some(serde_json::Value::String(s)) = obj.get(*key) {
-            let plain = cipher.decrypt(s)?;
-            obj.insert((*key).to_string(), serde_json::Value::String(plain));
-        }
-    }
-    Ok(())
 }
 
 /// Delete a backend instance. Returns `CoreError::Conflict` (carrying a JSON
@@ -280,7 +216,7 @@ mod tests {
         });
         // Admin round-trips the redacted config (no token) with a changed location.
         let mut incoming = serde_json::json!({ "location_id": "loc_new" });
-        preserve_secrets(&registry(), "gohighlevel", &existing, &mut incoming);
+        crate::secrets::preserve(registry().secret_keys("gohighlevel"), &existing, &mut incoming);
         assert_eq!(incoming["location_id"], "loc_new");
         assert_eq!(incoming["private_integration_token"], "pit-existing");
     }
@@ -289,7 +225,7 @@ mod tests {
     fn preserve_secrets_respects_explicit_new_value() {
         let existing = serde_json::json!({ "private_integration_token": "pit-old" });
         let mut incoming = serde_json::json!({ "private_integration_token": "pit-new" });
-        preserve_secrets(&registry(), "gohighlevel", &existing, &mut incoming);
+        crate::secrets::preserve(registry().secret_keys("gohighlevel"), &existing, &mut incoming);
         assert_eq!(incoming["private_integration_token"], "pit-new");
     }
 
@@ -297,7 +233,7 @@ mod tests {
     fn preserve_secrets_treats_empty_string_as_omitted() {
         let existing = serde_json::json!({ "private_integration_token": "pit-old" });
         let mut incoming = serde_json::json!({ "private_integration_token": "" });
-        preserve_secrets(&registry(), "gohighlevel", &existing, &mut incoming);
+        crate::secrets::preserve(registry().secret_keys("gohighlevel"), &existing, &mut incoming);
         assert_eq!(incoming["private_integration_token"], "pit-old");
     }
 
@@ -312,13 +248,13 @@ mod tests {
             "location_id": "loc_1",
             "private_integration_token": "pit-live-xyz",
         });
-        encrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        crate::secrets::encrypt_in_place(registry().secret_keys("gohighlevel"), &mut config, &c).unwrap();
         // Secret is now ciphertext; non-secret untouched.
         let stored = config["private_integration_token"].as_str().unwrap();
         assert!(SecretCipher::is_encrypted(stored));
         assert_eq!(config["location_id"], "loc_1");
 
-        decrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        crate::secrets::decrypt_in_place(registry().secret_keys("gohighlevel"), &mut config, &c).unwrap();
         assert_eq!(config["private_integration_token"], "pit-live-xyz");
         assert_eq!(config["location_id"], "loc_1");
     }
@@ -327,9 +263,9 @@ mod tests {
     fn encrypt_secret_keys_is_idempotent() {
         let c = cipher();
         let mut config = serde_json::json!({ "private_integration_token": "pit" });
-        encrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        crate::secrets::encrypt_in_place(registry().secret_keys("gohighlevel"), &mut config, &c).unwrap();
         let once = config["private_integration_token"].as_str().unwrap().to_string();
-        encrypt_secret_keys(&registry(), "gohighlevel", &mut config, &c).unwrap();
+        crate::secrets::encrypt_in_place(registry().secret_keys("gohighlevel"), &mut config, &c).unwrap();
         // Already-encrypted value is left as-is (not double-encrypted).
         assert_eq!(config["private_integration_token"], once);
     }

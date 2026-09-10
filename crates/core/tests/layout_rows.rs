@@ -36,6 +36,23 @@ use open_relay_core::submissions::{NewSubmissionPayload, service as submissions}
 use sea_orm::Database;
 use serde_json::{Value as JsonValue, json};
 
+/// Upload context for a form with no `file` fields: a throwaway cipher and an
+/// empty registry. Nothing in this file mints or opens a receipt, so neither
+/// is ever consulted — `create_submission` short-circuits before touching
+/// storage when the form has no file field.
+fn no_uploads() -> submissions::UploadContext<'static> {
+    static CIPHER: std::sync::OnceLock<open_relay_core::crypto::SecretCipher> =
+        std::sync::OnceLock::new();
+    static REGISTRY: std::sync::OnceLock<open_relay_core::storage::StorageRegistry> =
+        std::sync::OnceLock::new();
+    submissions::UploadContext {
+        cipher: CIPHER.get_or_init(|| {
+            open_relay_core::crypto::SecretCipher::from_key_bytes(&[1u8; 32]).unwrap()
+        }),
+        registry: REGISTRY.get_or_init(open_relay_core::storage::StorageRegistry::new),
+    }
+}
+
 fn registry() -> BackendRegistry {
     let mut r = BackendRegistry::new();
     r.register_static(std::sync::Arc::new(
@@ -208,6 +225,7 @@ async fn rows_survive_a_round_trip_and_stay_invisible_to_submissions() {
             ("nickname", json!("Reid")),
             ("shoe_size", json!("11")),
         ]),
+        &no_uploads(),
     )
     .await
     .expect("a row must not change what validates");
@@ -512,6 +530,7 @@ async fn a_state_picker_inside_a_row_still_resolves_its_country() {
             ("ship_city", json!("Portland")),
             ("ship_state", json!("OR")),
         ]),
+        &no_uploads(),
     )
     .await
     .expect("submit");
@@ -526,6 +545,7 @@ async fn a_state_picker_inside_a_row_still_resolves_its_country() {
             ("ship_city", json!("Paris")),
             ("ship_state", json!("OR")),
         ]),
+        &no_uploads(),
     )
     .await;
     assert!(bad.is_err(), "a row must not weaken cross-field validation");

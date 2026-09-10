@@ -1243,6 +1243,59 @@
         }
       }
     },
+    "/public/forms/{id}/uploads": {
+      "post": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Mint a presigned upload for one `file` field.",
+        "description": "Unauthenticated by necessity — embedded forms run on host pages we don't\nown — so it carries its own, tighter rate limit and every control described\nin `open_relay_core::storage::uploads`. Bytes never reach this server: the\nbrowser PUTs them straight to the configured store.",
+        "operationId": "create_upload_ticket",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Form id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadTicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Presigned upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadTicketDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a file field, too large, or wrong type"
+          },
+          "404": {
+            "description": "Form not found"
+          },
+          "503": {
+            "description": "No storage provider is configured"
+          }
+        }
+      }
+    },
     "/reps": {
       "get": {
         "tags": [
@@ -1772,6 +1825,177 @@
             }
           }
         }
+      }
+    },
+    "/storage": {
+      "get": {
+        "tags": [
+          "storage"
+        ],
+        "operationId": "get_storage_config",
+        "responses": {
+          "200": {
+            "description": "Active storage provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageConfigDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing storage_config:write"
+          },
+          "404": {
+            "description": "No storage provider configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "storage"
+        ],
+        "operationId": "upsert_storage_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertStorageConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Storage provider saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageConfigDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Config rejected by the provider"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing storage_config:write"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "storage"
+        ],
+        "operationId": "delete_storage_config",
+        "responses": {
+          "204": {
+            "description": "Storage provider removed"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing storage_config:write"
+          },
+          "404": {
+            "description": "No storage provider configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/storage/kinds": {
+      "get": {
+        "tags": [
+          "storage"
+        ],
+        "operationId": "list_storage_kinds",
+        "responses": {
+          "200": {
+            "description": "Supported storage kinds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StorageKindInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing storage_config:write"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/storage/test": {
+      "post": {
+        "tags": [
+          "storage"
+        ],
+        "summary": "Probe the saved credentials by round-tripping a real object.",
+        "description": "Always 200 when a provider is configured — a reachable-but-rejecting store\nis the *answer* to this request, carried in `StorageTestResult::error`, not\nan error in serving it. That keeps the admin UI's failure copy on one path.",
+        "operationId": "test_storage_config",
+        "responses": {
+          "200": {
+            "description": "Probe result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageTestResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing storage_config:write"
+          },
+          "404": {
+            "description": "No storage provider configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/submissions": {
@@ -2732,6 +2956,34 @@
                 "type": "string",
                 "enum": [
                   "state"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A single-file upload. The submitted value is the URL of the stored\nobject, so it lands in `custom_data` as a plain string and every\nbackend forwards it verbatim with no special-casing.\n\nOne file per field, deliberately: an array value would be a new shape\nfor `coerce_custom`, `custom_data`, the admin table and every backend\nmapping to learn. An author who wants a résumé *and* a cover letter\nadds two fields.\n\nBytes never pass through this server — see [`crate::storage`]. What the\nbrowser submits here is a sealed [`crate::storage::receipt`], not a\nURL, because the endpoint that mints it is unauthenticated.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "accept": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Accepted file types, as the HTML `accept` attribute spells them:\nextensions (`.pdf`) or MIME patterns (`image/*`). Empty means any."
+              },
+              "max_size_mb": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Per-file cap in MB. Clamped to [`crate::storage::MAX_UPLOAD_MB`]\nat validation — a field may lower the ceiling, never raise it.",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "file"
                 ]
               }
             }
@@ -3846,7 +4098,8 @@
           "reps:read",
           "reps:write",
           "reps:delete",
-          "auth_config:write"
+          "auth_config:write",
+          "storage_config:write"
         ]
       },
       "PermissionInfo": {
@@ -4010,6 +4263,10 @@
           "standard_fields": {
             "$ref": "#/components/schemas/StandardFieldsConfig",
             "description": "Retained for embed bundles cached on host pages before `layout`\nexisted. Always a faithful projection of `layout`."
+          },
+          "uploads_enabled": {
+            "type": "boolean",
+            "description": "`true` when this form has a file field **and** a storage provider is\nconfigured, i.e. an upload can actually succeed. The renderer uses it\nto say so up front rather than letting a visitor pick a file and fail.\n\nSkipped when false so the payload is unchanged for the overwhelming\nmajority of forms, and absent for a bundle talking to an older server."
           }
         }
       },
@@ -4492,6 +4749,96 @@
           "select"
         ]
       },
+      "StorageConfigDto": {
+        "type": "object",
+        "description": "Admin-facing config. Secret-bearing keys (declared per kind via\n[`crate::storage::FileStoreFactory::secret_keys`]) are **stripped** from\n`config` and surfaced as presence booleans in `secret_fields`, so the live\ncredential never reaches the client, the browser cache, or the generated\nOpenAPI client. Mirrors `BackendInstanceDto`.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "config",
+          "secret_fields",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {
+            "description": "Non-secret config keys, verbatim. Secret keys are removed."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "secret_fields": {
+            "type": "object",
+            "description": "For each secret key this kind declares: `true` if a non-empty value is\non record. Lets the admin UI render \"set / not set\" without leaking it.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "StorageKindInfo": {
+        "type": "object",
+        "description": "Catalog entry returned by [`StorageRegistry::kinds`] — drives the admin's\nprovider picker.",
+        "required": [
+          "kind",
+          "label",
+          "secret_keys"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "Human label, so the admin UI doesn't hand-maintain a second copy of the\nkind → display-name mapping the way the backends dialog does."
+          },
+          "secret_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Secret-bearing config keys, so the UI knows which inputs to render as\nwrite-only password fields without hardcoding them per kind."
+          }
+        }
+      },
+      "StorageTestResult": {
+        "type": "object",
+        "description": "Result of the admin's \"Test connection\" probe.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only on failure, and phrased for an admin to act on."
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "SubmissionAcceptedDto": {
         "type": "object",
         "description": "Returned to the embed SDK on a successful POST. Deliberately minimal —\nthe public caller already has the data it sent us; echoing it back wastes\nbytes and leaks side effects (e.g. trim normalisation) the SDK doesn't\nneed to see.",
@@ -4963,6 +5310,71 @@
           }
         }
       },
+      "UploadTicketDto": {
+        "type": "object",
+        "description": "What it gets back.",
+        "required": [
+          "upload_url",
+          "method",
+          "headers",
+          "token",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "headers": {
+            "type": "object",
+            "description": "Headers the client must send verbatim on the `PUT` — they are part of\nthe signature.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "method": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "Opaque sealed receipt. Submit this as the field's value; the server\nexchanges it for the stored URL."
+          },
+          "upload_url": {
+            "type": "string"
+          }
+        }
+      },
+      "UploadTicketRequest": {
+        "type": "object",
+        "description": "What the browser asks for once a visitor picks a file.",
+        "required": [
+          "field_key",
+          "filename",
+          "content_type",
+          "size"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "field_key": {
+            "type": "string",
+            "description": "Key of the `file` field being filled in."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Exact byte length. Signed into the URL, so it has to be honest.",
+            "minimum": 0
+          }
+        }
+      },
       "UpsertOAuthConfig": {
         "type": "object",
         "description": "Upsert input. `client_secret: None` means \"keep the existing value\";\n`Some(non_empty)` replaces. The service rejects creating a new config\nwithout a client_secret.",
@@ -5037,6 +5449,24 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "UpsertStorageConfig": {
+        "type": "object",
+        "description": "Upsert input. A secret key omitted from `config` (or sent empty) means\n\"keep the existing value\" — the admin UI can't echo back what it was never\ngiven. Creating a config with no secret fails in the factory instead.",
+        "required": [
+          "kind",
+          "name",
+          "config"
+        ],
+        "properties": {
+          "config": {},
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -5180,6 +5610,10 @@
     {
       "name": "reps",
       "description": "Sales rep directory for QR-code attribution."
+    },
+    {
+      "name": "storage",
+      "description": "Object storage backing file-upload form fields."
     },
     {
       "name": "submissions",

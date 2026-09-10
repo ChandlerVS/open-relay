@@ -7,6 +7,7 @@
 //! leave a submission in "stored but undeliverable" limbo.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::Utc;
@@ -25,8 +26,11 @@ use crate::forms::{
     BackendBinding, CustomField, CustomFieldType, STANDARD_FIELD_KEYS, StandardFieldsConfig,
     regions, service as forms_service, visibility,
 };
+use crate::crypto::SecretCipher;
 use crate::metadata::{MetadataKey, service as metadata_service};
 use crate::reps::service as reps_service;
+use crate::storage::{FileStore, StorageRegistry, receipt};
+use crate::storage_config;
 
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
@@ -63,11 +67,18 @@ type StandardValues = HashMap<&'static str, String>;
 /// visitor who fills a block and then flips the controlling answer would
 /// otherwise deliver contradictory data, and an embed bundle cached before rules
 /// existed submits every field regardless.
+///
+/// `resolved_files` maps a `file` field's key to the URL its sealed receipt was
+/// exchanged for, by [`resolve_file_uploads`] which must have run first. Making
+/// it a required parameter rather than letting the file arm trust whatever
+/// string arrived is the point: if the pre-pass is ever skipped, every file
+/// field 400s instead of silently accepting an attacker-supplied URL.
 fn validate_and_split(
     payload: NewSubmissionPayload,
     standard_cfg: &StandardFieldsConfig,
     custom_fields: &[CustomField],
     hidden: &HashSet<String>,
+    resolved_files: &HashMap<String, String>,
 ) -> CoreResult<(StandardValues, JsonValue)> {
     let mut input = payload.0;
     let mut standard: StandardValues = HashMap::new();
@@ -146,7 +157,7 @@ fn validate_and_split(
         // sound with no second pass: `country_field` must name a field
         // strictly earlier in the layout, and `custom_fields` is in layout
         // order, so the country is always coerced first.
-        let value = coerce_custom(f, raw, &custom_out)?;
+        let value = coerce_custom(f, raw, &custom_out, resolved_files)?;
         if value.is_null() && f.required {
             return Err(CoreError::BadRequest(format!(
                 "required custom field '{}' missing",
@@ -178,6 +189,7 @@ fn coerce_custom(
     field: &CustomField,
     raw: Option<JsonValue>,
     earlier: &JsonMap<String, JsonValue>,
+    resolved_files: &HashMap<String, String>,
 ) -> CoreResult<JsonValue> {
     let raw = match raw {
         Some(JsonValue::Null) | None => return Ok(JsonValue::Null),
@@ -335,7 +347,81 @@ fn coerce_custom(
                 json_kind(&other)
             ))),
         },
+        CustomFieldType::File { .. } => match raw {
+            JsonValue::String(s) => {
+                if s.trim().is_empty() {
+                    return Ok(JsonValue::Null);
+                }
+                // The value on the wire is a sealed receipt, and the URL it
+                // stands for was resolved by `resolve_file_uploads` before this
+                // pass. Reading the map rather than the raw string is what
+                // makes an attacker-supplied URL unusable: it never appears
+                // here, so it can only miss.
+                resolved_files
+                    .get(&field.key)
+                    .map(|url| JsonValue::String(url.clone()))
+                    .ok_or_else(|| {
+                        crate::storage::receipt::ReceiptError.into_core(&field.key)
+                    })
+            }
+            other => Err(CoreError::BadRequest(format!(
+                "custom field '{}' must be a string, got {}",
+                field.key,
+                json_kind(&other)
+            ))),
+        },
     }
+}
+
+/// Exchange every sealed upload receipt in the payload for the URL of the
+/// object it attests to.
+///
+/// Runs before `validate_and_split` because the exchange is `async` (a
+/// presigned `GET` may have to be minted) while coercion is not, and because
+/// keeping it here means the storage provider is loaded **only** for a form
+/// that actually has a file field.
+///
+/// Skips hidden fields: their answers are dropped wholesale, so resolving one
+/// would mint a URL nobody stores. It also means a bundle cached before
+/// conditional rules existed — which submits every field unconditionally —
+/// doesn't pay for uploads it isn't going to keep.
+async fn resolve_file_uploads(
+    form_id: i32,
+    custom_fields: &[CustomField],
+    hidden: &HashSet<String>,
+    payload: &NewSubmissionPayload,
+    cipher: &SecretCipher,
+    store: Option<&Arc<dyn FileStore>>,
+) -> CoreResult<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    for field in custom_fields.iter().filter(|f| f.kind.is_file()) {
+        if hidden.contains(&field.key) {
+            continue;
+        }
+        let Some(JsonValue::String(token)) = payload.0.get(&field.key) else {
+            continue;
+        };
+        if token.trim().is_empty() {
+            continue;
+        }
+        // A receipt exists, so a provider existed when it was minted. Finding
+        // none now means storage was removed between attach and submit; that
+        // is an operator action, not a submitter mistake, so it reads as a
+        // server-side failure rather than a validation error.
+        let store = store.ok_or_else(|| {
+            CoreError::Internal(anyhow!(
+                "form {form_id} received a file upload but no storage provider is configured"
+            ))
+        })?;
+        let receipt = receipt::open(cipher, token, form_id, &field.key)
+            .map_err(|e| e.into_core(&field.key))?;
+        let url = store
+            .stored_url(&receipt.object_key)
+            .await
+            .map_err(|e| CoreError::Internal(anyhow!("could not build the file URL: {e}")))?;
+        out.insert(field.key.clone(), url);
+    }
+    Ok(out)
 }
 
 /// Trim-and-cap a free-text answer, the fallback shape a state picker takes
@@ -443,10 +529,27 @@ async fn resolve_attribution<C: ConnectionTrait>(
     })
 }
 
+/// What the submission path needs to turn a sealed upload receipt back into a
+/// URL. Bundled so the cipher and the registry travel together — pairing a
+/// cipher with a registry from a different `AppState` would fail obscurely,
+/// deep inside a decrypt.
+pub struct UploadContext<'a> {
+    pub cipher: &'a SecretCipher,
+    pub registry: &'a StorageRegistry,
+}
+
+/// Accept a form fill-out.
+///
+/// `uploads` carries what a `file` field needs — the cipher that sealed its
+/// receipt and the registry that can rebuild the store. It is a parameter
+/// rather than something resolved in here because `crates/core` has no
+/// ambient state, and it is [`UploadContext`] rather than two loose arguments
+/// so a caller can't pair the cipher with the wrong registry.
 pub async fn create_submission<C: ConnectionTrait>(
     conn: &C,
     form: &entity::form::Model,
     mut payload: NewSubmissionPayload,
+    uploads: &UploadContext<'_>,
 ) -> CoreResult<entity::submission::Model> {
     // Honeypot: reject (generically) if the hidden field was filled in.
     if honeypot_tripped(&payload) {
@@ -503,8 +606,35 @@ pub async fn create_submission<C: ConnectionTrait>(
 
     let attribution = resolve_attribution(conn, form, &source).await?;
 
-    let (standard, custom_data) =
-        validate_and_split(payload, &standard_cfg, &custom_fields, &hidden)?;
+    // Only touch storage for a form that actually has a file field — the
+    // overwhelming majority don't, and this is the hot submission path.
+    let resolved_files = if custom_fields.iter().any(|f| f.kind.is_file()) {
+        let store = storage_config::service::load_active_store(
+            conn,
+            uploads.registry,
+            uploads.cipher,
+        )
+        .await?;
+        resolve_file_uploads(
+            form.id,
+            &custom_fields,
+            &hidden,
+            &payload,
+            uploads.cipher,
+            store.as_ref(),
+        )
+        .await?
+    } else {
+        HashMap::new()
+    };
+
+    let (standard, custom_data) = validate_and_split(
+        payload,
+        &standard_cfg,
+        &custom_fields,
+        &hidden,
+        &resolved_files,
+    )?;
     // Email deduplication (opt-in per form): if the submitted email already
     // NOTE: a conditionally-hidden `email` is pruned above and so is absent from
     // `standard` — dedup simply doesn't apply to that submission, which is the
@@ -866,13 +996,19 @@ pub async fn delete_for_owner<C: ConnectionTrait>(conn: &C, user_id: i32) -> Cor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stand-in for the resolved-upload map. Every test below predates file
+    /// fields and has none, so resolution is vacuous for them.
+    fn no_files() -> HashMap<String, String> {
+        HashMap::new()
+    }
     use crate::forms::{
         CustomField, CustomFieldType, StandardFieldConfig, StandardFieldsConfig,
     };
 
     /// Coerce one answer with no earlier fields in scope.
     fn coerce(field: &CustomField, raw: &str) -> CoreResult<JsonValue> {
-        coerce_custom(field, Some(JsonValue::String(raw.into())), &JsonMap::new())
+        coerce_custom(field, Some(JsonValue::String(raw.into())), &JsonMap::new(), &no_files())
     }
 
     /// Coerce one answer with `earlier` standing in for the fields ahead of it
@@ -886,7 +1022,7 @@ mod tests {
         for (k, v) in earlier {
             map.insert((*k).to_string(), JsonValue::String((*v).to_string()));
         }
-        coerce_custom(field, Some(JsonValue::String(raw.into())), &map)
+        coerce_custom(field, Some(JsonValue::String(raw.into())), &map, &no_files())
     }
 
     #[test]
@@ -968,6 +1104,7 @@ mod tests {
             &cfg(),
             &[],
             &nothing_hidden(),
+            &no_files(),
         );
         assert!(matches!(res, Err(CoreError::BadRequest(_))));
     }
@@ -983,6 +1120,7 @@ mod tests {
             &cfg(),
             &[],
             &nothing_hidden(),
+            &no_files(),
         )
         .unwrap();
         assert_eq!(std.get("first_name"), Some(&"Ada".to_string()));
@@ -1015,6 +1153,7 @@ mod tests {
             &cfg(),
             &fields,
             &nothing_hidden(),
+            &no_files(),
         )
         .unwrap();
         assert_eq!(custom["color"], JsonValue::String("red".into()));
@@ -1028,6 +1167,7 @@ mod tests {
             &cfg(),
             &fields,
             &nothing_hidden(),
+            &no_files(),
         );
         assert!(matches!(bad, Err(CoreError::BadRequest(_))));
     }
@@ -1080,6 +1220,7 @@ mod tests {
             &cfg(),
             &fields,
             &nothing_hidden(),
+            &no_files(),
         )
         .unwrap();
         assert_eq!(custom["subscribe"], JsonValue::Bool(true));
@@ -1104,6 +1245,7 @@ mod tests {
             &cfg,
             &[],
             &hidden,
+            &no_files(),
         )
         .expect("a hidden field must not be required");
         assert!(!std.contains_key("city"));
@@ -1119,6 +1261,7 @@ mod tests {
                 &cfg,
                 &[],
                 &nothing_hidden(),
+                &no_files(),
             )
             .is_err()
         );
@@ -1155,6 +1298,7 @@ mod tests {
             &cfg,
             &fields,
             &hidden,
+            &no_files(),
         )
         .expect("hidden fields are pruned, not rejected");
         assert!(!std.contains_key("city"), "hidden standard value must not be stored");
@@ -1188,6 +1332,7 @@ mod tests {
                 &cfg(),
                 &fields,
                 &hidden,
+                &no_files(),
             )
         };
         assert!(call(nothing_hidden()).is_err());
@@ -1339,6 +1484,7 @@ mod tests {
             &StandardFieldsConfig::all_disabled(),
             &fields,
             &HashSet::new(),
+            &no_files(),
         )
         .unwrap();
         assert_eq!(custom["billing_state"], JsonValue::String("CA".into()));
@@ -1372,6 +1518,7 @@ mod tests {
             &StandardFieldsConfig::all_disabled(),
             &fields,
             &hidden,
+            &no_files(),
         )
         .unwrap_err();
         assert!(matches!(err, CoreError::BadRequest(_)));

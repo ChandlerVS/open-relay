@@ -20,6 +20,7 @@ use super::{
 };
 use crate::backend::BackendRegistry;
 use crate::error::{CoreError, CoreResult};
+use crate::storage::MAX_UPLOAD_MB;
 use crate::metadata::service as metadata_service;
 use crate::reps::service as reps_service;
 
@@ -28,6 +29,11 @@ const MAX_SLUG_LEN: usize = 100;
 const MAX_LABEL_LEN: usize = 200;
 const MAX_KEY_LEN: usize = 64;
 const MAX_CUSTOM_FIELDS: usize = 100;
+/// How many `accept` patterns one file field may list. Generous — a real
+/// allow-list is a handful of extensions — but bounded, since the list is
+/// echoed to every visitor in the public form response.
+const MAX_ACCEPT_PATTERNS: usize = 20;
+const MAX_ACCEPT_PATTERN_LEN: usize = 64;
 const MAX_LAYOUT_ELEMENTS: usize = 300;
 const MAX_PARAGRAPH_LEN: usize = 2000;
 /// A rich-text block holds the long explanatory copy a form needs — payment
@@ -181,6 +187,29 @@ pub fn validate_custom_fields(fields: &[CustomField]) -> CoreResult<()> {
                 "custom field '{}' label must be 1..={MAX_LABEL_LEN} characters",
                 f.key
             )));
+        }
+        if let CustomFieldType::File { accept, max_size_mb } = &f.kind {
+            if !(1..=MAX_UPLOAD_MB).contains(max_size_mb) {
+                return Err(CoreError::BadRequest(format!(
+                    "custom field '{}' max_size_mb must be 1..={MAX_UPLOAD_MB}",
+                    f.key
+                )));
+            }
+            if accept.len() > MAX_ACCEPT_PATTERNS {
+                return Err(CoreError::BadRequest(format!(
+                    "custom field '{}' lists more than {MAX_ACCEPT_PATTERNS} accepted file types",
+                    f.key
+                )));
+            }
+            for pattern in accept {
+                let t = pattern.trim();
+                if t.is_empty() || t.len() > MAX_ACCEPT_PATTERN_LEN {
+                    return Err(CoreError::BadRequest(format!(
+                        "custom field '{}' has an accepted file type that is blank or over {MAX_ACCEPT_PATTERN_LEN} characters",
+                        f.key
+                    )));
+                }
+            }
         }
         if let Some(options) = f.kind.options() {
             if options.is_empty() {
@@ -1442,6 +1471,13 @@ pub async fn dto_from_model<C: ConnectionTrait>(
     })
 }
 
+/// Build the public schema an embedded form renders from.
+///
+/// `uploads_enabled` is left `false` here and set by the caller: it depends on
+/// deployment-wide state (is a storage provider configured?) that this pure
+/// projection has no connection to reach. The caller decides using
+/// [`needs_uploads`] against the `layout` on the returned DTO, so the form's
+/// JSON is parsed once rather than once per question asked of it.
 pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto> {
     let standard_fields = parse_standard_fields(&m.standard_fields)?;
     let custom_fields = parse_custom_fields(&m.custom_fields)?;
@@ -1464,7 +1500,18 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
         post_submission_action,
         progress_indicator,
         regions,
+        uploads_enabled: false,
     })
+}
+
+/// Whether this form has a field that uploads a file, and so needs a storage
+/// provider to be usable. Used exactly like [`needs_subdivisions`]: the public
+/// DTO only pays for the extra lookup when the answer is `true`, which for the
+/// overwhelming majority of forms it isn't.
+pub fn needs_uploads(layout: &[FormElement]) -> bool {
+    layout
+        .iter()
+        .any(|el| matches!(el, FormElement::Custom(c) if c.kind.is_file()))
 }
 
 /// Whether this layout has anything that renders a subdivision dropdown, and so

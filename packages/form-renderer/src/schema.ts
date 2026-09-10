@@ -88,7 +88,22 @@ export type CustomField =
    * follows, which is what lets the renderer resolve every picker in one
    * forward pass. Absent means unbound, which renders free text.
    */
-  | (CustomFieldBase & { type: "state"; country_field?: string | null });
+  | (CustomFieldBase & { type: "state"; country_field?: string | null })
+  /**
+   * A single-file upload. The value held in form state is an opaque *receipt*
+   * minted by the server when the file was presigned — never a URL, and never
+   * the file itself. The server exchanges it for the stored object's URL on
+   * submit, which is why an attacker can't just post a URL of their choosing.
+   *
+   * Bytes go straight from the browser to the configured object store; they
+   * never pass through the OpenRelay API.
+   */
+  | (CustomFieldBase & {
+      type: "file";
+      /** HTML `accept` patterns: `.pdf`, `image/*`, or a full MIME type. */
+      accept?: string[];
+      max_size_mb?: number;
+    });
 
 interface CustomFieldBase {
   key: string;
@@ -278,4 +293,11 @@ export interface PublicFormDto {
    * server accepts for a country with no subdivisions.
    */
   regions?: string | null;
+  /**
+   * Whether this form's file fields can actually accept an upload — true only
+   * when the form has one *and* the deployment has a storage provider
+   * configured. Absent from a server too old to send it, which reads as
+   * false; a form on such a server has no file fields anyway.
+   */
+  uploads_enabled?: boolean;
 }

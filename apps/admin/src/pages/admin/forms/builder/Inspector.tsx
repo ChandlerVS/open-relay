@@ -1,6 +1,8 @@
 import { Input, Label } from "@open-relay/ui";
 import { STANDARD_FIELDS } from "@open-relay/form-renderer";
 import {
+  DEFAULT_MAX_FILE_MB,
+  MAX_UPLOAD_MB,
   CUSTOM_FIELD_TYPES,
   RICH_TEXT_TONES,
   canBeConditional,
@@ -317,7 +319,46 @@ export function Inspector({
             </p>
           </div>
         )}
-        {cfg.type !== "country" && cfg.type !== "state" && (
+        {cfg.type === "file" && (
+          <div className="space-y-1">
+            <Row label="Accepted types">
+              <Input
+                className="h-8 text-sm font-mono"
+                placeholder=".pdf, .docx, image/*"
+                value={(cfg.accept ?? []).join(", ")}
+                onChange={(e) =>
+                  patch({
+                    accept: e.target.value
+                      .split(",")
+                      .map((p) => p.trim())
+                      .filter(Boolean),
+                  } as Partial<typeof cfg>)
+                }
+              />
+            </Row>
+            <Row label="Max size (MB)">
+              <Input
+                className="h-8 text-sm"
+                type="number"
+                min={1}
+                max={MAX_UPLOAD_MB}
+                value={cfg.max_size_mb ?? DEFAULT_MAX_FILE_MB}
+                onChange={(e) =>
+                  patch({
+                    max_size_mb: Number(e.target.value) || DEFAULT_MAX_FILE_MB,
+                  } as Partial<typeof cfg>)
+                }
+              />
+            </Row>
+            <p className="text-xs text-muted-foreground">
+              Comma-separated extensions or MIME patterns; leave blank to
+              accept anything. The file goes straight from the visitor's
+              browser to your configured storage, and the submission records
+              its URL. Server maximum is {MAX_UPLOAD_MB} MB.
+            </p>
+          </div>
+        )}
+        {cfg.type !== "country" && cfg.type !== "state" && cfg.type !== "file" && (
           <Row label="Placeholder">
             <Input
               className="h-8 text-sm"
@@ -338,7 +379,7 @@ export function Inspector({
           not, since the list it belongs to depends on an answer nobody has
           given yet.
         */}
-        {cfg.type !== "checkbox" && cfg.type !== "state" && (
+        {cfg.type !== "checkbox" && cfg.type !== "state" && cfg.type !== "file" && (
           <Row label="Default value">
             <Input
               className="h-8 text-sm"

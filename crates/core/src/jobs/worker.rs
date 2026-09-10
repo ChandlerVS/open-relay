@@ -283,7 +283,7 @@ async fn dispatch_one(
             // copy of the config just before handing it to the factory.
             let mut config = inst.config.clone();
             if let Err(e) =
-                crate::backends::service::decrypt_secret_keys(registry, &inst.kind, &mut config, cipher)
+                crate::secrets::decrypt_in_place(registry.secret_keys(&inst.kind), &mut config, cipher)
             {
                 warn!(
                     delivery_id = row.id,

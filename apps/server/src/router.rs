@@ -48,6 +48,7 @@ const ADMIN_BODY_LIMIT: usize = 1024 * 1024;
         (name = "forms", description = "Form schemas embedded by host pages."),
         (name = "backends", description = "Configured delivery backends (e.g. GoHighLevel)."),
         (name = "reps", description = "Sales rep directory for QR-code attribution."),
+        (name = "storage", description = "Object storage backing file-upload form fields."),
         (name = "submissions", description = "Form submissions and their per-backend delivery state."),
         (name = "public", description = "Unauthenticated endpoints consumed by embedded forms."),
     ),
@@ -104,6 +105,7 @@ pub fn build(state: AppState) -> Router {
         .nest("/forms", routes::forms::router())
         .nest("/backends", routes::backends::router())
         .nest("/reps", routes::reps::router())
+        .nest("/storage", routes::storage::router())
         .nest("/submissions", routes::submissions::router())
         .split_for_parts();
     let mut admin_router = admin_router

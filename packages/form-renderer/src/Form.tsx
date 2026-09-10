@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { STANDARD_FIELDS } from "./standardFields";
 import { COUNTRIES, subdivisionsFor, type RegionOption } from "./regions";
+import { UploadError, localRejection, uploadFile } from "./uploads";
 import { groupRows, resolveLayout, splitIntoPages, stateBindings } from "./layout";
 import type { LayoutEntry } from "./layout";
 import { computeVisibility, visibleElements } from "./visibility";
@@ -102,6 +103,11 @@ export function Form({
   onError,
 }: FormProps) {
   const resolvedTheme = useResolvedTheme(theme);
+  /** API root with any trailing slash removed — shared by all three fetches. */
+  const base = useMemo(
+    () => (apiUrl.endsWith("/") ? apiUrl.slice(0, -1) : apiUrl),
+    [apiUrl],
+  );
   const [fetched, setFetched] = useState<PublicFormDto | null>(null);
   const [status, setStatus] = useState<Status>(schemaProp ? "ready" : "loading");
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +126,6 @@ export function Form({
     let cancelled = false;
     setStatus("loading");
     setError(null);
-    const base = apiUrl.endsWith("/") ? apiUrl.slice(0, -1) : apiUrl;
     fetch(`${base}/public/forms/${encodeURIComponent(formId)}`)
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -139,7 +144,7 @@ export function Form({
     return () => {
       cancelled = true;
     };
-  }, [formId, apiUrl, schemaProp]);
+  }, [formId, base, schemaProp]);
 
   const layout = useMemo(() => (schema ? resolveLayout(schema) : []), [schema]);
 
@@ -215,6 +220,20 @@ export function Form({
     window.location.assign(action.config.url);
   }, [status, action, previewMode, suppressRedirect]);
 
+  // Layout-derived, so neither lookup costs anything per keystroke.
+  //
+  // This and `uploads` below sit above the early returns because they are
+  // hooks: React counts them per render, and a hook that only runs once
+  // `status` leaves "loading" changes that count mid-lifecycle.
+  const bindings = useMemo(() => stateBindings(layout), [layout]);
+
+
+  // Upload progress lives *beside* `values`, not in it. The value of a file
+  // field is the receipt string the server sealed, so `values` keeps its
+  // `string | boolean` shape and every consumer of it — visibility rules,
+  // `hiddenKeys`, the subtractive payload build — is untouched.
+  const [uploads, setUploads] = useState<Record<string, UploadState>>({});
+
   // A layout can shrink between renders (the builder preview edits live), so
   // never leave the step cursor past the end.
   const safePageIndex = Math.min(pageIndex, Math.max(pages.length - 1, 0));
@@ -262,8 +281,48 @@ export function Form({
     );
   }
 
-  // Layout-derived, so neither lookup costs anything per keystroke.
-  const bindings = useMemo(() => stateBindings(layout), [layout]);
+  const uploading = Object.values(uploads).some((u) => u.status === "uploading");
+
+  const onPickFile = async (field: CustomField, file: File | null, input: HTMLInputElement) => {
+    if (!file) {
+      setUploads((u) => {
+        const next = { ...u };
+        delete next[field.key];
+        return next;
+      });
+      set(field.key, "");
+      return;
+    }
+    const accept = field.type === "file" ? field.accept : undefined;
+    const maxSizeMb = field.type === "file" ? field.max_size_mb : undefined;
+    const rejection = localRejection(file, accept, maxSizeMb);
+    if (rejection) {
+      // Clear the input too, not just the value: native `required` checks
+      // `files.length`, so leaving the rejected file selected would let an
+      // incomplete form pass client-side validation and 400 at the server.
+      input.value = "";
+      set(field.key, "");
+      setUploads((u) => ({ ...u, [field.key]: { name: file.name, status: "error", error: rejection } }));
+      return;
+    }
+    setUploads((u) => ({ ...u, [field.key]: { name: file.name, status: "uploading" } }));
+    try {
+      const token = await uploadFile(base, formId, field.key, file);
+      set(field.key, token);
+      setUploads((u) => ({ ...u, [field.key]: { name: file.name, status: "done" } }));
+    } catch (err) {
+      input.value = "";
+      set(field.key, "");
+      setUploads((u) => ({
+        ...u,
+        [field.key]: {
+          name: file.name,
+          status: "error",
+          error: err instanceof UploadError ? err.message : "Upload failed. Please try again.",
+        },
+      }));
+    }
+  };
 
   const set = (key: string, val: string | boolean) =>
     setValues((v) => {
@@ -298,7 +357,6 @@ export function Form({
   const submit = async () => {
     setStatus("submitting");
     setError(null);
-    const base = apiUrl.endsWith("/") ? apiUrl.slice(0, -1) : apiUrl;
     // Subtractive, never a whitelist: `values` also carries the honeypot `_hp`,
     // which the server reads to reject bots. Rebuilding from the visible layout
     // keys would drop it silently and every bot would sail through.
@@ -402,6 +460,9 @@ export function Form({
                 hiddenKeys={hiddenKeys}
                 regions={schema.regions}
                 onChange={set}
+                uploads={uploads}
+                uploadsEnabled={schema.uploads_enabled ?? false}
+                onPickFile={onPickFile}
               />
             );
             if (node.kind === "element") return draw(node.entry);
@@ -459,18 +520,25 @@ export function Form({
             Back
           </button>
         )}
+        {/* Both buttons gate on `uploading`: a receipt that hasn't arrived
+            yet means the field's value is still empty, and Next would let a
+            visitor step past a file they think they attached. */}
         {isLastPage ? (
           <button
             type="submit"
             className="or-form__submit"
-            disabled={status === "submitting" || previewMode}
+            disabled={status === "submitting" || previewMode || uploading}
             title={previewMode ? "Disabled in preview" : undefined}
           >
-            {status === "submitting" ? "Submitting…" : "Submit"}
+            {status === "submitting"
+              ? "Submitting…"
+              : uploading
+                ? "Uploading…"
+                : "Submit"}
           </button>
         ) : (
-          <button type="submit" className="or-form__submit">
-            Next
+          <button type="submit" className="or-form__submit" disabled={uploading}>
+            {uploading ? "Uploading…" : "Next"}
           </button>
         )}
       </div>
@@ -575,6 +643,13 @@ function resolveCountry(
   return typeof raw === "string" && raw ? raw : undefined;
 }
 
+/** Per-field upload progress. Never part of the submitted payload. */
+interface UploadState {
+  name: string;
+  status: "uploading" | "done" | "error";
+  error?: string;
+}
+
 function LayoutElement({
   element,
   scope,
@@ -584,6 +659,9 @@ function LayoutElement({
   hiddenKeys,
   regions,
   onChange,
+  uploads,
+  uploadsEnabled,
+  onPickFile,
 }: {
   element: FormElement;
   scope: number;
@@ -595,6 +673,10 @@ function LayoutElement({
   hiddenKeys: ReadonlySet<string>;
   regions: string | null | undefined;
   onChange: (key: string, value: string | boolean) => void;
+  /** Upload progress for file fields, keyed by field key. */
+  uploads: Record<string, UploadState>;
+  uploadsEnabled: boolean;
+  onPickFile: (field: CustomField, file: File | null, input: HTMLInputElement) => void;
 }) {
   switch (element.element) {
     case "standard":
@@ -621,6 +703,9 @@ function LayoutElement({
             regions,
             resolveCountry(bindings.byState.get(element.config.key), resolved, hiddenKeys),
           )}
+          upload={uploads[element.config.key]}
+          uploadsEnabled={uploadsEnabled}
+          onPickFile={onPickFile}
         />
       );
     case "heading": {
@@ -759,6 +844,9 @@ function CustomFieldInput({
   onChange,
   scope,
   subdivisions,
+  upload,
+  uploadsEnabled = false,
+  onPickFile,
 }: {
   field: CustomField;
   value: string | boolean | undefined;
@@ -766,6 +854,9 @@ function CustomFieldInput({
   scope: number;
   /** Set for a `state` field whose country is chosen and has subdivisions. */
   subdivisions?: readonly RegionOption[] | undefined;
+  upload?: UploadState | undefined;
+  uploadsEnabled?: boolean;
+  onPickFile?: (field: CustomField, file: File | null, input: HTMLInputElement) => void;
 }) {
   const id = `or-${scope}-${field.key}`;
   const required = field.required ?? false;
@@ -785,6 +876,58 @@ function CustomFieldInput({
           {field.label}
           {required && <span className="or-field__required"> *</span>}
         </label>
+        {field.help_text && <p className="or-field__help">{field.help_text}</p>}
+      </div>
+    );
+  }
+
+  if (field.type === "file") {
+    // The input is deliberately *uncontrolled*: a file input's value can't be
+    // set programmatically, and what `values` holds for this field is the
+    // receipt, not the filename. `required` still works — the browser checks
+    // `files.length` — which is why a failed upload clears the input as well
+    // as the value.
+    const accepted = field.accept && field.accept.length > 0 ? field.accept.join(",") : undefined;
+    return (
+      <div className={fieldClass(field.width, "or-field--file")}>
+        <label htmlFor={id} className="or-field__label">
+          {field.label}
+          {required && <span className="or-field__required"> *</span>}
+        </label>
+        {uploadsEnabled ? (
+          <>
+            <input
+              id={id}
+              name={field.key}
+              type="file"
+              accept={accepted}
+              required={required && upload?.status !== "done"}
+              disabled={upload?.status === "uploading"}
+              onChange={(e) => onPickFile?.(field, e.target.files?.[0] ?? null, e.target)}
+            />
+            {upload?.status === "uploading" && (
+              <p className="or-field__help" role="status">
+                Uploading {upload.name}…
+              </p>
+            )}
+            {upload?.status === "done" && (
+              <p className="or-field__help or-field__help--ok" role="status">
+                Attached {upload.name}
+              </p>
+            )}
+            {upload?.status === "error" && (
+              <p className="or-field__error" role="alert">
+                {upload.error}
+              </p>
+            )}
+          </>
+        ) : (
+          // No storage provider is configured, so an upload cannot succeed.
+          // Say so instead of letting the visitor pick a file and fail — and
+          // drop `required`, which would otherwise make the form
+          // uncompletable through no fault of theirs.
+          <p className="or-field__error">File uploads aren't available right now.</p>
+        )}
         {field.help_text && <p className="or-field__help">{field.help_text}</p>}
       </div>
     );

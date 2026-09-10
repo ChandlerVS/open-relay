@@ -5,6 +5,8 @@ use open_relay_core::auth::provider::ProviderRegistry;
 use open_relay_core::crypto::SecretCipher;
 use open_relay_core::backend::registry::BackendRegistry;
 use open_relay_core::backend::{GoHighLevelFactory, OpenRelayBackend};
+use open_relay_core::storage::{S3Factory, StorageRegistry};
+use open_relay_core::submissions::service::UploadContext;
 use sea_orm::DatabaseConnection;
 
 use crate::config::{Config, Environment};
@@ -17,6 +19,10 @@ pub struct AppState {
     pub cipher: Arc<SecretCipher>,
     pub providers: Arc<ProviderRegistry>,
     pub backends: BackendRegistry,
+    /// Known object-storage kinds, for the `file` form field. Held by value
+    /// like `backends` — it is `Clone` and cheap (a `HashMap` of `Arc`s), so
+    /// an extra `Arc` around it would buy nothing.
+    pub storage: StorageRegistry,
     /// Id of the auto-managed `Superadmin` role. Cached at boot via
     /// `rbac::service::ensure_superadmin` so handlers don't need to look it
     /// up — and so the lockout guards (which reference it) can't accidentally
@@ -51,6 +57,10 @@ impl AppState {
         let mut backends = BackendRegistry::new();
         backends.register_static(Arc::new(OpenRelayBackend));
         backends.register_factory(Arc::new(GoHighLevelFactory::new()));
+        // Single place to add a storage kind, mirroring the backend registry
+        // two lines up.
+        let mut storage = StorageRegistry::new();
+        storage.register_factory(Arc::new(S3Factory::new()));
         let public_api_url = config.public_api_url.trim_end_matches('/').to_string();
         // Fall back to a same-origin path under the API when EMBED_SDK_URL is
         // unset, so the snippet is still well-formed in dev/local setups.
@@ -64,6 +74,7 @@ impl AppState {
             cipher,
             providers,
             backends,
+            storage,
             superadmin_role_id,
             public_api_url,
             embed_sdk_url,
@@ -73,6 +84,16 @@ impl AppState {
             cookie_secure: config.cookie_secure,
             environment: config.environment,
         })
+    }
+
+    /// What the submission path needs to exchange a sealed upload receipt for
+    /// a URL. Bundling the two here means no handler can pair this state's
+    /// cipher with a different registry.
+    pub fn upload_context(&self) -> UploadContext<'_> {
+        UploadContext {
+            cipher: &self.cipher,
+            registry: &self.storage,
+        }
     }
 
     /// `true` in development. Gates dev-only affordances (Swagger UI, the SSRF

@@ -18,6 +18,7 @@ import {
 } from "@open-relay/ui";
 import { api } from "../../../../lib/api/client";
 import { usePermissions } from "../../../../lib/auth/usePermissions";
+import { useStorageConfig } from "../../../../lib/storage/useStorage";
 import { useForm } from "../../../../lib/forms/useForms";
 import { useUpdateForm } from "../../../../lib/forms/useFormMutations";
 import { useTheme } from "../../../../lib/theme/useTheme";
@@ -64,6 +65,12 @@ export function FormBuilderPage() {
   // more — so the whole builder degrades to read-only rather than 403ing at
   // Save after the layout has already been reorganised.
   const canEdit = usePermissions().has("forms:write");
+  // Whether to warn that a file field has nowhere to put its files. Gated on
+  // the permission the endpoint requires, so a forms-only editor doesn't fire
+  // a request that can only 403 — they'd get no warning, which is the right
+  // trade: storage is an operator's concern, not theirs.
+  const canReadStorage = usePermissions().has("storage_config:write");
+  const storage = useStorageConfig({ enabled: canReadStorage });
 
   const [items, setItems] = useState<BuilderElement[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -79,6 +86,9 @@ export function FormBuilderPage() {
 
   const errors = useMemo(() => (items ? validateLayout(items) : {}), [items]);
   const errorCount = Object.keys(errors).length;
+  const hasFileField = (items ?? []).some(
+    (it) => it.element.element === "custom" && it.element.config.type === "file",
+  );
   const dirty = useMemo(() => {
     if (!form || !items) return false;
     return JSON.stringify(stripIds(items)) !== JSON.stringify(form.layout);
@@ -264,6 +274,21 @@ export function FormBuilderPage() {
               forms:write
             </code>{" "}
             permission.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/*
+        A file field is perfectly legal to save without a provider — storage
+        is deployment-wide state a form author may not control, so the server
+        doesn't reject it. Warn here instead, where it can be acted on.
+      */}
+      {hasFileField && canReadStorage && !storage.isPending && !storage.data && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            This form has a file upload field, but no file storage is
+            configured — visitors won't be able to attach anything. Set it up
+            under <Link to="/settings/storage" className="underline">Settings → File storage</Link>.
           </AlertDescription>
         </Alert>
       )}

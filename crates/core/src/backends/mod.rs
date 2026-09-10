@@ -38,19 +38,8 @@ impl BackendInstanceDto {
     /// secret keys. Use this instead of a blanket `From<Model>` so secrets are
     /// never serialized by accident.
     pub fn from_model(registry: &BackendRegistry, m: entity::backend_instance::Model) -> Self {
-        let secret_keys = registry.secret_keys(&m.kind);
         let mut config = m.config;
-        let mut secret_fields = BTreeMap::new();
-        for key in secret_keys {
-            let present = config
-                .get(*key)
-                .map(|v| !value_is_empty(v))
-                .unwrap_or(false);
-            secret_fields.insert((*key).to_string(), present);
-            if let Some(obj) = config.as_object_mut() {
-                obj.remove(*key);
-            }
-        }
+        let secret_fields = crate::secrets::redact(registry.secret_keys(&m.kind), &mut config);
         Self {
             id: m.id,
             kind: m.kind,
@@ -60,16 +49,6 @@ impl BackendInstanceDto {
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
-    }
-}
-
-/// A JSON value counts as "empty" (no secret on record) when it's null or an
-/// empty/whitespace-only string.
-pub(crate) fn value_is_empty(v: &serde_json::Value) -> bool {
-    match v {
-        serde_json::Value::Null => true,
-        serde_json::Value::String(s) => s.trim().is_empty(),
-        _ => false,
     }
 }
 

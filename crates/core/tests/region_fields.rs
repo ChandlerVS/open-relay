@@ -33,6 +33,23 @@ use open_relay_core::submissions::{NewSubmissionPayload, service as submissions}
 use sea_orm::Database;
 use serde_json::{Value as JsonValue, json};
 
+/// Upload context for a form with no `file` fields: a throwaway cipher and an
+/// empty registry. Nothing in this file mints or opens a receipt, so neither
+/// is ever consulted — `create_submission` short-circuits before touching
+/// storage when the form has no file field.
+fn no_uploads() -> submissions::UploadContext<'static> {
+    static CIPHER: std::sync::OnceLock<open_relay_core::crypto::SecretCipher> =
+        std::sync::OnceLock::new();
+    static REGISTRY: std::sync::OnceLock<open_relay_core::storage::StorageRegistry> =
+        std::sync::OnceLock::new();
+    submissions::UploadContext {
+        cipher: CIPHER.get_or_init(|| {
+            open_relay_core::crypto::SecretCipher::from_key_bytes(&[1u8; 32]).unwrap()
+        }),
+        registry: REGISTRY.get_or_init(open_relay_core::storage::StorageRegistry::new),
+    }
+}
+
 fn registry() -> BackendRegistry {
     let mut r = BackendRegistry::new();
     r.register_static(std::sync::Arc::new(
@@ -169,6 +186,7 @@ async fn region_fields_survive_a_round_trip_and_validate_on_submit() {
             ("shipping_country", json!("CA")),
             ("shipping_state", json!("BC")),
         ]),
+        &no_uploads(),
     )
     .await
     .expect("a valid pair of pairs");
@@ -188,6 +206,7 @@ async fn region_fields_survive_a_round_trip_and_validate_on_submit() {
             ("shipping_country", json!("CA")),
             ("shipping_state", json!("BC")),
         ]),
+        &no_uploads(),
     )
     .await;
     assert!(crossed.is_err(), "a subdivision of the wrong country is rejected");
@@ -283,6 +302,7 @@ async fn a_legacy_reorder_that_strands_a_reference_unbinds_it() {
         &db,
         &patched,
         payload(&[("s", json!("Anywhere")), ("c", json!("US"))]),
+        &no_uploads(),
     )
     .await
     .expect("an unbound state takes free text");

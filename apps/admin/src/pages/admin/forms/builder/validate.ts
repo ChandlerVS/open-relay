@@ -1,5 +1,6 @@
 import { STANDARD_FIELDS, isHttpUrl } from "@open-relay/form-renderer";
 import {
+  MAX_UPLOAD_MB,
   allowedInRow,
   elementRule,
   isCountryField,
@@ -15,6 +16,17 @@ const MAX_LABEL_LEN = 200;
 const MAX_CONDITIONS = 10;
 const MAX_ROW_CHILDREN = 4;
 const MAX_RICH_TEXT_LEN = 10000;
+const MAX_ACCEPT_PATTERNS = 20;
+const MAX_ACCEPT_PATTERN_LEN = 64;
+
+/**
+ * An absent `max_size_mb` is fine — the server applies its own default. Only
+ * an explicit out-of-range value is an error, mirroring
+ * `validate_custom_fields`.
+ */
+function withinUploadLimit(mb: number | undefined): boolean {
+  return mb === undefined || (Number.isInteger(mb) && mb >= 1 && mb <= MAX_UPLOAD_MB);
+}
 const VALUE_OPS = new Set(["equals", "not_equals", "contains"]);
 const CHECKBOX_OPS = new Set(["is_checked", "is_not_checked"]);
 const STANDARD_KEYS = new Set(STANDARD_FIELDS.map((f) => f.key));
@@ -178,6 +190,21 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
           el.config.type === "radio"
             ? "A radio group needs at least one option."
             : "A dropdown needs at least one option.";
+      } else if (
+        el.config.type === "file" &&
+        !withinUploadLimit(el.config.max_size_mb)
+      ) {
+        errors[item.id] = `Max size must be between 1 and ${MAX_UPLOAD_MB} MB.`;
+      } else if (
+        el.config.type === "file" &&
+        (el.config.accept ?? []).length > MAX_ACCEPT_PATTERNS
+      ) {
+        errors[item.id] = `At most ${MAX_ACCEPT_PATTERNS} accepted file types.`;
+      } else if (
+        el.config.type === "file" &&
+        (el.config.accept ?? []).some((p) => p.trim().length > MAX_ACCEPT_PATTERN_LEN)
+      ) {
+        errors[item.id] = `An accepted file type must be at most ${MAX_ACCEPT_PATTERN_LEN} characters.`;
       } else if (el.config.type === "state" && el.config.country_field) {
         // Unbound is fine — that is the free-text fallback. A reference that
         // names nothing earlier, or names something that isn't a country, is

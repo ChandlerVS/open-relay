@@ -1,3 +1,4 @@
+import { isHttpUrl } from "@open-relay/form-renderer";
 import {
   Dialog,
   DialogContent,
@@ -151,7 +152,9 @@ export function SubmissionDetailDialog({
                     {Object.entries(custom).map(([key, value]) => (
                       <div key={key}>
                         <dt className="text-muted-foreground text-xs">{key}</dt>
-                        <dd className="break-words">{String(value)}</dd>
+                        <dd className="break-words">
+                          <CustomValue value={value} />
+                        </dd>
                       </div>
                     ))}
                   </dl>
@@ -163,4 +166,28 @@ export function SubmissionDetailDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * A file field stores the uploaded object's URL, so render it as a link rather
+ * than a wall of unclickable text. Any other http(s) value benefits equally.
+ *
+ * `noopener noreferrer` because the URL points at a bucket we don't control,
+ * and the value ultimately came from a form submission.
+ */
+function CustomValue({ value }: { value: unknown }) {
+  const text = String(value);
+  if (typeof value === "string" && isHttpUrl(value)) {
+    return (
+      <a
+        href={text}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary underline underline-offset-2"
+      >
+        {text}
+      </a>
+    );
+  }
+  return <>{text}</>;
 }

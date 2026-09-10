@@ -31,6 +31,23 @@ use open_relay_core::submissions::{NewSubmissionPayload, service as submissions}
 use sea_orm::Database;
 use serde_json::{Value as JsonValue, json};
 
+/// Upload context for a form with no `file` fields: a throwaway cipher and an
+/// empty registry. Nothing in this file mints or opens a receipt, so neither
+/// is ever consulted — `create_submission` short-circuits before touching
+/// storage when the form has no file field.
+fn no_uploads() -> submissions::UploadContext<'static> {
+    static CIPHER: std::sync::OnceLock<open_relay_core::crypto::SecretCipher> =
+        std::sync::OnceLock::new();
+    static REGISTRY: std::sync::OnceLock<open_relay_core::storage::StorageRegistry> =
+        std::sync::OnceLock::new();
+    submissions::UploadContext {
+        cipher: CIPHER.get_or_init(|| {
+            open_relay_core::crypto::SecretCipher::from_key_bytes(&[1u8; 32]).unwrap()
+        }),
+        registry: REGISTRY.get_or_init(open_relay_core::storage::StorageRegistry::new),
+    }
+}
+
 fn registry() -> BackendRegistry {
     let mut r = BackendRegistry::new();
     r.register_static(std::sync::Arc::new(
@@ -187,6 +204,7 @@ async fn conditional_fields_survive_a_round_trip_and_prune_on_submit() {
             ("same_address", json!("No")),
             ("email", json!("a@b.co")),
         ]),
+        &no_uploads(),
     )
     .await;
     assert!(missing.is_err(), "a *visible* required field is still required");
@@ -200,6 +218,7 @@ async fn conditional_fields_survive_a_round_trip_and_prune_on_submit() {
             ("city", json!("Norwalk")),
             ("billing_note", json!("ring the bell")),
         ]),
+        &no_uploads(),
     )
     .await
     .expect("a fully answered visible block is accepted");
@@ -217,6 +236,7 @@ async fn conditional_fields_survive_a_round_trip_and_prune_on_submit() {
             ("city", json!("Stale City")),
             ("billing_note", json!("stale note")),
         ]),
+        &no_uploads(),
     )
     .await
     .expect("a hidden required field must not block the submission");

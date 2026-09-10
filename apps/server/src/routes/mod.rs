@@ -6,5 +6,6 @@ pub mod public_forms;
 pub mod reps;
 pub mod roles;
 pub mod setup;
+pub mod storage;
 pub mod submissions;
 pub mod users;

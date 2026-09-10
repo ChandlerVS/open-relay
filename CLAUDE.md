@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Functional end-to-end for the core flow. Boot wiring (server, schema sync, OpenAPI, embed SDK, admin SPA) plus the domain resources — Users, Forms, Backends, Submissions — are implemented, along with auth/RBAC, OAuth provider config, secrets-at-rest, and the delivery worker. Route handlers call into `crates/core` services; `NotImplemented` is just an `AppError` variant, not a stubbed handler. Still evolving: concrete delivery backends beyond the built-ins, more OAuth/SSO providers, and broader admin UX.
+Functional end-to-end for the core flow. Boot wiring (server, schema sync, OpenAPI, embed SDK, admin SPA) plus the domain resources — Users, Forms, Backends, Submissions — are implemented, along with auth/RBAC, OAuth provider config, secrets-at-rest, object storage for file-upload fields, and the delivery worker. Route handlers call into `crates/core` services; `NotImplemented` is just an `AppError` variant, not a stubbed handler. Still evolving: concrete delivery backends beyond the built-ins, more OAuth/SSO providers, and broader admin UX.
 
 `OpenRelay.md` is the engineering design doc — it is gitignored, so consult it for intent but don't expect collaborators to have it.
 
@@ -20,7 +20,7 @@ Hybrid Cargo + pnpm/Turborepo monorepo.
 - `packages/api-client/` — OpenAPI-generated TS client (consumed by admin).
 - `packages/form-renderer/` — Shared React form components (admin preview + embed SDK).
 - `packages/ui/` — shadcn-style primitives (admin only).
-- `infra/docker-compose.yml` — Local MySQL 8.
+- `infra/docker-compose.yml` — Local MySQL 8, plus a MinIO S3 store behind the `storage` profile.
 
 ## Commands
 
@@ -29,6 +29,9 @@ Prereqs: Rust (edition 2024), Node 22.11 (`nvm use`), pnpm 10, Docker.
 ```bash
 # Local MySQL (required before server start)
 docker compose -f infra/docker-compose.yml up -d mysql
+
+# Optional: local S3 (MinIO) for developing file-upload fields
+docker compose -f infra/docker-compose.yml --profile storage up -d
 
 # Backend (binds 0.0.0.0:8080 by default; JSON API under /api/v1 e.g. /api/v1/healthz; /openapi.json, /docs at root)
 cp .env.example .env   # first time only
@@ -568,9 +571,107 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test rich_text -- --ignored
 ```
 
+### File uploads: the value is a sealed receipt, not a URL
+
+`CustomFieldType::File` collects one file per field. Bytes never touch this
+server — the browser gets a presigned `PUT` and uploads straight to the
+configured object store — and what lands in `custom_data` is the object's URL,
+so `delivery_data` and every backend forward it verbatim with no special-casing.
+
+Storage is an abstraction (`crates/core/src/storage/`) mirroring
+`crates/core/src/backend/` exactly: a `FileStore` trait, a `FileStoreFactory`
+whose `secret_keys()` drives DTO redaction / update-preservation / encryption
+at rest, and a `StorageRegistry` registered in `AppState::new`. S3 (and any
+S3-compatible store) is the only kind today. Config is a **single active row**
+in `storage_provider`, edited at Settings → File storage under a new
+`storage_config:write` permission — the `oauth_provider_config` shape, not the
+`backend_instance` one, because storage is deployment-wide.
+
+Six things aren't obvious from the code:
+
+1. **The submitted value is a sealed receipt, and that is the whole security
+   model.** `POST /public/forms/{id}/uploads` has to be unauthenticated (it
+   serves embedded forms on third-party pages), so whatever comes back at
+   submit time is attacker-controlled. If the field value were a URL, anyone
+   could POST any URL and have it delivered into a CRM record. Instead the
+   presign handler seals `v1|{form_id}|{field_key}|{issued_at}|{object_key}`
+   with the **existing** `SecretCipher` (`storage/receipt.rs`) — XChaCha20-
+   Poly1305 is an AEAD, so this is a signature with no new key material, no new
+   dependency and no new table. `resolve_file_uploads` opens it and swaps in
+   `store.stored_url(...)` **before** `validate_and_split` runs; the `File` arm
+   of `coerce_custom` reads that map rather than the raw string, so if the
+   pre-pass is ever skipped every file field 400s instead of quietly accepting
+   whatever arrived. Don't "simplify" that arm to trust its input.
+
+2. **`Content-Length` and `Content-Type` are signed into the presigned URL, and
+   that is the size limit.** The server-side check on the declared `size` only
+   produces the friendly error; the signature is the enforcement, because a
+   browser sets `Content-Length` from the body and can't be told to lie.
+   `crates/core/tests/file_uploads.rs` proves this against a live MinIO — an
+   oversized body really is rejected.
+
+3. **SigV4 is hand-rolled (`storage/s3.rs`), deliberately.** `hmac`, `sha2`,
+   `base64` and `chrono` were already workspace deps and the only operations
+   needed are query-string presigning of PUT/GET; `aws-sdk-s3` would pull the
+   whole smithy tree for ~150 lines. Same call the markdown parser made. The
+   canonical request is pinned against AWS's published worked example
+   (`canonical_request_matches_published_aws_example`) because canonicalisation
+   is the half that breaks silently — the only runtime symptom is an opaque
+   `SignatureDoesNotMatch`. Run the MinIO test after touching signing.
+
+4. **`visibility: public` means a bucket policy, never an ACL.** No `x-amz-acl`
+   header is signed: buckets created since April 2023 default to Object
+   Ownership "bucket owner enforced" and reject request ACLs outright, and
+   R2/MinIO/B2 each diverge again. The admin page prints the policy to paste.
+   `presigned` keeps the bucket private and stores an expiring GET (SigV4 caps
+   at 7 days), at the cost of the link dying inside a delivered CRM record.
+
+5. **There is deliberately no `uploaded_file` table, so orphans are a lifecycle
+   rule.** A presigned-but-never-submitted object is indistinguishable from a
+   live one without persistence, and adding a row per ticket would turn an
+   unauthenticated endpoint into an unauthenticated `INSERT`. The admin page
+   says to set an object-expiry rule on the prefix. A receipt is also *reusable*
+   within its 24h TTL — the same file can be attached to two submissions of the
+   same form. Both are accepted trades, not oversights.
+
+6. **An embed bundle cached before this change draws nothing where a file field
+   is.** A bundle that knows `layout` falls through the render switch's `never`
+   guard to `null`; one predating `layout` never sees it, since
+   `legacy_from_layout` drops nothing here — a file field *is* a custom field,
+   so it rides in the legacy pair, but an old renderer has no `file` case. This
+   is the harshest degradation in the codebase: worse than a row stacking or a
+   `width` going full-width, because a **required** file field on an old bundle
+   makes the form uncompletable. Don't add one to a widely-embedded form until
+   host pages have cycled their bundles.
+
+The renderer keeps `values` as `Record<string, string | boolean>` — the value
+is the receipt string — and holds upload progress in a *separate* `uploads`
+map. That is what leaves `visibility.ts`, `layout.ts`, `hiddenKeys` and the
+subtractive payload build untouched. A hidden file field's answer is dropped
+before it is ever resolved, so a conditional upload mints no URL.
+
+`packages/form-renderer/src/uploads.ts`'s `localRejection` mirrors the server's
+`accept_matches`, but only as a courtesy: the server re-validates everything, so
+drift is a UX bug, never a hole. This is deliberately *not* the
+`visibility.rs`/`visibility.ts` situation.
+
+Local development gets a real S3 via the compose `storage` profile:
+
+```bash
+docker compose -f infra/docker-compose.yml --profile storage up -d
+# creates the open-relay-uploads bucket, public-read, ready for the admin page
+
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test file_uploads -- --ignored
+```
+
 ### Backend delivery is a registry of trait objects
 
 `open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.
+
+Secret-bearing keys inside a `config` JSON column — for backends and for
+storage alike — are handled by `crates/core/src/secrets.rs`, which owns the
+`preserve → decrypt → validate → encrypt` ordering both write paths depend on.
 
 `DeliveryError` distinguishes `Transient` (worker retries) from `Permanent` (no retry, admin notify). `Backend::deliver` must be idempotent on `submission_id`.
 

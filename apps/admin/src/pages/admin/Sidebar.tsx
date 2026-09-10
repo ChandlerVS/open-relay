@@ -3,6 +3,7 @@ import {
   Contact,
   FileText,
   Inbox,
+  HardDrive,
   KeyRound,
   LayoutDashboard,
   Plug,
@@ -40,6 +41,12 @@ const ITEMS: NavItem[] = [
     label: "Authentication",
     icon: KeyRound,
     perm: "auth_config:write",
+  },
+  {
+    to: "/settings/storage",
+    label: "File storage",
+    icon: HardDrive,
+    perm: "storage_config:write",
   },
 ];
 
