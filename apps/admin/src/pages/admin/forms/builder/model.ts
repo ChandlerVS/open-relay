@@ -112,6 +112,28 @@ export const DEFAULT_MAX_FILE_MB = 10;
 /** Ceiling the server clamps to, mirrored so the editor can bound its input. */
 export const MAX_UPLOAD_MB = 100;
 
+/**
+ * Whole-form ceilings, mirroring `service.rs`.
+ *
+ * Nothing checked these before: clicking the palette one element at a time made
+ * them unreachable in practice, so the only mirror that existed was of the
+ * per-field limits above. Pasting a block puts all three within one keystroke,
+ * and the server's refusal names no element, so a paste that would breach one is
+ * turned away here instead.
+ */
+export const MAX_LAYOUT_ELEMENTS = 300;
+export const MAX_CUSTOM_FIELDS = 100;
+export const MAX_PAGES = 20;
+export const MAX_KEY_LEN = 64;
+
+/**
+ * The reserved standard keys, as a set.
+ *
+ * `validate.ts` built this privately and the paste transform needs the same
+ * thing, so it lives here rather than becoming a third copy of the catalogue.
+ */
+export const STANDARD_KEYS: ReadonlySet<string> = new Set(STANDARD_FIELDS.map((f) => f.key));
+
 export const CUSTOM_FIELD_TYPES = [
   { type: "text", label: "Text" },
   { type: "email", label: "Email" },
@@ -428,7 +450,14 @@ export function stripCountryReferences(
   );
 }
 
-function withCountryField(el: FormElement, key: string | undefined): FormElement {
+/**
+ * Bind (or unbind) a state picker's country.
+ *
+ * Exported because the paste transform has to unbind a reference whose country
+ * was left behind in the source form, and the delete-don't-null nuance below is
+ * exactly the kind of thing a second implementation gets wrong.
+ */
+export function withCountryField(el: FormElement, key: string | undefined): FormElement {
   if (el.element !== "custom" || el.config.type !== "state") return el;
   // Delete rather than write `null`, like `withRule` — the dirty check is a
   // `JSON.stringify` comparison, so an explicit null would read as an edit.
@@ -559,28 +588,52 @@ export function normalizeRows(items: BuilderElement[]): BuilderElement[] {
 }
 
 /**
- * Remove a row marker *and its partner*, keeping the fields between them.
+ * The other half of a row marker pair, or `null` for anything else.
  *
- * Half a pair is a layout the server rejects, and the delete button acts on one
- * element — so deleting either marker has to mean "un-row these fields", which
- * is also the only reading a user could intend. The fields stay exactly where
- * they are and go back to being full width.
+ * Half a pair is a layout the server rejects, so deleting either marker has to
+ * mean "un-row these fields" — the only reading a user could intend. The fields
+ * stay exactly where they are and go back to being full width. `removeMany`
+ * ([`./blockOps`]) is the one caller; it pairs the markers up before deleting so
+ * one code path serves the trash button and a bulk delete alike.
  */
-export function withoutRow(items: BuilderElement[], id: string): BuilderElement[] {
+export function rowPartner(items: BuilderElement[], id: string): string | null {
   const at = items.findIndex((i) => i.id === id);
-  if (at === -1) return items;
+  if (at === -1) return null;
   const kind = items[at]!.element.element;
-  if (kind !== "row_start" && kind !== "row_end") return items;
+  if (kind === "row_start") {
+    for (let j = at + 1; j < items.length; j += 1) {
+      if (items[j]!.element.element === "row_end") return items[j]!.id;
+    }
+  }
+  if (kind === "row_end") {
+    for (let j = at - 1; j >= 0; j -= 1) {
+      if (items[j]!.element.element === "row_start") return items[j]!.id;
+    }
+  }
+  return null;
+}
 
-  const partner =
-    kind === "row_start"
-      ? items.findIndex((i, j) => j > at && i.element.element === "row_end")
-      : items.reduce(
-          (found, i, j) => (j < at && i.element.element === "row_start" ? j : found),
-          -1,
-        );
-  const drop = new Set([at, partner]);
-  return items.filter((_, j) => !drop.has(j));
+/**
+ * Renumber every custom field's `position` to its ordinal among the customs,
+ * mirroring `normalize_layout` (`service.rs`).
+ *
+ * The server does this on every write, and the builder's dirty check compares
+ * against what the server sent back — so a layout whose positions disagree with
+ * layout order reads as permanently edited after a successful save. Pasting a
+ * block carries the *source* form's positions, which is exactly that case.
+ */
+export function renumberPositions(items: BuilderElement[]): BuilderElement[] {
+  let idx = 0;
+  return items.map((item) => {
+    if (item.element.element !== "custom") return item;
+    const position = idx;
+    idx += 1;
+    if (item.element.config.position === position) return item;
+    return {
+      ...item,
+      element: { ...item.element, config: { ...item.element.config, position } },
+    } as BuilderElement;
+  });
 }
 
 /**

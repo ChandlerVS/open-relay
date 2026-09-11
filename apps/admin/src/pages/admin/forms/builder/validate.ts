@@ -1,6 +1,7 @@
-import { STANDARD_FIELDS, isHttpUrl } from "@open-relay/form-renderer";
+import { isHttpUrl } from "@open-relay/form-renderer";
 import {
   MAX_UPLOAD_MB,
+  STANDARD_KEYS,
   allowedInRow,
   elementRule,
   isCountryField,
@@ -29,7 +30,6 @@ function withinUploadLimit(mb: number | undefined): boolean {
 }
 const VALUE_OPS = new Set(["equals", "not_equals", "contains"]);
 const CHECKBOX_OPS = new Set(["is_checked", "is_not_checked"]);
-const STANDARD_KEYS = new Set(STANDARD_FIELDS.map((f) => f.key));
 
 /**
  * Link destinations in a markdown source. Mirrors

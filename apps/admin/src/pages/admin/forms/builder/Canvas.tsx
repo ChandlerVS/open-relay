@@ -6,6 +6,7 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import {
@@ -27,13 +28,24 @@ import {
 } from "./model";
 import type { LayoutErrors } from "./validate";
 
+export interface SelectMods {
+  shift: boolean;
+  meta: boolean;
+}
+
 export interface CanvasProps {
   items: BuilderElement[];
-  selectedId: string | null;
+  selectedIds: ReadonlySet<string>;
   errors: LayoutErrors;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, mods: SelectMods) => void;
   onRemove: (id: string) => void;
   onReorder: (next: BuilderElement[]) => void;
+  /**
+   * Whether a drag is in flight. Lifted out because Space/Enter on the grip
+   * starts a *keyboard* drag while the grip — which is inside the canvas — holds
+   * focus, and the page's Delete/select-all shortcuts have to stand down for it.
+   */
+  onDragActiveChange?: (active: boolean) => void;
   /**
    * Viewing without `forms:write`. Selection stays live — the Inspector is
    * still worth reading — but reordering and removal are gone. A `fieldset`
@@ -72,7 +84,7 @@ function ElementRow({
   /** Sits between a `row_start` and its `row_end`, so it is drawn indented. */
   inRow: boolean;
   readOnly: boolean;
-  onSelect: () => void;
+  onSelect: (mods: SelectMods) => void;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -108,6 +120,10 @@ function ElementRow({
           type="button"
           className="cursor-grab text-muted-foreground hover:text-foreground touch-none"
           aria-label={`Reorder ${elementTitle(el)}`}
+          // Selecting on the grip too, so the left edge of a row isn't a dead
+          // zone. dnd-kit's own listeners run first and swallow this once an
+          // actual drag starts.
+          onClick={(e) => onSelect({ shift: e.shiftKey, meta: e.metaKey || e.ctrlKey })}
           {...attributes}
           {...listeners}
         >
@@ -117,7 +133,16 @@ function ElementRow({
 
       <button
         type="button"
-        onClick={onSelect}
+        // Shift-click otherwise drags a native text selection across the list,
+        // which would then also trip the copy handler's "a text selection is
+        // live, leave it alone" guard and make Cmd+C silently do nothing.
+        onMouseDown={(e) => {
+          if (e.shiftKey) e.preventDefault();
+        }}
+        onClick={(e) => onSelect({ shift: e.shiftKey, meta: e.metaKey || e.ctrlKey })}
+        // `aria-pressed` rather than `aria-selected`: the latter needs
+        // `role="option"`, which can't hold the nested buttons this row has.
+        aria-pressed={selected}
         className="flex-1 min-w-0 text-left"
       >
         <div className="flex items-center gap-1.5">
@@ -180,11 +205,12 @@ function ElementRow({
  */
 export function Canvas({
   items,
-  selectedId,
+  selectedIds,
   errors,
   onSelect,
   onRemove,
   onReorder,
+  onDragActiveChange,
   readOnly = false,
 }: CanvasProps) {
   const sensors = useSensors(
@@ -192,7 +218,18 @@ export function Canvas({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  const onDragStart = (e: DragStartEvent) => {
+    onDragActiveChange?.(true);
+    // Dragging something outside the selection makes it the selection, so the
+    // highlight never claims a block is moving when only one element is. Moving
+    // a whole block is cut-and-paste; multi-drag would mean teaching dnd-kit
+    // about groups, which is the nesting this flat list exists to avoid.
+    const id = String(e.active.id);
+    if (!selectedIds.has(id)) onSelect(id, { shift: false, meta: false });
+  };
+
   const onDragEnd = (e: DragEndEvent) => {
+    onDragActiveChange?.(false);
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const from = items.findIndex((i) => i.id === active.id);
@@ -222,10 +259,16 @@ export function Canvas({
       sensors={sensors}
       collisionDetection={closestCenter}
       modifiers={[restrictToVerticalAxis]}
+      onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      // Escape during a keyboard drag ends it without an `onDragEnd`, and a
+      // guard that stuck on would disable every shortcut for the session.
+      onDragCancel={() => onDragActiveChange?.(false)}
     >
       <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-col gap-1.5">
+        {/* `select-none` so a shift-click range doesn't smear a text
+            selection across the list as it grows. */}
+        <div className="flex flex-col gap-1.5 select-none">
           {items.map((item) => {
             const kind = item.element.element;
             const stepNumber = kind === "page_break" ? ++step : null;
@@ -236,12 +279,12 @@ export function Canvas({
               <ElementRow
                 key={item.id}
                 item={item}
-                selected={item.id === selectedId}
+                selected={selectedIds.has(item.id)}
                 error={errors[item.id]}
                 stepNumber={stepNumber}
                 inRow={indented}
                 readOnly={readOnly}
-                onSelect={() => onSelect(item.id)}
+                onSelect={(mods) => onSelect(item.id, mods)}
                 onRemove={() => onRemove(item.id)}
               />
             );

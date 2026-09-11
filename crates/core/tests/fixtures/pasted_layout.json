@@ -1,0 +1,140 @@
+[
+  {
+    "element": "custom",
+    "config": {
+      "key": "billing_country",
+      "label": "Country",
+      "type": "country",
+      "required": false,
+      "position": 0
+    }
+  },
+  {
+    "element": "row_start",
+    "config": {
+      "label": "City, state, ZIP"
+    }
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "billing_city",
+      "label": "City",
+      "type": "text",
+      "required": false,
+      "position": 1
+    }
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "billing_state",
+      "label": "State",
+      "type": "state",
+      "country_field": "billing_country",
+      "required": false,
+      "position": 2
+    }
+  },
+  {
+    "element": "row_end"
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "same_as_billing",
+      "label": "Same as billing",
+      "type": "checkbox",
+      "required": false,
+      "position": 3
+    }
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "ship_note",
+      "label": "Note",
+      "type": "text",
+      "required": false,
+      "position": 4,
+      "visible_when": {
+        "match": "all",
+        "conditions": [
+          {
+            "field": "same_as_billing",
+            "op": "is_not_checked"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "billing_country_2",
+      "label": "Country",
+      "type": "country",
+      "required": false,
+      "position": 5
+    }
+  },
+  {
+    "element": "row_start",
+    "config": {
+      "label": "City, state, ZIP"
+    }
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "billing_city_2",
+      "label": "City",
+      "type": "text",
+      "required": false,
+      "position": 6
+    }
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "billing_state_2",
+      "label": "State",
+      "type": "state",
+      "required": false,
+      "position": 7,
+      "country_field": "billing_country_2"
+    }
+  },
+  {
+    "element": "row_end"
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "same_as_billing_2",
+      "label": "Same as billing",
+      "type": "checkbox",
+      "required": false,
+      "position": 8
+    }
+  },
+  {
+    "element": "custom",
+    "config": {
+      "key": "ship_note_2",
+      "label": "Note",
+      "type": "text",
+      "required": false,
+      "position": 9,
+      "visible_when": {
+        "match": "all",
+        "conditions": [
+          {
+            "field": "same_as_billing_2",
+            "op": "is_not_checked"
+          }
+        ]
+      }
+    }
+  }
+]

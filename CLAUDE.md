@@ -665,6 +665,64 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test file_uploads -- --ignored
 ```
 
+### Builder clipboard: the paste is repaired on the client, because a `layout` write isn't
+
+The builder canvas is multi-select (shift-click for a range, Cmd/Ctrl-click to
+toggle) and a selected block can be copied, cut, duplicated and pasted — including
+into a **different form's** builder, which is the case it was built for: an address
+block is a dozen elements of country/state bindings and visibility rules that
+nobody wants to retype. Transport is a `text/plain` JSON envelope on the system
+clipboard (`builder/clipboard.ts`), mirrored into `localStorage`. Four things
+aren't obvious:
+
+1. **The repair has to happen at paste time, because the server won't do it.**
+   `strip_dangling_rules` and `strip_dangling_country_refs` run only on the legacy
+   write paths — the reasoning being that a caller who sent a `layout` sent the
+   rules too and deserves the 400. A pasted block is the one case that breaks: the
+   rules came from another form and the author never typed them here. So
+   `prepareForPaste` (`builder/blockOps.ts`) does the server's repair itself, in a
+   forward pass whose key→is-checkbox and country-key maps are built exactly the
+   way `validate.ts` builds them — agreeing with the inline validation *is* the
+   requirement. `crates/core/tests/paste_roundtrip.rs` pins the output against the
+   real `validate_layout`, which is the half TypeScript can't check.
+
+2. **Re-keying has to repoint the block's own references, not just the keys.**
+   Pasting a block twice into one form renames `billing_city` → `billing_city_2`,
+   and the copy's state picker must bind to `billing_country_2`, not to the
+   original's. `taken` is seeded with the block's own keys as well as the
+   target's, so a generated name can never collide with a key still to be
+   processed — which would make the rename map ambiguous and repoint the wrong
+   element. A reference whose target stayed behind is dropped (condition removed,
+   rule removed with its last condition, `country_field` **deleted not nulled** —
+   the dirty check is a `JSON.stringify` comparison).
+
+3. **`selectedId` is derived, which is why `Inspector.tsx` was not touched.**
+   `selection.ids.length === 1 ? ids[0] : null` — so every existing
+   `selectedIndex` consumer works unchanged, and a multi-selection falls to the
+   Inspector's existing "nothing selected" branch. The selection is **pruned
+   against the live list on every read** rather than trimmed on write, because
+   `normalizeRows` both drops ids and *mints* one for a closer it synthesizes.
+   Row markers are deliberately **not** expanded to include their contents:
+   selecting a `row_start` has to leave one element selected or the row's label
+   editor becomes unreachable. Pairing happens in `removeMany` instead, which is
+   what makes the trash button and a bulk delete one code path.
+
+4. **Firefox and Safari never fire `paste` here, so the toolbar button is load-
+   bearing.** Both gate the event on an editable focus context and a canvas card
+   is a `<button>`; `navigator.clipboard.readText()` is no fallback either (not
+   exposed to page content in Firefox, gesture-plus-prompt in Safari, absent in a
+   non-secure context). Hence three rungs: the async API, the `localStorage`
+   mirror, then a textarea to paste into by hand. Every guard reads
+   `e.composedPath()[0]`, not `e.target` — the live preview is a **shadow root**,
+   and an event from inside one is retargeted at the host by the time it reaches
+   `document`, so `e.target` would show a `<div>` where the user is typing in an
+   `<input>` and Cmd+A in the preview would select the whole canvas.
+
+Positions are renumbered on every block write (`renumberPositions`), mirroring
+`normalize_layout`. Without it a pasted block carries the source form's
+`position` values, the dirty check never re-converges with what the server sends
+back, and the form reads as edited forever after a successful save.
+
 ### GoHighLevel custom fields are matched by id, not by the key you configured
 
 The admin sets an OpenRelay custom field's `key` to name the GHL field it

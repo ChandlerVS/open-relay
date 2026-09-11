@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import {
@@ -14,6 +14,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  ConfirmDialog,
   Skeleton,
 } from "@open-relay/ui";
 import { api } from "../../../../lib/api/client";
@@ -25,17 +26,20 @@ import { useTheme } from "../../../../lib/theme/useTheme";
 import { Canvas } from "./Canvas";
 import { Inspector } from "./Inspector";
 import { Palette } from "./Palette";
+import { SelectionToolbar } from "./SelectionToolbar";
 import { validateLayout } from "./validate";
+import { extractBlock, prepareForPaste, removeMany, type PasteOutcome } from "./blockOps";
+import { serializeElements, writeLocalClipboard } from "./clipboard";
+import { useSelection } from "./useSelection";
+import { useBuilderClipboard } from "./useBuilderClipboard";
 import {
   controllerCandidates,
   countryFieldCandidates,
   elementKey,
   isCountryField,
   isInsideRow,
-  isRowMarker,
   newCustomElement,
   newRowElements,
-  withoutRow,
   renameCountryReferences,
   stripCountryReferences,
   newDecorationElement,
@@ -43,7 +47,6 @@ import {
   newStandardElement,
   renameRuleReferences,
   stripIds,
-  stripRuleReferences,
   usedStandardKeys,
   withIds,
   withRule,
@@ -52,6 +55,9 @@ import {
   type FormElement,
   type VisibilityRule,
 } from "./model";
+
+/** Deleting more than a handful at once, with no undo, is worth a confirm. */
+const CONFIRM_DELETE_ABOVE = 3;
 
 export function FormBuilderPage() {
   const { id } = useParams<{ id: string }>();
@@ -73,10 +79,24 @@ export function FormBuilderPage() {
   const storage = useStorageConfig({ enabled: canReadStorage });
 
   const [items, setItems] = useState<BuilderElement[] | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  /** What the last paste had to change, so it isn't silent. */
+  const [pasteNote, setPasteNote] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+
+  const selection = useSelection(items);
+  /**
+   * The Inspector edits exactly one element, so it only has a subject when
+   * exactly one is selected. Deriving it this way is what lets multi-select
+   * arrive without touching `Inspector.tsx` at all — with two or more selected
+   * it falls to its existing "nothing selected" branch, and the count line
+   * below says why.
+   */
+  const selectedId = selection.ids.length === 1 ? selection.ids[0]! : null;
 
   // Seed once the form loads. `layout` is always populated by the server —
   // derived from the legacy columns for forms written before it existed.
@@ -110,7 +130,9 @@ export function FormBuilderPage() {
     const added = elements.map((element) => ({ id: newId(), element }));
     if (added.length === 0) return;
     setItems((prev) => [...(prev ?? []), ...added]);
-    setSelectedId(added[0]!.id);
+    // Only the first: a row is a marker pair, and selecting both would leave the
+    // Inspector with no single subject and no way to name the row.
+    selection.replace([added[0]!.id]);
     setSavedAt(null);
   };
 
@@ -151,30 +173,107 @@ export function FormBuilderPage() {
     setSavedAt(null);
   };
 
-  const remove = (rid: string) => {
-    setItems((prev) => {
-      const before = prev ?? [];
-      // Drop the rules that pointed at this field, so deleting a controller
-      // can't strand the form in a state the server refuses to save.
-      const key = before.find((i) => i.id === rid)?.element ?? null;
-      // Deleting half a row leaves an unbalanced marker the server rejects, so
-      // a marker takes its partner with it. The fields it held stay put and
-      // simply become full-width again.
-      const dropped =
-        key && isRowMarker(key) ? withoutRow(before, rid) : before.filter((i) => i.id !== rid);
-      const referenced = key ? elementKey(key) : null;
-      if (!referenced) return dropped;
-      // Unbind any state picker it was driving too — the same repair the
-      // server applies on a legacy write.
-      return stripCountryReferences(stripRuleReferences(dropped, referenced), referenced);
-    });
-    if (rid === selectedId) setSelectedId(null);
+  /**
+   * Delete by id. The trash button and a bulk delete are the same operation —
+   * `removeMany` pairs up row markers and repairs every rule and country
+   * binding that pointed into what went — so there is one path, not two that
+   * can drift. The selection prunes itself against the new list.
+   */
+  const removeIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    const drop = new Set(ids);
+    setItems((prev) => removeMany(prev ?? [], drop));
     setSavedAt(null);
   };
+
+  /** Elements in document order, for anything acting on the selection. */
+  const selectedElements = (): FormElement[] =>
+    items ? extractBlock(items, selection.set) : [];
+
+  /** Where a paste lands: after the last selected element, else at the end. */
+  const insertAfterSelection = (list: BuilderElement[]): number => {
+    const last = selection.ids[selection.ids.length - 1];
+    if (!last) return list.length;
+    const at = list.findIndex((i) => i.id === last);
+    return at === -1 ? list.length : at + 1;
+  };
+
+  /** Turn a paste's repairs into one line the author can act on. */
+  const noteFor = (outcome: PasteOutcome): string | null => {
+    const parts: string[] = [];
+    const renames = Object.entries(outcome.renamed);
+    if (renames.length > 0) {
+      parts.push(
+        `renamed ${renames.length === 1 ? "one key" : `${renames.length} keys`} already in use (${renames
+          .slice(0, 3)
+          .map(([from, to]) => `${from} → ${to}`)
+          .join(", ")}${renames.length > 3 ? ", …" : ""})`,
+      );
+    }
+    if (outcome.droppedStandard.length > 0) {
+      parts.push(`skipped ${outcome.droppedStandard.join(", ")} — already on this form`);
+    }
+    if (outcome.repaired > 0) {
+      parts.push(
+        `cleared ${outcome.repaired === 1 ? "a reference" : `${outcome.repaired} references`} to fields that didn't come along`,
+      );
+    }
+    return parts.length > 0 ? `Pasted, and ${parts.join("; ")}.` : null;
+  };
+
+  const applyPaste = (elements: FormElement[], at?: number) => {
+    if (!canEdit || !items) return;
+    const outcome = prepareForPaste(elements, items, at ?? insertAfterSelection(items));
+    if (outcome.refused) {
+      setPasteNote(outcome.refused);
+      return;
+    }
+    setItems(outcome.items);
+    selection.replace(outcome.pastedIds);
+    setPasteNote(noteFor(outcome));
+    setSavedAt(null);
+  };
+
+  const duplicateSelection = () => {
+    if (!canEdit || !items || selection.ids.length === 0) return;
+    applyPaste(selectedElements(), insertAfterSelection(items));
+  };
+
+  const deleteSelection = () => {
+    if (!canEdit || selection.ids.length === 0) return;
+    if (selection.ids.length > CONFIRM_DELETE_ABOVE) {
+      setConfirmDelete(true);
+      return;
+    }
+    removeIds(selection.ids);
+  };
+
+  // Shortcuts. Copy stays available read-only — lifting a block out of a form
+  // you can only read is harmless, and useful.
+  useBuilderClipboard(
+    canvasRef,
+    {
+      canEdit,
+      copy: () => (selection.ids.length > 0 ? selectedElements() : null),
+      cut: () => {
+        if (selection.ids.length === 0) return null;
+        const block = selectedElements();
+        removeIds(selection.ids);
+        return block;
+      },
+      paste: (elements) => applyPaste(elements),
+      duplicate: duplicateSelection,
+      remove: deleteSelection,
+      selectAll: selection.selectAll,
+      clear: selection.clear,
+    },
+    dragActive,
+  );
 
   const save = () => {
     if (!canEdit || !items || errorCount > 0) return;
     setSaveError(null);
+    setPasteNote(null);
     // Only `layout` goes up — the server derives standard_fields/custom_fields
     // from it, and sending both is rejected.
     update.mutate(
@@ -307,6 +406,20 @@ export function FormBuilderPage() {
           <AlertDescription>{saveError}</AlertDescription>
         </Alert>
       )}
+      {pasteNote && (
+        <Alert>
+          <AlertDescription className="flex items-start justify-between gap-3">
+            <span>{pasteNote}</span>
+            <button
+              type="button"
+              className="text-xs underline shrink-0"
+              onClick={() => setPasteNote(null)}
+            >
+              Dismiss
+            </button>
+          </AlertDescription>
+        </Alert>
+      )}
       {savedAt && !dirty && (
         <Alert>
           <AlertDescription>Layout saved.</AlertDescription>
@@ -344,18 +457,50 @@ export function FormBuilderPage() {
             <CardTitle className="text-sm">Fields</CardTitle>
           </CardHeader>
           <CardContent>
-            <Canvas
-              items={items}
-              selectedId={selectedId}
-              errors={errors}
-              onSelect={setSelectedId}
-              onRemove={remove}
-              onReorder={(next) => {
-                setItems(next);
-                setSavedAt(null);
-              }}
-              readOnly={!canEdit}
-            />
+            {/* The ref scopes Delete and select-all to the canvas: an unscoped
+                Backspace deleting fields from wherever focus happened to be
+                would be alarming. */}
+            <div ref={canvasRef}>
+              <SelectionToolbar
+                count={selection.ids.length}
+                canEdit={canEdit}
+                onCopy={() => {
+                  const block = selectedElements();
+                  if (block.length === 0) return;
+                  const payload = serializeElements(block);
+                  writeLocalClipboard(payload);
+                  void navigator.clipboard?.writeText(payload).catch(() => {
+                    // Non-secure context: the localStorage mirror above still
+                    // carries it, which is enough for a paste in this browser.
+                  });
+                }}
+                onCut={() => {
+                  const block = selectedElements();
+                  if (block.length === 0) return;
+                  const payload = serializeElements(block);
+                  writeLocalClipboard(payload);
+                  void navigator.clipboard?.writeText(payload).catch(() => {});
+                  removeIds(selection.ids);
+                }}
+                onDuplicate={duplicateSelection}
+                onDelete={deleteSelection}
+                onPaste={(elements) => applyPaste(elements)}
+                onClear={selection.clear}
+              />
+              <Canvas
+                items={items}
+                selectedIds={selection.set}
+                errors={errors}
+                onSelect={selection.select}
+                onRemove={(rid) => removeIds([rid])}
+                onReorder={(next) => {
+                  setItems(next);
+                  setSavedAt(null);
+                }}
+                onDragActiveChange={setDragActive}
+                readOnly={!canEdit}
+              />
+            </div>
           </CardContent>
         </Card>
 
@@ -364,6 +509,16 @@ export function FormBuilderPage() {
             <CardTitle className="text-sm">Settings</CardTitle>
           </CardHeader>
           <CardContent>
+            {/* The Inspector edits one element. Say so, rather than letting it
+                show its bare "select an element" line next to a live
+                multi-selection. */}
+            {selection.ids.length > 1 && (
+              <p className="mb-2 text-sm text-muted-foreground">
+                {selection.ids.length} elements selected. Settings apply to one
+                element at a time — use the buttons above the list to copy,
+                duplicate or delete the whole block.
+              </p>
+            )}
             <fieldset disabled={!canEdit} className="min-w-0 border-0 p-0 m-0">
               <Inspector
                 item={selected}
@@ -371,12 +526,28 @@ export function FormBuilderPage() {
                 inRow={isInsideRow(items, selectedIndex)}
                 candidates={controllerCandidates(items, selectedIndex)}
                 countryCandidates={countryFieldCandidates(items, selectedIndex)}
-                ruleTargets={items.slice(selectedIndex + 1)}
+                // Guarded: with nothing selected `selectedIndex` is -1 and a
+                // bare `slice(0)` would offer the whole form as rule targets,
+                // including elements *earlier* than the rule's owner.
+                ruleTargets={selectedIndex >= 0 ? items.slice(selectedIndex + 1) : []}
                 onApplyRuleToMany={applyRuleToMany}
               />
             </fieldset>
           </CardContent>
         </Card>
+
+        {/* There is no undo in this builder, so a bulk delete asks first. */}
+        <ConfirmDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          title={`Delete ${selection.ids.length} elements?`}
+          description="This can't be undone, though nothing is saved until you press Save layout."
+          confirmLabel="Delete"
+          onConfirm={() => {
+            removeIds(selection.ids);
+            setConfirmDelete(false);
+          }}
+        />
 
         {showPreview && previewSchema && (
           <Card>
