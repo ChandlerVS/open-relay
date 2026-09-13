@@ -47,9 +47,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 
-# Cargo workspace: root manifest/lock + the three member crates.
+# Cargo workspace: root manifest/lock + every member. Cargo resolves the whole
+# workspace even for a single `-p`, so a member missing here fails the build
+# with "failed to load manifest for workspace member" — `apps/mcp` is copied for
+# that reason, not because this image runs it. The stdio MCP binary is
+# deliberately NOT built: this image already serves MCP over HTTP at
+# `/api/v1/mcp`, which is the transport that makes sense for a container.
 COPY Cargo.toml Cargo.lock ./
 COPY apps/server ./apps/server
+COPY apps/mcp ./apps/mcp
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
