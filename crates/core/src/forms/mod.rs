@@ -545,7 +545,12 @@ pub enum StandardInputVariant {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StandardElement {
-    /// One of [`STANDARD_FIELD_KEYS`].
+    /// Which standard field this is, e.g. `email`. One of
+    /// [`STANDARD_FIELD_KEYS`], and at most once per form.
+    ///
+    /// The rendered schema carries the key list as an `enum`; see
+    /// `open_relay_mcp::schema`, which injects it so a generated client
+    /// gets the actual names rather than this rustdoc link.
     pub key: String,
     #[serde(default)]
     pub required: bool,

@@ -40,11 +40,13 @@ fn definitions() -> &'static Map<String, Value> {
         let mut value = serde_json::to_value(&components)
             .expect("utoipa components always serialize to JSON");
         rehome_refs(&mut value);
-        value
+        let mut defs = value
             .get_mut("schemas")
             .and_then(Value::as_object_mut)
             .map(std::mem::take)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        annotate(&mut defs);
+        defs
     })
 }
 
@@ -72,6 +74,50 @@ fn rehome_refs(value: &mut Value) {
         }
         Value::Array(items) => items.iter_mut().for_each(rehome_refs),
         _ => {}
+    }
+}
+
+/// Teach the schema the things a Rust type cannot say for itself.
+///
+/// `StandardElement::key` is a `String` in Rust, constrained only by
+/// `validate_layout` at write time, and its doc comment renders into the schema
+/// as the *rustdoc link* "One of [`STANDARD_FIELD_KEYS`]" — which reads like
+/// documentation and conveys nothing to a client that cannot see Rust source.
+/// An agent reading it would be guessing at the key names.
+///
+/// So the catalogue is injected as a JSON Schema `enum`, taken from
+/// `STANDARD_FIELD_KEYS` itself — the list the `declare_standard_fields!` macro
+/// generates, so this is reading the single source of truth rather than copying
+/// it. Adding a standard field updates this automatically.
+///
+/// Putting it here rather than in a `list_available_fields` tool is deliberate:
+/// the constraint appears on the parameter the agent is actually filling in,
+/// and MCP clients validate arguments against the tool schema, so a wrong key
+/// fails locally instead of costing a round trip to find out.
+fn annotate(defs: &mut Map<String, Value>) {
+    let keys: Vec<Value> = open_relay_core::forms::STANDARD_FIELD_KEYS
+        .iter()
+        .map(|k| Value::String((*k).to_string()))
+        .collect();
+
+    for path in ["StandardElement", "StandardFieldsConfig"] {
+        let Some(props) = defs
+            .get_mut(path)
+            .and_then(|s| s.get_mut("properties"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        if let Some(key) = props.get_mut("key").and_then(Value::as_object_mut) {
+            key.insert("enum".into(), Value::Array(keys.clone()));
+            key.insert(
+                "description".into(),
+                Value::String(
+                    "Which standard field this is. Each may appear at most once per form."
+                        .into(),
+                ),
+            );
+        }
     }
 }
 
@@ -199,5 +245,67 @@ mod tests {
         assert_eq!(schema.get("type"), Some(&json!("object")));
         assert_eq!(schema.get("additionalProperties"), Some(&json!(false)));
         assert_eq!(schema.get("required"), Some(&json!(["id"])));
+    }
+}
+
+
+#[cfg(test)]
+mod catalogue_tests {
+    use super::*;
+
+    /// The gap this closes: `StandardElement::key` is a bare `String` in Rust,
+    /// so without this the schema told an agent only "type: string" plus a
+    /// rustdoc link it cannot follow. Every valid key must be named on the
+    /// parameter the agent fills in.
+    #[test]
+    fn standard_field_keys_are_enumerated_in_the_schema() {
+        let defs = all_definitions();
+        let key = defs
+            .pointer("/StandardElement/properties/key")
+            .expect("StandardElement.key");
+
+        let listed: Vec<&str> = key
+            .get("enum")
+            .and_then(|e| e.as_array())
+            .expect("key must carry an enum")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+
+        assert_eq!(
+            listed,
+            open_relay_core::forms::STANDARD_FIELD_KEYS,
+            "the schema's key list must be STANDARD_FIELD_KEYS itself, not a copy"
+        );
+
+        // The rustdoc link must not survive into the wire schema.
+        let description = key.get("description").and_then(|d| d.as_str()).unwrap_or("");
+        assert!(
+            !description.contains("STANDARD_FIELD_KEYS"),
+            "the description still leaks a rustdoc reference: {description}"
+        );
+    }
+
+    /// Custom field types were already discoverable — the tagged enum renders
+    /// each variant with its `type` and its own config. Pinned so a refactor
+    /// away from internal tagging cannot quietly erase it.
+    #[test]
+    fn custom_field_types_remain_discoverable() {
+        let defs = all_definitions();
+        let variants = defs
+            .pointer("/CustomFieldType/oneOf")
+            .and_then(|v| v.as_array())
+            .expect("CustomFieldType is a tagged union");
+        let types: Vec<&str> = variants
+            .iter()
+            .filter_map(|b| b.pointer("/properties/type/enum/0"))
+            .filter_map(|t| t.as_str())
+            .collect();
+        for expected in [
+            "text", "email", "number", "tel", "url", "textarea", "select", "radio", "checkbox",
+            "country", "state", "file",
+        ] {
+            assert!(types.contains(&expected), "custom type {expected} is not described");
+        }
     }
 }
