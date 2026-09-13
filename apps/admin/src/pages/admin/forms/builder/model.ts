@@ -147,7 +147,18 @@ export const CUSTOM_FIELD_TYPES = [
   { type: "country", label: "Country" },
   { type: "state", label: "State / province" },
   { type: "file", label: "File upload" },
+  { type: "rating", label: "Rating" },
 ] as const;
+
+/** Star-count bounds and default, mirroring `forms::{MIN,MAX,DEFAULT}_RATING_MAX`. */
+export const MIN_RATING_MAX = 3;
+export const MAX_RATING_MAX = 10;
+export const DEFAULT_RATING_MAX = 5;
+
+/** A rating's possible answers, as the strings the renderer submits. */
+export function ratingOptions(max: number | undefined): string[] {
+  return Array.from({ length: max ?? DEFAULT_RATING_MAX }, (_, i) => String(i + 1));
+}
 
 export type CustomTypeName = (typeof CUSTOM_FIELD_TYPES)[number]["type"];
 
@@ -231,6 +242,9 @@ export function retypeCustomField(field: CustomField, type: CustomTypeName): Cus
       accept: "accept" in field ? (field.accept ?? []) : [],
       max_size_mb: "max_size_mb" in field ? field.max_size_mb : DEFAULT_MAX_FILE_MB,
     };
+  }
+  if (type === "rating") {
+    return { ...base, type, max: "max" in field ? field.max : DEFAULT_RATING_MAX };
   }
   return { ...base, type };
 }
@@ -347,7 +361,10 @@ export function controllerCandidates(
               options: COUNTRIES.map((c) => c.code),
               optionLabels: Object.fromEntries(COUNTRIES.map((c) => [c.code, c.name])),
             }
-          : { options: "options" in el.config ? el.config.options : undefined }),
+          : el.config.type === "rating"
+            ? // A score is a known set too; offer it so `equals` can't be typo'd.
+              { options: ratingOptions(el.config.max) }
+            : { options: "options" in el.config ? el.config.options : undefined }),
       });
     }
   }
@@ -499,6 +516,9 @@ export function newCustomElement(
     position: index,
   };
   if (hasOptions(type)) return { element: "custom", config: { ...base, type, options: [] } };
+  if (type === "rating") {
+    return { element: "custom", config: { ...base, type, max: DEFAULT_RATING_MAX } };
+  }
   if (type === "state") {
     const candidates = countryFieldCandidates(items, index);
     const nearest = candidates[candidates.length - 1];

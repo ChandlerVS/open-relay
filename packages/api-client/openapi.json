@@ -3174,6 +3174,27 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "A star rating from 1 to `max`. Submits a whole number.\n\nThe answer is stored as a JSON **integer**, never a float, so\n[`visibility::canonical`] reads it as `\"7\"` rather than `\"7.0\"` and a\nrule written as `equals 7` matches on the server exactly as it does in\nthe renderer, which holds the answer as the string `\"7\"`.\n\nLike `Country`, its choices are not author-declared, so\n[`CustomFieldType::options`] reports none.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of stars. Bounded by [`MIN_RATING_MAX`]..=[`MAX_RATING_MAX`]\nat validation.",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rating"
+                ]
+              }
+            }
           }
         ],
         "description": "HTML input types we expose for custom fields.\n\n`Select` and `Radio` carry their options on the variant so the renderer\ncan't see an option-typed field without options. `Checkbox` is a single\nboolean checkbox (multi-select uses `Select`).\n\n`Country` and `State` are option-valued too, but their choices come from\nthe ISO catalogue in [`super::regions`] rather than from the author, which\nis the whole point of them — see [`CustomFieldType::options`] for why they\ndeliberately do *not* report those choices as `options`."
@@ -4837,7 +4858,7 @@
           },
           "key": {
             "type": "string",
-            "description": "One of [`STANDARD_FIELD_KEYS`]."
+            "description": "Which standard field this is, e.g. `email`. One of\n[`STANDARD_FIELD_KEYS`], and at most once per form.\n\nThe rendered schema carries the key list as an `enum`; see\n`open_relay_mcp::schema`, which injects it so a generated client\ngets the actual names rather than this rustdoc link."
           },
           "label": {
             "type": [

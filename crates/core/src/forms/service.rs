@@ -14,7 +14,8 @@ use sea_orm::{
 use super::regions;
 use super::{
     BackendBinding, ConditionOp, CustomField, CustomFieldType, FormDto, FormElement, FormList,
-    FormSelectOption, ListQuery, MessageAction, NewForm, PostSubmissionAction, ProgressIndicator,
+    FormSelectOption, ListQuery, MAX_RATING_MAX, MIN_RATING_MAX, MessageAction, NewForm,
+    PostSubmissionAction, ProgressIndicator,
     PublicFormDto, RedirectAction, STANDARD_FIELD_KEYS, SourceParam, StandardElement,
     StandardFieldsConfig, StandardInputVariant, UpdateForm, VisibilityRule, default_backends,
 };
@@ -209,6 +210,14 @@ pub fn validate_custom_fields(fields: &[CustomField]) -> CoreResult<()> {
                         f.key
                     )));
                 }
+            }
+        }
+        if let CustomFieldType::Rating { max } = &f.kind {
+            if !(MIN_RATING_MAX..=MAX_RATING_MAX).contains(max) {
+                return Err(CoreError::BadRequest(format!(
+                    "custom field '{}' rating must offer {MIN_RATING_MAX}..={MAX_RATING_MAX} stars",
+                    f.key
+                )));
             }
         }
         if let Some(options) = f.kind.options() {
@@ -2809,6 +2818,42 @@ mod tests {
             },
         ];
         assert!(validate_custom_fields(&fields).is_err());
+    }
+
+    #[test]
+    fn rating_star_count_is_bounded() {
+        let rating = |max: u8| {
+            vec![CustomField {
+                key: "score".into(),
+                label: "Score".into(),
+                kind: CustomFieldType::Rating { max },
+                required: false,
+                placeholder: None,
+                help_text: None,
+                position: 0,
+                width: Default::default(),
+                default_value: None,
+                visible_when: None,
+            }]
+        };
+        assert!(validate_custom_fields(&rating(MIN_RATING_MAX)).is_ok());
+        assert!(validate_custom_fields(&rating(MAX_RATING_MAX)).is_ok());
+        assert!(validate_custom_fields(&rating(MIN_RATING_MAX - 1)).is_err());
+        assert!(validate_custom_fields(&rating(MAX_RATING_MAX + 1)).is_err());
+    }
+
+    #[test]
+    fn rating_max_defaults_when_absent() {
+        let f: CustomField =
+            serde_json::from_value(serde_json::json!({
+                "key": "score", "label": "Score", "type": "rating", "position": 0
+            }))
+            .unwrap();
+        assert_eq!(f.kind, CustomFieldType::Rating { max: super::super::DEFAULT_RATING_MAX });
+        assert_eq!(
+            serde_json::to_value(&f).unwrap()["max"],
+            serde_json::json!(super::super::DEFAULT_RATING_MAX),
+        );
     }
 
     #[test]

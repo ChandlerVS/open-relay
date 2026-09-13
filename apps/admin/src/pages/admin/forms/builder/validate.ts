@@ -1,6 +1,8 @@
 import { isHttpUrl } from "@open-relay/form-renderer";
 import {
+  MAX_RATING_MAX,
   MAX_UPLOAD_MB,
+  MIN_RATING_MAX,
   STANDARD_KEYS,
   allowedInRow,
   elementRule,
@@ -205,6 +207,14 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
         (el.config.accept ?? []).some((p) => p.trim().length > MAX_ACCEPT_PATTERN_LEN)
       ) {
         errors[item.id] = `An accepted file type must be at most ${MAX_ACCEPT_PATTERN_LEN} characters.`;
+      } else if (
+        el.config.type === "rating" &&
+        el.config.max !== undefined &&
+        !(Number.isInteger(el.config.max) &&
+          el.config.max >= MIN_RATING_MAX &&
+          el.config.max <= MAX_RATING_MAX)
+      ) {
+        errors[item.id] = `A rating must have ${MIN_RATING_MAX} to ${MAX_RATING_MAX} stars.`;
       } else if (el.config.type === "state" && el.config.country_field) {
         // Unbound is fine — that is the free-text fallback. A reference that
         // names nothing earlier, or names something that isn't a country, is

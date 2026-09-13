@@ -997,6 +997,15 @@ export interface components {
             max_size_mb?: number;
             /** @enum {string} */
             type: "file";
+        } | {
+            /**
+             * Format: int32
+             * @description Number of stars. Bounded by [`MIN_RATING_MAX`]..=[`MAX_RATING_MAX`]
+             *     at validation.
+             */
+            max?: number;
+            /** @enum {string} */
+            type: "rating";
         };
         /**
          * @description Aggregate payload backing the admin dashboard. `recent_submissions` is
@@ -1736,7 +1745,14 @@ export interface components {
             default_value?: string | null;
             help_text?: string | null;
             input_override?: null | components["schemas"]["StandardInputVariant"];
-            /** @description One of [`STANDARD_FIELD_KEYS`]. */
+            /**
+             * @description Which standard field this is, e.g. `email`. One of
+             *     [`STANDARD_FIELD_KEYS`], and at most once per form.
+             *
+             *     The rendered schema carries the key list as an `enum`; see
+             *     `open_relay_mcp::schema`, which injects it so a generated client
+             *     gets the actual names rather than this rustdoc link.
+             */
             key: string;
             /** @description Overrides the renderer's default copy when `Some` and non-empty. */
             label?: string | null;

@@ -230,10 +230,36 @@ pub enum CustomFieldType {
         #[serde(default = "default_max_file_mb")]
         max_size_mb: u32,
     },
+    /// A star rating from 1 to `max`. Submits a whole number.
+    ///
+    /// The answer is stored as a JSON **integer**, never a float, so
+    /// [`visibility::canonical`] reads it as `"7"` rather than `"7.0"` and a
+    /// rule written as `equals 7` matches on the server exactly as it does in
+    /// the renderer, which holds the answer as the string `"7"`.
+    ///
+    /// Like `Country`, its choices are not author-declared, so
+    /// [`CustomFieldType::options`] reports none.
+    Rating {
+        /// Number of stars. Bounded by [`MIN_RATING_MAX`]..=[`MAX_RATING_MAX`]
+        /// at validation.
+        #[serde(default = "default_rating_max")]
+        max: u8,
+    },
 }
+
+/// Fewest stars a rating field may offer.
+pub const MIN_RATING_MAX: u8 = 3;
+/// Most stars a rating field may offer.
+pub const MAX_RATING_MAX: u8 = 10;
+/// Stars a rating field offers when `max` is absent.
+pub const DEFAULT_RATING_MAX: u8 = 5;
 
 fn default_max_file_mb() -> u32 {
     crate::storage::DEFAULT_MAX_FILE_MB
+}
+
+fn default_rating_max() -> u8 {
+    DEFAULT_RATING_MAX
 }
 
 impl CustomFieldType {

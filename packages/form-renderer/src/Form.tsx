@@ -838,6 +838,80 @@ function fieldClass(width: FieldWidth | undefined, extra?: string): string {
   return `or-field${modifier}${extra ? ` ${extra}` : ""}`;
 }
 
+/** Stars a rating offers when `max` is absent. Mirrors `DEFAULT_RATING_MAX`. */
+const DEFAULT_RATING_MAX = 5;
+
+/**
+ * A star rating, built as a radio group with the buttons hidden behind the
+ * stars. Radios are what make it behave like every other field for free:
+ * `required` is a native constraint (so per-step gating sees it), arrow keys
+ * move between stars, and each star has an accessible name.
+ *
+ * The inputs are hidden with opacity, never `display: none` — the browser
+ * refuses to focus a hidden required control, and would then block submit
+ * with nothing to point at.
+ */
+function RatingInput({
+  field,
+  value,
+  onChange,
+  scope,
+}: {
+  field: CustomField & { type: "rating" };
+  value: string | boolean | undefined;
+  onChange: (next: string) => void;
+  scope: number;
+}) {
+  const [hover, setHover] = useState(0);
+  const max = field.max ?? DEFAULT_RATING_MAX;
+  const required = field.required ?? false;
+  const group = `or-${scope}-${field.key}`;
+  const selected = typeof value === "string" ? value.trim() : "";
+  // Hovering previews a score; leaving the stars falls back to the answer.
+  const lit = hover || Number(selected) || 0;
+  const stars = Array.from({ length: max }, (_, i) => i + 1);
+
+  return (
+    <div className={fieldClass(field.width, "or-field--rating")}>
+      <fieldset className="or-radio-group">
+        <legend className="or-field__label">
+          {field.label}
+          {required && <span className="or-field__required"> *</span>}
+        </legend>
+        <div className="or-rating" onMouseLeave={() => setHover(0)}>
+          {stars.map((n) => (
+            <label
+              key={n}
+              htmlFor={`${group}-${n}`}
+              className={`or-rating__star${n <= lit ? " or-rating__star--on" : ""}`}
+              onMouseEnter={() => setHover(n)}
+            >
+              <input
+                id={`${group}-${n}`}
+                className="or-rating__input"
+                name={group}
+                type="radio"
+                required={required}
+                value={String(n)}
+                checked={selected === String(n)}
+                onChange={() => onChange(String(n))}
+                aria-label={`${n} of ${max}`}
+              />
+              <svg className="or-rating__icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 2.8l2.84 5.76 6.36.92-4.6 4.49 1.08 6.33L12 17.31l-5.68 2.99 1.08-6.33-4.6-4.49 6.36-.92z" />
+              </svg>
+              <span className="or-rating__num" aria-hidden="true">
+                {n}
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      {field.help_text && <p className="or-field__help">{field.help_text}</p>}
+    </div>
+  );
+}
+
 function CustomFieldInput({
   field,
   value,
@@ -931,6 +1005,10 @@ function CustomFieldInput({
         {field.help_text && <p className="or-field__help">{field.help_text}</p>}
       </div>
     );
+  }
+
+  if (field.type === "rating") {
+    return <RatingInput field={field} value={value} onChange={onChange} scope={scope} />;
   }
 
   if (field.type === "radio") {

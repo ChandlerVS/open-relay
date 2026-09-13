@@ -347,6 +347,37 @@ fn coerce_custom(
                 json_kind(&other)
             ))),
         },
+        CustomFieldType::Rating { max } => {
+            let n = match &raw {
+                // `as_u64` is `None` for a float, so `7.5` — and `7.0`, which
+                // would canonicalise as `"7.0"` in a visibility rule — are
+                // refused rather than truncated.
+                JsonValue::Number(n) => n.as_u64(),
+                JsonValue::String(s) => {
+                    let t = s.trim();
+                    if t.is_empty() {
+                        return Ok(JsonValue::Null);
+                    }
+                    t.parse::<u64>().ok()
+                }
+                other => {
+                    return Err(CoreError::BadRequest(format!(
+                        "custom field '{}' must be a whole number, got {}",
+                        field.key,
+                        json_kind(other)
+                    )));
+                }
+            };
+            match n {
+                // Stored as an integer so `visibility::canonical` reads `"7"`,
+                // the same string the renderer holds.
+                Some(n) if (1..=u64::from(*max)).contains(&n) => Ok(JsonValue::from(n)),
+                _ => Err(CoreError::BadRequest(format!(
+                    "custom field '{}' must be a whole number from 1 to {max}",
+                    field.key
+                ))),
+            }
+        }
         CustomFieldType::File { .. } => match raw {
             JsonValue::String(s) => {
                 if s.trim().is_empty() {
@@ -1358,6 +1389,29 @@ mod tests {
             JsonValue::String("No".into())
         );
         assert!(coerce(&field, "Maybe").is_err());
+    }
+
+    #[test]
+    fn coerces_a_rating_to_an_integer_within_its_scale() {
+        let field = region_field("score", CustomFieldType::Rating { max: 10 });
+        let raw = |v: JsonValue| coerce_custom(&field, Some(v), &JsonMap::new(), &no_files());
+
+        assert_eq!(coerce(&field, " 7 ").unwrap(), JsonValue::from(7u64));
+        assert_eq!(raw(serde_json::json!(10)).unwrap(), JsonValue::from(10u64));
+        assert_eq!(coerce(&field, "  ").unwrap(), JsonValue::Null);
+        assert_eq!(
+            crate::forms::visibility::canonical(Some(&coerce(&field, "7").unwrap())),
+            "7",
+            "an integer, so a rule reads it the way the renderer does"
+        );
+
+        assert!(coerce(&field, "0").is_err());
+        assert!(coerce(&field, "11").is_err());
+        assert!(coerce(&field, "7.5").is_err());
+        assert!(coerce(&field, "seven").is_err());
+        assert!(raw(serde_json::json!(7.5)).is_err());
+        assert!(raw(serde_json::json!(-1)).is_err());
+        assert!(raw(serde_json::json!(true)).is_err());
     }
 
     // ---- country / state pickers -----------------------------------------

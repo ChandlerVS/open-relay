@@ -668,6 +668,38 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test file_uploads -- --ignored
 ```
 
+### Rating fields: an integer on the wire, radios in the DOM
+
+`CustomFieldType::Rating { max }` is a star rating of 1..=`max` stars, where `max` is
+3–10 and defaults to 5 (`MIN_RATING_MAX`/`MAX_RATING_MAX`/`DEFAULT_RATING_MAX`,
+mirrored in the builder's `model.ts`). Three things aren't obvious:
+
+1. **The stored answer is a JSON integer, and `coerce_custom` refuses floats
+   outright.** The renderer holds the answer as the string `"7"`, and a
+   visibility rule compares canonical strings. `Number(7)` canonicalises as
+   `"7"`, but a float would come out as `"7.0"` and silently stop matching
+   `equals 7` on the server while it still matched in the browser.
+   That is the `visibility.rs`/`visibility.ts` disagreement in miniature.
+   Like `Country`, `options()` reports nothing. The builder offers `1..max` as
+   rule operands through `ratingOptions` instead.
+2. **It is a radio group with the buttons hidden behind the stars.** That gives
+   native `required`, so per-step gating sees it, plus arrow-key navigation
+   and accessible names with no extra code. The inputs are hidden with
+   opacity, **never** `display: none`: a hidden required radio blocks submit
+   on a control the browser refuses to focus. `RatingInput` is its own
+   component because it keeps hover state, and `CustomFieldInput` returns
+   early before any hook could run.
+3. **Old cached bundles degrade like `file` does.** A bundle that knows `layout`
+   hits the `never` guard and draws nothing, so a **required** rating makes the
+   form uncompletable there. A bundle predating `layout` falls back to
+   `<input type="rating">`, a text box, and the server still coerces a typed
+   `4`.
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test rating_fields -- --ignored
+```
+
 ### Builder clipboard: the paste is repaired on the client, because a `layout` write isn't
 
 The builder canvas is multi-select (shift-click for a range, Cmd/Ctrl-click to

@@ -2,7 +2,10 @@ import { Input, Label } from "@open-relay/ui";
 import { STANDARD_FIELDS } from "@open-relay/form-renderer";
 import {
   DEFAULT_MAX_FILE_MB,
+  DEFAULT_RATING_MAX,
+  MAX_RATING_MAX,
   MAX_UPLOAD_MB,
+  MIN_RATING_MAX,
   CUSTOM_FIELD_TYPES,
   RICH_TEXT_TONES,
   canBeConditional,
@@ -358,7 +361,28 @@ export function Inspector({
             </p>
           </div>
         )}
-        {cfg.type !== "country" && cfg.type !== "state" && cfg.type !== "file" && (
+        {cfg.type === "rating" && (
+          <Row label="Number of stars">
+            <select
+              className={SELECT_CLASS}
+              value={cfg.max ?? DEFAULT_RATING_MAX}
+              onChange={(e) => patch({ max: Number(e.target.value) } as Partial<typeof cfg>)}
+            >
+              {Array.from(
+                { length: MAX_RATING_MAX - MIN_RATING_MAX + 1 },
+                (_, i) => MIN_RATING_MAX + i,
+              ).map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </Row>
+        )}
+        {cfg.type !== "country" &&
+          cfg.type !== "state" &&
+          cfg.type !== "file" &&
+          cfg.type !== "rating" && (
           <Row label="Placeholder">
             <Input
               className="h-8 text-sm"
@@ -379,7 +403,10 @@ export function Inspector({
           not, since the list it belongs to depends on an answer nobody has
           given yet.
         */}
-        {cfg.type !== "checkbox" && cfg.type !== "state" && cfg.type !== "file" && (
+        {cfg.type !== "checkbox" &&
+          cfg.type !== "state" &&
+          cfg.type !== "file" &&
+          cfg.type !== "rating" && (
           <Row label="Default value">
             <Input
               className="h-8 text-sm"

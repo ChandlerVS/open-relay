@@ -103,7 +103,13 @@ export type CustomField =
       /** HTML `accept` patterns: `.pdf`, `image/*`, or a full MIME type. */
       accept?: string[];
       max_size_mb?: number;
-    });
+    })
+  /**
+   * A star rating from 1 to `max` (3–10, default 5). The value held in form
+   * state is the chosen number as a string (`"4"`); the server stores it as an
+   * integer.
+   */
+  | (CustomFieldBase & { type: "rating"; max?: number });
 
 interface CustomFieldBase {
   key: string;
