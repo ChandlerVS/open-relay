@@ -59,6 +59,47 @@ import {
 /** Deleting more than a handful at once, with no undo, is worth a confirm. */
 const CONFIRM_DELETE_ABOVE = 3;
 
+/**
+ * Pins the Add and Settings columns to the viewport, so a form long enough to
+ * run off the bottom of the screen doesn't strand the palette and the inspector
+ * several screens above where you're working.
+ *
+ * Three things here are load-bearing:
+ *
+ * - **`self-start`.** A grid item is stretched to the row height by default, and
+ *   a sticky box that exactly fills its containing block has nowhere to travel —
+ *   it computes, moves nothing, and reads as broken. Shrinking the card to its
+ *   content leaves the rest of the (canvas-height) grid area as its scroll range.
+ * - **The breakpoint prefix.** Below it the grid is a single column and the cards
+ *   stack, where a pinned panel would sit on top of the content it is meant to
+ *   sit beside. The prefix differs with `showPreview`, so both variants are
+ *   spelled out in full rather than interpolated: Tailwind scans source text, and
+ *   a `${bp}:sticky` template would emit no CSS at all.
+ * - **Not applying either of these to the Fields card.** An `overflow-*` on the
+ *   canvas column would become a scrollable, clipping ancestor of the draggable
+ *   rows — dnd-kit would retarget auto-scroll to it, and since rows are
+ *   transformed in place rather than drawn in a `DragOverlay`, a dragged row
+ *   would be clipped at the card's edge.
+ */
+const SIDE_PANEL = {
+  lg: "lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh_-_3rem)] lg:flex lg:flex-col lg:overflow-hidden",
+  xl: "xl:sticky xl:top-6 xl:self-start xl:max-h-[calc(100vh_-_3rem)] xl:flex xl:flex-col xl:overflow-hidden",
+} as const;
+
+/**
+ * The pinned card's scrolling body — neither panel fits a laptop viewport (the
+ * palette alone is ~32 buttons), so the card caps its height and the content
+ * scrolls under a header that stays put.
+ *
+ * `min-h-0` is what actually makes that work: a flex child's automatic minimum
+ * size is its content height, so without it the card's `max-h` is ignored and
+ * the scroller never engages.
+ */
+const SIDE_PANEL_BODY = {
+  lg: "lg:min-h-0 lg:flex-1 lg:overflow-y-auto",
+  xl: "xl:min-h-0 xl:flex-1 xl:overflow-y-auto",
+} as const;
+
 export function FormBuilderPage() {
   const { id } = useParams<{ id: string }>();
   const formId = Number(id);
@@ -315,6 +356,12 @@ export function FormBuilderPage() {
     };
   }, [form, items]);
 
+  // The grid's breakpoint moves with the preview toggle, and the panels have to
+  // follow it exactly — see SIDE_PANEL.
+  const bp = showPreview ? "xl" : "lg";
+  const panel = SIDE_PANEL[bp];
+  const panelBody = SIDE_PANEL_BODY[bp];
+
   if (!valid) return <p className="text-sm text-destructive">Invalid form id.</p>;
   if (isLoading || !form || !items) {
     return (
@@ -433,11 +480,11 @@ export function FormBuilderPage() {
             : "grid gap-4 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_minmax(0,17rem)]"
         }
       >
-        <Card>
-          <CardHeader className="pb-2">
+        <Card className={panel}>
+          <CardHeader className="pb-2 shrink-0">
             <CardTitle className="text-sm">Add</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className={panelBody}>
             <fieldset disabled={!canEdit} className="min-w-0 border-0 p-0 m-0">
               <Palette
                 usedStandard={usedStandardKeys(items)}
@@ -504,11 +551,11 @@ export function FormBuilderPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
+        <Card className={panel}>
+          <CardHeader className="pb-2 shrink-0">
             <CardTitle className="text-sm">Settings</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className={panelBody}>
             {/* The Inspector edits one element. Say so, rather than letting it
                 show its bare "select an element" line next to a live
                 multi-selection. */}
