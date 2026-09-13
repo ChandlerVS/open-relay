@@ -16,6 +16,115 @@
     }
   ],
   "paths": {
+    "/api-keys": {
+      "get": {
+        "tags": [
+          "api-keys"
+        ],
+        "operationId": "list_api_keys",
+        "responses": {
+          "200": {
+            "description": "The caller's API keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "api-keys"
+        ],
+        "operationId": "create_api_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewApiKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Key created; `token` is returned once and never again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApiKey"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name, scopes or expiry"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Scoped to a permission the caller does not hold"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api-keys/{id}": {
+      "delete": {
+        "tags": [
+          "api-keys"
+        ],
+        "operationId": "revoke_api_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "API key id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "404": {
+            "description": "No such active key belonging to the caller"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/auth/login": {
       "post": {
         "tags": [
@@ -2526,6 +2635,64 @@
           }
         }
       },
+      "ApiKeyDto": {
+        "type": "object",
+        "description": "A key as shown back to its owner. Never carries the secret — there is no\nfield it could go in, which is the point.",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Leading characters of the secret, for matching a row against a config\nfile. Not sensitive."
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "description": "`None` = inherits the owner's full permission set."
+          }
+        }
+      },
       "BackendBinding": {
         "type": "object",
         "description": "One backend destination on a form. Each entry queues one delivery row per\nsubmission.\n\n`kind` matches a backend kind registered in `BackendRegistry` — either a\nstatic singleton like `\"open-relay\"` (in which case `instance_id` is\n`None`) or a configurable kind like `\"gohighlevel\"` whose credentials\nlive in `backend_instance` (in which case `instance_id` is `Some`).\n\nThe legacy serde key `\"name\"` is accepted as an alias for `kind` so JSON\nwritten before configurable instances landed still parses.",
@@ -2716,6 +2883,26 @@
           "is_checked",
           "is_not_checked"
         ]
+      },
+      "CreatedApiKey": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiKeyDto"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "The plaintext secret. Shown once, never stored."
+              }
+            }
+          }
+        ],
+        "description": "The issue response. The only place `token` is ever populated — it cannot be\nrecovered afterwards, so the admin UI has to surface it immediately."
       },
       "CustomField": {
         "allOf": [
@@ -3735,6 +3922,36 @@
           }
         ],
         "description": "A typed metadata value. The variant must match its key's\n[`MetadataKey::value_type`]; the service layer enforces this on write."
+      },
+      "NewApiKey": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Omit for a key that never expires.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "description": "Omit (or send `null`) to inherit the owner's permissions. An empty list\nis rejected — a key that can do nothing is a configuration mistake, not\na useful safety setting."
+          }
+        }
       },
       "NewBackendInstance": {
         "type": "object",
@@ -5618,6 +5835,10 @@
     {
       "name": "submissions",
       "description": "Form submissions and their per-backend delivery state."
+    },
+    {
+      "name": "api-keys",
+      "description": "Self-service long-lived credentials for agents and scripts."
     },
     {
       "name": "public",

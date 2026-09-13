@@ -1,0 +1,20 @@
+[package]
+name = "open-relay-mcp-stdio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "open-relay-mcp"
+path = "src/main.rs"
+
+[dependencies]
+open-relay-core = { workspace = true }
+open-relay-mcp = { workspace = true }
+rmcp = { workspace = true }
+sea-orm = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

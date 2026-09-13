@@ -1,0 +1,27 @@
+[package]
+name = "open-relay-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# No axum. This crate is to `apps/server` what `crates/core` is: the domain
+# half, mountable by an HTTP app but not requiring one. `http` is the shared
+# request/response types crate, not a framework — rmcp hands us an
+# `http::request::Parts` and we read our actor back out of it.
+[dependencies]
+entity = { workspace = true }
+open-relay-core = { workspace = true }
+rmcp = { workspace = true }
+sea-orm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+http = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+utoipa = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }

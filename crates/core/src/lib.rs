@@ -10,6 +10,7 @@
 //! aggregator — belongs in the server crate. `serde` and `utoipa` derives are
 //! pure metadata; they don't pull a framework in.
 
+pub mod api_keys;
 pub mod auth;
 pub mod backend;
 pub mod backends;

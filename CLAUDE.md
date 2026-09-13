@@ -16,6 +16,8 @@ Hybrid Cargo + pnpm/Turborepo monorepo.
 - `crates/entity/` — SeaORM 2.0 entities. Hand-authored.
 - `crates/core/` — Framework-agnostic domain logic (`Backend` trait, registry, delivery worker). Must not depend on Axum.
 - `apps/admin/` — Vite + React 19 admin SPA (port 5173).
+- `crates/mcp/` — MCP server (tools over `crates/core`). Like core, must not depend on Axum.
+- `apps/mcp/` — stdio MCP binary. Bin: `open-relay-mcp`.
 - `apps/embed-sdk/` — Vite library-mode IIFE bundle, dropped into host pages via `<script>`.
 - `packages/api-client/` — OpenAPI-generated TS client (consumed by admin).
 - `packages/form-renderer/` — Shared React form components (admin preview + embed SDK).
@@ -462,7 +464,8 @@ built for). Four things aren't obvious from the code:
    or strand a marker, so `Canvas`'s `onDragEnd` runs `normalizeRows` after the
    `arrayMove` — it un-nests, closes, and drops empty rows so a reorder can never
    produce a layout that won't save. Deleting either marker takes its partner
-   (`withoutRow`), since half a pair is a 400. The server mirrors the split:
+   (`removeMany` pairs them, and `normalizeRows` repairs the rest), since half a
+   pair is a 400. The server mirrors the split:
    `normalize_layout` drops an *empty* row quietly (cosmetic debris, like a rule
    with no conditions), while `validate_layout` rejects structural breakage. That
    quiet cleanup is also why the legacy write paths need no repair pass of their
@@ -784,6 +787,105 @@ The admin uses Tailwind v4 via `@tailwindcss/vite` (no `tailwind.config.js` — 
 ### TypeScript
 
 All TS packages extend `tsconfig.base.json` (strict, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `noEmit`). Build is via Vite or tsgo (TS 6); `pnpm typecheck` runs `tsc --noEmit` everywhere.
+
+### MCP: an agent-facing surface over the same services, on a third credential
+
+`crates/mcp` exposes forms to LLM agents over the Model Context Protocol
+(`rmcp` 3.3). It is to an agent what `apps/admin` is to a person, and it is
+wired the same way: tools call `open_relay_core::forms::service` directly, so
+every invariant above — `validate_layout`, `normalize_layout`, the legacy
+projection, the backwards-pointing rules — applies unchanged. Nothing in
+`crates/mcp` validates a layout; a tool that did would be a second copy of a
+spec with one owner.
+
+Six things aren't obvious from the code:
+
+1. **Agents authenticate with an API key, not the access JWT, and that is a
+   UX constraint rather than a security one.** `ACCESS_TTL_SECONDS` is 15
+   minutes and the refresh token *rotates on every use* — an MCP client holds a
+   static string in a config file and has nowhere to write a rotated secret
+   back to. So `entity::api_key` is a third credential: opaque, long-lived,
+   revocable, hashed at rest. It copies `auth/refresh.rs` (same
+   `generate_secret`/`hash_secret`, same "every failure is `Unauthorized`" rule
+   so there is no existence oracle) and deliberately does **not** rotate.
+
+   A key's permissions are `owner's live permissions ∩ key scopes`, resolved on
+   **every** call. So a key can never outrank its owner — which is why issuing
+   one needs no permission of its own and lives on the ungated `/profile` page —
+   and stripping a user's role narrows every key they hold immediately.
+   `scopes: NULL` means "whatever the owner has", not "everything".
+
+2. **`forms/edit.rs` is positional only, and that is the whole safety
+   argument.** `add_element`/`update_element`/`remove_element`/`move_element`
+   are pure `Vec<FormElement> -> CoreResult<Vec<FormElement>>`. The result goes
+   straight back through `service::update_form`, so a helper cannot produce a
+   layout the REST API would reject and cannot let the legacy columns go stale.
+   The only errors they raise themselves are addressing ones ("no field with
+   that key", "index 9 in a layout of 4") — the things `validate_layout` cannot
+   phrase usefully. `crates/mcp/tests/tools.rs` pins both halves.
+
+   Rows move and delete **as a unit**: naming either marker acts on the whole
+   `row_start..=row_end` run. Rather than repair a split pair afterwards the way
+   the builder's `normalizeRows` does, the operation that would create one
+   doesn't exist.
+
+3. **Tool schemas are spliced from the `utoipa` derives, not derived a second
+   time.** rmcp wants `schemars::JsonSchema`; the form DTOs have
+   `utoipa::ToSchema`, which already generates `/openapi.json` and the TS
+   client. `forms/schema.rs` hands over the transitively-closed component set
+   and `crates/mcp/src/schema.rs` rewrites `#/components/schemas/X` →
+   `#/$defs/X`, which `#[tool(input_schema = …)]` accepts verbatim. Two
+   artefacts, one generator — the `gen-regions.mjs` stance, not the
+   `visibility.rs`/`visibility.ts` one. The `$defs` block is attached only to
+   tools that actually `$ref` into it. Tests assert no published tool schema
+   contains a dangling `$ref`.
+
+4. **`#[tool_handler(router = self.tool_router)]` is load-bearing.** Left to
+   its default the macro expands to `Self::tool_router()` — rebuilding all
+   twelve tools, schemas included, on *every* `tools/list` and `tools/call`.
+   Same for `Implementation::new(...)` over `from_build_env()`, which reads
+   `CARGO_PKG_*` at its own expansion site inside rmcp and would report the SDK
+   as the server.
+
+5. **Over HTTP the actor arrives inside `http::request::Parts`, one level
+   down.** `routes/mcp.rs` authenticates in middleware (401 before rmcp sees
+   anything) and inserts an `ApiActor` into the request extensions; rmcp
+   forwards the inbound request into `RequestContext::extensions` as a whole
+   `Parts`, **not** as individual types, so `ctx.extensions.get::<ApiActor>()`
+   would compile and always return `None`. `OpenRelayMcp::actor` is the other
+   half of that contract — the two change together. rmcp does this on **POST**
+   only, which covers `initialize` and every `tools/call`. The rmcp examples
+   stop at "401 in middleware" and never propagate a principal, so there is no
+   upstream pattern to follow here.
+
+6. **rmcp's `Host` check defaults to loopback-only and fails closed.** A
+   deployed server would reject every request until `allowed_hosts` is set;
+   `routes/mcp.rs` derives it from `public_api_url`/`admin_url` (including the
+   bare form of an explicit `:443`/`:80`, which a `Host` header omits) rather
+   than adding another env var.
+
+The stdio binary (`apps/mcp`) talks to MySQL directly and resolves one key at
+startup — right for a local or same-host agent, wrong for anything remote,
+which should use the HTTP endpoint. It logs to **stderr**; stdout is the
+protocol channel.
+
+```bash
+# stdio
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  OPEN_RELAY_API_KEY=orl_... cargo run -p open-relay-mcp-stdio
+
+# HTTP (no proxy binary needed — Claude Code and Claude Desktop both speak it)
+claude mcp add --transport http open-relay http://localhost:8080/api/v1/mcp \
+  --header "Authorization: Bearer orl_..."
+
+# a dev key without going through the UI
+DATABASE_URL=... cargo run -p open-relay-core --example mint_key -- 1 agent forms:read
+
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test api_keys -- --ignored
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-mcp --test tools -- --ignored
+```
 
 ## Conventions
 

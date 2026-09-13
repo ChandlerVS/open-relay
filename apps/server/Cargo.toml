@@ -12,6 +12,8 @@ path = "src/main.rs"
 # Internal
 entity = { workspace = true }
 open-relay-core = { workspace = true }
+open-relay-mcp = { workspace = true }
+rmcp = { workspace = true }
 
 # Async / web
 axum = { workspace = true }

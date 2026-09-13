@@ -63,3 +63,14 @@ pub fn upload_layer() -> PeerGovernorLayer {
 pub fn public_layer() -> PeerGovernorLayer {
     build_layer(1, 20)
 }
+
+/// Limiter for the MCP surface.
+///
+/// Looser than the public one because an agent's working rhythm is bursty by
+/// nature — reading a form, editing several elements, reading it back is a
+/// handful of calls in quick succession — and every request here is already
+/// authenticated, so the limiter is protecting against a runaway loop rather
+/// than against anonymous abuse.
+pub fn mcp_layer() -> PeerGovernorLayer {
+    build_layer(1, 60)
+}

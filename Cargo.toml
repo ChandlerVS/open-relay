@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/server", "crates/entity", "crates/core"]
+members = ["apps/server", "apps/mcp", "crates/entity", "crates/core", "crates/mcp"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,9 +12,22 @@ repository = "https://github.com/openrelay/open-relay"
 # Internal
 entity = { path = "crates/entity" }
 open-relay-core = { path = "crates/core" }
+open-relay-mcp = { path = "crates/mcp" }
 
 # Async / web
 axum = "0.8"
+http = "1"
+tokio-util = "0.7"
+
+# Official Rust MCP SDK. `server` + `macros` are in its default set; the two
+# transports are additive. `transport-streamable-http-server` brings its own
+# tower-service/http/http-body, so nothing extra is needed to mount it in axum.
+rmcp = { version = "3.3", features = [
+    "server",
+    "macros",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "set-header", "limit", "fs"] }

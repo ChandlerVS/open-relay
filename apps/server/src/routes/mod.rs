@@ -1,7 +1,9 @@
+pub mod api_keys;
 pub mod backends;
 pub mod dashboard;
 pub mod forms;
 pub mod health;
+pub mod mcp;
 pub mod public_forms;
 pub mod reps;
 pub mod roles;

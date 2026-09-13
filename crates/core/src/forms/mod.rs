@@ -14,7 +14,9 @@
 //!   label, input type, optional placeholder/help text, and (for `select`)
 //!   options. See [`CustomField`].
 
+pub mod edit;
 pub mod regions;
+pub mod schema;
 pub mod service;
 pub mod visibility;
 

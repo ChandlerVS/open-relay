@@ -24,7 +24,7 @@ use crate::state::AppState;
 const PUBLIC_BODY_LIMIT: usize = 64 * 1024;
 /// Roomier cap for the authenticated admin API (form schemas etc. stay small
 /// but want headroom).
-const ADMIN_BODY_LIMIT: usize = 1024 * 1024;
+pub(crate) const ADMIN_BODY_LIMIT: usize = 1024 * 1024;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -50,6 +50,7 @@ const ADMIN_BODY_LIMIT: usize = 1024 * 1024;
         (name = "reps", description = "Sales rep directory for QR-code attribution."),
         (name = "storage", description = "Object storage backing file-upload form fields."),
         (name = "submissions", description = "Form submissions and their per-backend delivery state."),
+        (name = "api-keys", description = "Self-service long-lived credentials for agents and scripts."),
         (name = "public", description = "Unauthenticated endpoints consumed by embedded forms."),
     ),
 )]
@@ -107,6 +108,7 @@ pub fn build(state: AppState) -> Router {
         .nest("/reps", routes::reps::router())
         .nest("/storage", routes::storage::router())
         .nest("/submissions", routes::submissions::router())
+        .nest("/api-keys", routes::api_keys::router())
         .split_for_parts();
     let mut admin_router = admin_router
         .layer(SetResponseHeaderLayer::overriding(
@@ -176,7 +178,25 @@ pub fn build(state: AppState) -> Router {
     // falls through to the catch-all SPA fallback below. Each surface's CORS,
     // body-limit and header layers were applied pre-merge, so they survive the
     // nest unchanged.
-    let api_router = admin_router.merge(public_router);
+    // A third surface. Built and layered separately like the other two, but
+    // merged as a plain `Router` — MCP is JSON-RPC on one path, so there is
+    // nothing for the OpenAPI document to describe, and including it would put
+    // a phantom operation into the generated TypeScript client.
+    let mcp_router = routes::mcp::router(state.clone())
+        .layer(SetResponseHeaderLayer::overriding(
+            X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ));
+
+    let api_router = admin_router.merge(public_router).merge(mcp_router);
     let mut router = Router::new().nest("/api/v1", api_router);
     let mut api = admin_api;
     api.merge(public_api);

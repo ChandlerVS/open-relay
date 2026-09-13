@@ -16,6 +16,7 @@ use super::{
     AdminSetPassword, ChangeOwnPassword, ListQuery, NewUser, UpdateUser, UserDto, UserList,
     UserSelectOption,
 };
+use crate::api_keys::service as api_keys_service;
 use crate::auth::provider::VerifiedIdentity;
 use crate::error::{CoreError, CoreResult};
 use crate::external_identity::service as external_identity_service;
@@ -342,6 +343,7 @@ pub async fn delete_user<C: ConnectionTrait>(
         .filter(entity::user_role::Column::UserId.eq(target_id))
         .exec(conn)
         .await?;
+    api_keys_service::delete_for_owner(conn, target_id).await?;
     submissions_service::delete_for_owner(conn, target_id).await?;
     forms_service::delete_for_owner(conn, target_id).await?;
     external_identity_service::delete_for_user(conn, target_id).await?;

@@ -20,6 +20,7 @@ import {
   useUnlinkIdentity,
 } from "../../../lib/oauth/useOAuth";
 import { useAuth } from "../../../lib/auth/useAuth";
+import { ApiKeysCard } from "./ApiKeysCard";
 
 export function ProfilePage() {
   const { user } = useAuth();
@@ -156,6 +157,8 @@ export function ProfilePage() {
           )}
         </CardContent>
       </Card>
+
+      <ApiKeysCard />
 
       <ConfirmDialog
         open={confirmId != null}

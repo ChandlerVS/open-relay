@@ -4,6 +4,38 @@
  */
 
 export interface paths {
+    "/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_api_keys"];
+        put?: never;
+        post: operations["create_api_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revoke_api_key"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -719,6 +751,30 @@ export interface components {
             password: string;
         };
         /**
+         * @description A key as shown back to its owner. Never carries the secret — there is no
+         *     field it could go in, which is the point.
+         */
+        ApiKeyDto: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: int32 */
+            id: number;
+            /** Format: date-time */
+            last_used_at?: string | null;
+            name: string;
+            /**
+             * @description Leading characters of the secret, for matching a row against a config
+             *     file. Not sensitive.
+             */
+            prefix: string;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            /** @description `None` = inherits the owner's full permission set. */
+            scopes?: components["schemas"]["Permission"][] | null;
+        };
+        /**
          * @description One backend destination on a form. Each entry queues one delivery row per
          *     submission.
          *
@@ -825,6 +881,14 @@ export interface components {
          * @enum {string}
          */
         ConditionOp: "equals" | "not_equals" | "contains" | "is_empty" | "is_not_empty" | "is_checked" | "is_not_checked";
+        /**
+         * @description The issue response. The only place `token` is ever populated — it cannot be
+         *     recovered afterwards, so the admin UI has to surface it immediately.
+         */
+        CreatedApiKey: components["schemas"]["ApiKeyDto"] & {
+            /** @description The plaintext secret. Shown once, never stored. */
+            token: string;
+        };
         CustomField: components["schemas"]["CustomFieldType"] & {
             /**
              * @description Value prefilled by the renderer. Never applied server-side: a
@@ -1216,6 +1280,20 @@ export interface components {
          *     [`MetadataKey::value_type`]; the service layer enforces this on write.
          */
         MetadataValue: boolean;
+        NewApiKey: {
+            /**
+             * Format: int32
+             * @description Omit for a key that never expires.
+             */
+            expires_in_days?: number | null;
+            name: string;
+            /**
+             * @description Omit (or send `null`) to inherit the owner's permissions. An empty list
+             *     is rejected — a key that can do nothing is a configuration mistake, not
+             *     a useful safety setting.
+             */
+            scopes?: components["schemas"]["Permission"][] | null;
+        };
         NewBackendInstance: {
             config: unknown;
             kind: string;
@@ -2053,6 +2131,113 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_api_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's API keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyDto"][];
+                };
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_api_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewApiKey"];
+            };
+        };
+        responses: {
+            /** @description Key created; `token` is returned once and never again */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedApiKey"];
+                };
+            };
+            /** @description Invalid name, scopes or expiry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scoped to a permission the caller does not hold */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revoke_api_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description API key id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such active key belonging to the caller */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     login: {
         parameters: {
             query?: never;
