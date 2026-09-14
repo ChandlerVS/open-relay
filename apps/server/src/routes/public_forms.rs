@@ -15,6 +15,7 @@ use open_relay_core::forms::{PublicFormDto, service as forms_service};
 use open_relay_core::storage::uploads::{self, UploadTicketDto, UploadTicketRequest};
 use open_relay_core::storage_config;
 use open_relay_core::submissions::service::UploadContext;
+use open_relay_core::themes::service as themes_service;
 use open_relay_core::submissions::{
     NewSubmissionPayload, SubmissionAcceptedDto, service as submissions_service,
 };
@@ -42,7 +43,9 @@ pub async fn get_public_form(
     let form = forms_service::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("form not found".into()))?;
+    let theme_id = form.theme_id;
     let mut dto = forms_service::public_dto_from_model(form)?;
+    dto.theme = themes_service::resolve_settings(&state.db, theme_id).await?;
     // Only pay for the storage lookup when the form actually has a file field
     // — the same stance `needs_subdivisions` takes about the region table.
     // Asked of the DTO's already-parsed layout, so the form JSON is read once.

@@ -88,6 +88,12 @@ pub struct Model {
     /// default.
     #[sea_orm(column_type = "Json", nullable)]
     pub progress_indicator: Option<Json>,
+    /// FK to `theme.id` — the look this form renders with. `NULL` means "use
+    /// the workspace default theme", or the built-in look when none is marked.
+    /// No DB FK constraint: deleting a theme resets its forms to `NULL` in
+    /// application code (`open_relay_core::themes::service::delete`).
+    #[sea_orm(indexed, nullable)]
+    pub theme_id: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

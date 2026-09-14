@@ -57,6 +57,12 @@ pub enum Permission {
     RepsWrite,
     #[serde(rename = "reps:delete")]
     RepsDelete,
+    #[serde(rename = "themes:read")]
+    ThemesRead,
+    #[serde(rename = "themes:write")]
+    ThemesWrite,
+    #[serde(rename = "themes:delete")]
+    ThemesDelete,
     #[serde(rename = "auth_config:write")]
     AuthConfigWrite,
     /// Manage the object-storage provider that backs `file` form fields.
@@ -93,6 +99,9 @@ impl Permission {
             Self::RepsRead => "reps:read",
             Self::RepsWrite => "reps:write",
             Self::RepsDelete => "reps:delete",
+            Self::ThemesRead => "themes:read",
+            Self::ThemesWrite => "themes:write",
+            Self::ThemesDelete => "themes:delete",
             Self::AuthConfigWrite => "auth_config:write",
             Self::StorageConfigWrite => "storage_config:write",
         }
@@ -119,6 +128,9 @@ impl Permission {
             "reps:read" => Some(Self::RepsRead),
             "reps:write" => Some(Self::RepsWrite),
             "reps:delete" => Some(Self::RepsDelete),
+            "themes:read" => Some(Self::ThemesRead),
+            "themes:write" => Some(Self::ThemesWrite),
+            "themes:delete" => Some(Self::ThemesDelete),
             "auth_config:write" => Some(Self::AuthConfigWrite),
             "storage_config:write" => Some(Self::StorageConfigWrite),
             _ => None,

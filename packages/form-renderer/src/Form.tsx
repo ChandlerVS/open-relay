@@ -7,6 +7,7 @@ import type { LayoutEntry } from "./layout";
 import { computeVisibility, visibleElements } from "./visibility";
 import { Markdown, richTextClass } from "./RichText";
 import { isHttpUrl } from "./url";
+import { themeStyle } from "./theme";
 import type {
   CustomField,
   FieldWidth,
@@ -254,6 +255,7 @@ export function Form({
       <div
         data-open-relay-form={formId}
         data-theme={resolvedTheme}
+        style={themeStyle(schema?.theme)}
         className="or-form or-form--error"
       >
         Couldn't load this form{error ? ` (${error})` : ""}.
@@ -265,6 +267,7 @@ export function Form({
       <div
         data-open-relay-form={formId}
         data-theme={resolvedTheme}
+        style={themeStyle(schema?.theme)}
         className="or-form or-form--submitted"
       >
         <SubmittedPanel
@@ -405,6 +408,7 @@ export function Form({
     <form
       data-open-relay-form={formId}
       data-theme={resolvedTheme}
+      style={themeStyle(schema.theme)}
       className="or-form"
       onSubmit={(e) => {
         // Browser-native validation has already passed for the fields

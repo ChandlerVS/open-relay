@@ -10,4 +10,5 @@ pub mod roles;
 pub mod setup;
 pub mod storage;
 pub mod submissions;
+pub mod themes;
 pub mod users;

@@ -41,6 +41,7 @@ fn new_form(slug: &str, indicator: ProgressIndicator) -> NewForm {
         source_params: vec![],
         post_submission_action: Default::default(),
         progress_indicator: indicator,
+        theme_id: None,
         metadata: None,
     }
 }

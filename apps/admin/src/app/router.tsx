@@ -13,6 +13,8 @@ import { FormPreviewPage } from "../pages/admin/forms/FormPreviewPage";
 import { FormBuilderPage } from "../pages/admin/forms/builder/FormBuilderPage";
 import { BackendsPage } from "../pages/admin/backends/BackendsPage";
 import { RepsPage } from "../pages/admin/reps/RepsPage";
+import { ThemesPage } from "../pages/admin/themes/ThemesPage";
+import { ThemeEditorPage } from "../pages/admin/themes/ThemeEditorPage";
 import { SubmissionsPage } from "../pages/admin/submissions/SubmissionsPage";
 import { AuthSettingsPage } from "../pages/admin/settings/AuthSettingsPage";
 import { StorageSettingsPage } from "../pages/admin/settings/StorageSettingsPage";
@@ -60,6 +62,18 @@ export const router = createBrowserRouter([
               <RequirePermissionRoute perm="reps:read" action="view sales reps" />
             ),
             children: [{ path: "reps", element: <RepsPage /> }],
+          },
+          {
+            element: (
+              <RequirePermissionRoute perm="themes:read" action="view themes" />
+            ),
+            children: [
+              { path: "themes", element: <ThemesPage /> },
+              // Like the form builder, the editor opens read-only without
+              // `themes:write` rather than demanding it at the route.
+              { path: "themes/new", element: <ThemeEditorPage /> },
+              { path: "themes/:id", element: <ThemeEditorPage /> },
+            ],
           },
           {
             element: (

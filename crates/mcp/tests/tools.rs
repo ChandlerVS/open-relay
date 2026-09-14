@@ -129,6 +129,7 @@ async fn seed_form(db: &DatabaseConnection, slug: &str) -> i32 {
             source_params: vec![],
             post_submission_action: Default::default(),
             progress_indicator: Default::default(),
+            theme_id: None,
             metadata: None,
         },
     )

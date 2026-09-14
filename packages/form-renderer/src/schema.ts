@@ -262,6 +262,41 @@ export interface ProgressIndicator {
   show_percent?: boolean;
 }
 
+/**
+ * Mirrors `open_relay_core::themes::ThemeColors`. Every member is a hex colour;
+ * an absent one keeps the built-in value (light or dark, per `data-theme`).
+ */
+export interface ThemeColors {
+  background?: string | null;
+  text?: string | null;
+  muted?: string | null;
+  border?: string | null;
+  input_background?: string | null;
+  input_border?: string | null;
+  accent?: string | null;
+  accent_text?: string | null;
+  error?: string | null;
+  link?: string | null;
+  rating?: string | null;
+}
+
+export type ThemeFontSize = "small" | "medium" | "large";
+export type ThemeDensity = "compact" | "comfortable" | "spacious";
+
+/**
+ * Mirrors `open_relay_core::themes::ThemeSettings`. Named apart from
+ * `FormTheme`, which is the embed's light/dark switch, not a stored theme.
+ * Defaults are omitted on the wire, so the empty theme is `{}`.
+ */
+export interface ThemeSettings {
+  colors?: ThemeColors | null;
+  /** Corner radius in pixels, 0–32. */
+  radius?: number | null;
+  font_family?: string | null;
+  font_size?: ThemeFontSize | null;
+  density?: ThemeDensity | null;
+}
+
 export interface PublicFormDto {
   id: number;
   name: string;
@@ -306,4 +341,10 @@ export interface PublicFormDto {
    * false; a form on such a server has no file fields anyway.
    */
   uploads_enabled?: boolean;
+  /**
+   * The look to render with — the form's own theme, else the workspace
+   * default, resolved on the server. Absent means the built-in look, and is
+   * also what a server too old to send it looks like.
+   */
+  theme?: ThemeSettings | null;
 }

@@ -9,6 +9,7 @@ export { ShadowForm } from "./ShadowForm";
 export { Markdown, richTextClass } from "./RichText";
 export { parseMarkdown, type MdBlock, type MdInline } from "./markdown";
 export { isHttpUrl } from "./url";
+export { themeStyle, isHexColor, isSafeFontFamily, MAX_RADIUS } from "./theme";
 export {
   STANDARD_FIELDS,
   type CountryOption,
@@ -59,6 +60,10 @@ export type {
   RedirectAction,
   ProgressIndicator,
   ProgressStyle,
+  ThemeColors,
+  ThemeSettings,
+  ThemeFontSize,
+  ThemeDensity,
   VisibilityRule,
   Condition,
   ConditionOp,

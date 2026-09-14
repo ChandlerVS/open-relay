@@ -44,6 +44,7 @@ fn new_form(slug: &str, action: PostSubmissionAction) -> NewForm {
         source_params: vec![],
         post_submission_action: action,
         progress_indicator: Default::default(),
+        theme_id: None,
         metadata: None,
     }
 }

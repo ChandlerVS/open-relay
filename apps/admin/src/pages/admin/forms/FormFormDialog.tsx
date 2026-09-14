@@ -30,6 +30,7 @@ import { PermissionNotice } from "../../../lib/auth/PermissionNotice";
 import { usePermissions } from "../../../lib/auth/usePermissions";
 import { useBackendsList } from "../../../lib/backends/useBackends";
 import { useRepsList } from "../../../lib/reps/useReps";
+import { useThemesList } from "../../../lib/formThemes/useThemes";
 
 type BackendBinding = components["schemas"]["BackendBinding"];
 type MetadataEntry = components["schemas"]["MetadataEntry"];
@@ -161,6 +162,7 @@ function CreateForm({
   const [progress, setProgress] = useState<ProgressIndicator>(
     defaultProgressIndicator,
   );
+  const [themeId, setThemeId] = useState<number | null>(null);
   const [emailDedup, setEmailDedup] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -197,6 +199,7 @@ function CreateForm({
             source_params: cleanSourceParams(sourceParams),
             post_submission_action: cleanPostSubmission(postSubmission),
             progress_indicator: progress,
+            theme_id: themeId,
             metadata: [{ key: EMAIL_DEDUP_KEY, value: emailDedup }],
           },
           {
@@ -268,6 +271,12 @@ function CreateForm({
       >
         <ProgressIndicatorEditor value={progress} onChange={setProgress} />
       </Section>
+      <Section
+        title="Theme"
+        hint="Colours, corner radius, font and spacing for the embedded form."
+      >
+        <ThemePicker value={themeId} onChange={setThemeId} />
+      </Section>
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
       </Section>
@@ -313,6 +322,7 @@ function EditForm({
   const [progress, setProgress] = useState<ProgressIndicator>(
     form.progress_indicator,
   );
+  const [themeId, setThemeId] = useState<number | null>(form.theme_id ?? null);
   const [emailDedup, setEmailDedup] = useState(
     emailDedupFromMetadata(form.metadata),
   );
@@ -379,6 +389,10 @@ function EditForm({
                 ? cleanedAction
                 : undefined,
               progress_indicator: progressChanged ? progress : undefined,
+              // `0` is how the server is told "back to the default theme" —
+              // absent would mean "leave it alone".
+              theme_id:
+                themeId !== (form.theme_id ?? null) ? (themeId ?? 0) : undefined,
               metadata: dedupChanged
                 ? [{ key: EMAIL_DEDUP_KEY, value: emailDedup }]
                 : undefined,
@@ -448,6 +462,12 @@ function EditForm({
         hint="Only applies to forms with page breaks. Add them in the builder."
       >
         <ProgressIndicatorEditor value={progress} onChange={setProgress} />
+      </Section>
+      <Section
+        title="Theme"
+        hint="Colours, corner radius, font and spacing for the embedded form."
+      >
+        <ThemePicker value={themeId} onChange={setThemeId} />
       </Section>
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
@@ -1159,6 +1179,61 @@ function ProgressIndicatorEditor({
           Show the percentage next to the bar
         </label>
       )}
+    </div>
+  );
+}
+
+/**
+ * The form's theme, or the workspace default. Gated like
+ * `DeliveryDestinations`: a `forms:write` user may not hold `themes:read`, and
+ * the untouched `value` is submitted either way.
+ */
+function ThemePicker({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange: (next: number | null) => void;
+}) {
+  const canRead = usePermissions().has("themes:read");
+  const { data, isLoading, isError, error, refetch } = useThemesList({
+    enabled: canRead,
+  });
+  if (!canRead) {
+    return (
+      <PermissionNotice
+        perm="themes:read"
+        action="choose this form's theme"
+        current={value == null ? "Uses the default theme." : `Uses theme #${value}.`}
+      />
+    );
+  }
+  const defaultTheme = data?.items.find((t) => t.is_default);
+  return (
+    <div className="space-y-2">
+      <QueryErrorAlert
+        error={isError ? error : null}
+        title="Couldn't load themes"
+        onRetry={() => refetch()}
+      />
+      <select
+        className={TEXT_INPUT}
+        value={value ?? ""}
+        disabled={isLoading}
+        onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+      >
+        <option value="">
+          Default ({defaultTheme ? defaultTheme.name : "built-in look"})
+        </option>
+        {data?.items.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+      <Link to="/themes" className="inline-block text-xs text-muted-foreground hover:underline">
+        Manage themes
+      </Link>
     </div>
   );
 }

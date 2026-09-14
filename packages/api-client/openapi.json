@@ -2293,6 +2293,219 @@
         ]
       }
     },
+    "/themes": {
+      "get": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "list_themes",
+        "responses": {
+          "200": {
+            "description": "Themes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "create_theme",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTheme"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Theme created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/themes/{id}": {
+      "get": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "get_theme",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Theme id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Theme",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Theme not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "delete_theme",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Theme id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Theme deleted; forms that used it fall back to the default theme"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Theme not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "themes"
+        ],
+        "operationId": "update_theme",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Theme id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTheme"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Theme updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemeDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Theme not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/users": {
       "get": {
         "tags": [
@@ -3284,6 +3497,15 @@
           }
         }
       },
+      "Density": {
+        "type": "string",
+        "description": "Spacing scale. Multiplies the gaps between fields and the padding inside\nthe form, its inputs and its buttons.",
+        "enum": [
+          "compact",
+          "comfortable",
+          "spacious"
+        ]
+      },
       "DiscoveryPrefill": {
         "type": "object",
         "required": [
@@ -3406,6 +3628,15 @@
           "third"
         ]
       },
+      "FontSize": {
+        "type": "string",
+        "description": "Base type scale. Multiplies every font size the renderer draws.",
+        "enum": [
+          "small",
+          "medium",
+          "large"
+        ]
+      },
       "FormDto": {
         "type": "object",
         "description": "Outbound representation of a form. `owner_id` is exposed to admins; the\npublic-facing endpoint uses [`PublicFormDto`] instead.",
@@ -3510,6 +3741,14 @@
             "items": {
               "type": "string"
             }
+          },
+          "theme_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The theme this form names, as stored. `None` means it renders with the\nworkspace default theme (or the built-in look when there is none)."
           },
           "updated_at": {
             "type": "string",
@@ -4089,6 +4328,14 @@
               "type": "string"
             },
             "description": "Tags dispatched to backends alongside every submission from this form.\nDefaults to empty."
+          },
+          "theme_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The theme this form renders with, by [`crate::themes`] id. Omitted or\n`0` means the workspace default theme."
           }
         }
       },
@@ -4151,6 +4398,24 @@
         "additionalProperties": {},
         "propertyNames": {
           "type": "string"
+        }
+      },
+      "NewTheme": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "is_default": {
+            "type": "boolean",
+            "description": "Make this the default theme, unsetting any previous default."
+          },
+          "name": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ThemeSettings"
+          }
         }
       },
       "NewUser": {
@@ -4336,6 +4601,9 @@
           "reps:read",
           "reps:write",
           "reps:delete",
+          "themes:read",
+          "themes:write",
+          "themes:delete",
           "auth_config:write",
           "storage_config:write"
         ]
@@ -4501,6 +4769,17 @@
           "standard_fields": {
             "$ref": "#/components/schemas/StandardFieldsConfig",
             "description": "Retained for embed bundles cached on host pages before `layout`\nexisted. Always a faithful projection of `layout`."
+          },
+          "theme": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ThemeSettings",
+                "description": "The look to render with: the form's own theme, else the workspace\ndefault, else absent (the built-in look). Resolved on the server so the\nrenderer never has to know what \"default\" means; like `uploads_enabled`\nit needs a database read, so the caller fills it in. A bundle too old to\nknow the field ignores it and draws the built-in look."
+              }
+            ]
           },
           "uploads_enabled": {
             "type": "boolean",
@@ -5308,6 +5587,183 @@
           }
         }
       },
+      "ThemeColors": {
+        "type": "object",
+        "description": "Colour overrides. Every member is a `#rgb`, `#rgba`, `#rrggbb` or\n`#rrggbbaa` hex string; `None` keeps the renderer's built-in value.",
+        "properties": {
+          "accent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Buttons, radio accents and the progress fill."
+          },
+          "accent_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Text drawn on an accent background."
+          },
+          "background": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Form surface. The built-in value is transparent."
+          },
+          "border": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Form and divider border."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Errors and required marks."
+          },
+          "input_background": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input_border": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Links inside rich-text blocks."
+          },
+          "muted": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Help and secondary text."
+          },
+          "rating": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Star-rating outline and fill."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Body text."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ThemeDto": {
+        "type": "object",
+        "description": "Outbound representation of a theme.",
+        "required": [
+          "id",
+          "name",
+          "is_default",
+          "settings",
+          "form_count",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "form_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many forms name this theme explicitly. Forms that use it only\nbecause it is the default are not counted.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "Whether forms with no `theme_id` render with this theme."
+          },
+          "name": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ThemeSettings"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ThemeList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThemeDto"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ThemeSettings": {
+        "type": "object",
+        "description": "What a theme controls. Every member is optional or defaulted, and defaults\nare skipped on serialisation — so the empty theme is `{}` and the admin's\n`JSON.stringify` comparisons converge with what the server sends back.",
+        "properties": {
+          "colors": {
+            "$ref": "#/components/schemas/ThemeColors"
+          },
+          "density": {
+            "$ref": "#/components/schemas/Density"
+          },
+          "font_family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A CSS font-family list, e.g. `Inter, sans-serif`. Only names the host\npage already loads will render; `None` keeps the built-in system stack."
+          },
+          "font_size": {
+            "$ref": "#/components/schemas/FontSize"
+          },
+          "radius": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Corner radius for the form and its controls, in pixels (0–32). `None`\nkeeps the built-in 8px.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "TokenPair": {
         "type": "object",
         "description": "Result of a successful `/auth/refresh` rotation: a fresh access token plus\nthe rotated refresh secret (the presented one is now revoked).",
@@ -5459,6 +5915,14 @@
             "items": {
               "type": "string"
             }
+          },
+          "theme_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`None` leaves the theme untouched. `0` clears it back to `NULL`, so the\nform renders with the workspace default theme again — the id-shaped\ncounterpart of a blank `display_name` (ids start at 1, so `0` never\nnames a real theme)."
           }
         }
       },
@@ -5517,6 +5981,34 @@
               "$ref": "#/components/schemas/Permission"
             },
             "description": "`None` = leave assignments alone. `Some(vec)` = replace the role's\npermission set with this list."
+          }
+        }
+      },
+      "UpdateTheme": {
+        "type": "object",
+        "description": "Partial update. `None` means \"leave the field alone\"; `settings` replaces\nthe whole settings object. `is_default: true` moves the default here;\n`false` on the current default leaves the workspace with no default theme.",
+        "properties": {
+          "is_default": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ThemeSettings"
+              }
+            ]
           }
         }
       },
@@ -5848,6 +6340,10 @@
     {
       "name": "reps",
       "description": "Sales rep directory for QR-code attribution."
+    },
+    {
+      "name": "themes",
+      "description": "Reusable form themes: colours, radius, typography, density."
     },
     {
       "name": "storage",

@@ -48,6 +48,7 @@ pub(crate) const ADMIN_BODY_LIMIT: usize = 1024 * 1024;
         (name = "forms", description = "Form schemas embedded by host pages."),
         (name = "backends", description = "Configured delivery backends (e.g. GoHighLevel)."),
         (name = "reps", description = "Sales rep directory for QR-code attribution."),
+        (name = "themes", description = "Reusable form themes: colours, radius, typography, density."),
         (name = "storage", description = "Object storage backing file-upload form fields."),
         (name = "submissions", description = "Form submissions and their per-backend delivery state."),
         (name = "api-keys", description = "Self-service long-lived credentials for agents and scripts."),
@@ -106,6 +107,7 @@ pub fn build(state: AppState) -> Router {
         .nest("/forms", routes::forms::router())
         .nest("/backends", routes::backends::router())
         .nest("/reps", routes::reps::router())
+        .nest("/themes", routes::themes::router())
         .nest("/storage", routes::storage::router())
         .nest("/submissions", routes::submissions::router())
         .nest("/api-keys", routes::api_keys::router())

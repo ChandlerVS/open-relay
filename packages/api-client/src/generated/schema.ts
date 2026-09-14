@@ -673,6 +673,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_themes"];
+        put?: never;
+        post: operations["create_theme"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/themes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_theme"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_theme"];
+        options?: never;
+        head?: never;
+        patch: operations["update_theme"];
+        trace?: never;
+    };
     "/users": {
         parameters: {
             query?: never;
@@ -1034,6 +1066,12 @@ export interface components {
             count: number;
             status: string;
         };
+        /**
+         * @description Spacing scale. Multiplies the gaps between fields and the padding inside
+         *     the form, its inputs and its buttons.
+         * @enum {string}
+         */
+        Density: "compact" | "comfortable" | "spacious";
         DiscoveryPrefill: {
             authorize_url: string;
             issuer: string;
@@ -1098,6 +1136,11 @@ export interface components {
          */
         FieldWidth: "full" | "two_thirds" | "half" | "third";
         /**
+         * @description Base type scale. Multiplies every font size the renderer draws.
+         * @enum {string}
+         */
+        FontSize: "small" | "medium" | "large";
+        /**
          * @description Outbound representation of a form. `owner_id` is exposed to admins; the
          *     public-facing endpoint uses [`PublicFormDto`] instead.
          */
@@ -1138,6 +1181,12 @@ export interface components {
             source_params: components["schemas"]["SourceParam"][];
             standard_fields: components["schemas"]["StandardFieldsConfig"];
             tags: string[];
+            /**
+             * Format: int32
+             * @description The theme this form names, as stored. `None` means it renders with the
+             *     workspace default theme (or the built-in look when there is none).
+             */
+            theme_id?: number | null;
             /** Format: date-time */
             updated_at: string;
         };
@@ -1360,6 +1409,12 @@ export interface components {
              *     Defaults to empty.
              */
             tags?: string[];
+            /**
+             * Format: int32
+             * @description The theme this form renders with, by [`crate::themes`] id. Omitted or
+             *     `0` means the workspace default theme.
+             */
+            theme_id?: number | null;
         };
         /** @description Input for creating a rep. `key` defaults to a slugified `name` when omitted. */
         NewRep: {
@@ -1385,6 +1440,12 @@ export interface components {
          */
         NewSubmissionPayload: {
             [key: string]: unknown;
+        };
+        NewTheme: {
+            /** @description Make this the default theme, unsetting any previous default. */
+            is_default?: boolean;
+            name: string;
+            settings?: components["schemas"]["ThemeSettings"];
         };
         /**
          * @description Input shape for creating a user. `role_ids` is optional and defaults to
@@ -1443,7 +1504,7 @@ export interface components {
             visible_when?: null | components["schemas"]["VisibilityRule"];
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "auth_config:write" | "storage_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "themes:read" | "themes:write" | "themes:delete" | "auth_config:write" | "storage_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
@@ -1550,6 +1611,7 @@ export interface components {
              *     existed. Always a faithful projection of `layout`.
              */
             standard_fields: components["schemas"]["StandardFieldsConfig"];
+            theme?: null | components["schemas"]["ThemeSettings"];
             /**
              * @description `true` when this form has a file field **and** a storage provider is
              *     configured, i.e. an upload can actually succeed. The renderer uses it
@@ -1937,6 +1999,77 @@ export interface components {
             total: number;
         };
         /**
+         * @description Colour overrides. Every member is a `#rgb`, `#rgba`, `#rrggbb` or
+         *     `#rrggbbaa` hex string; `None` keeps the renderer's built-in value.
+         */
+        ThemeColors: {
+            /** @description Buttons, radio accents and the progress fill. */
+            accent?: string | null;
+            /** @description Text drawn on an accent background. */
+            accent_text?: string | null;
+            /** @description Form surface. The built-in value is transparent. */
+            background?: string | null;
+            /** @description Form and divider border. */
+            border?: string | null;
+            /** @description Errors and required marks. */
+            error?: string | null;
+            input_background?: string | null;
+            input_border?: string | null;
+            /** @description Links inside rich-text blocks. */
+            link?: string | null;
+            /** @description Help and secondary text. */
+            muted?: string | null;
+            /** @description Star-rating outline and fill. */
+            rating?: string | null;
+            /** @description Body text. */
+            text?: string | null;
+        };
+        /** @description Outbound representation of a theme. */
+        ThemeDto: {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: int64
+             * @description How many forms name this theme explicitly. Forms that use it only
+             *     because it is the default are not counted.
+             */
+            form_count: number;
+            /** Format: int32 */
+            id: number;
+            /** @description Whether forms with no `theme_id` render with this theme. */
+            is_default: boolean;
+            name: string;
+            settings: components["schemas"]["ThemeSettings"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ThemeList: {
+            items: components["schemas"]["ThemeDto"][];
+            /** Format: int64 */
+            total: number;
+        };
+        /**
+         * @description What a theme controls. Every member is optional or defaulted, and defaults
+         *     are skipped on serialisation — so the empty theme is `{}` and the admin's
+         *     `JSON.stringify` comparisons converge with what the server sends back.
+         */
+        ThemeSettings: {
+            colors?: components["schemas"]["ThemeColors"];
+            density?: components["schemas"]["Density"];
+            /**
+             * @description A CSS font-family list, e.g. `Inter, sans-serif`. Only names the host
+             *     page already loads will render; `None` keeps the built-in system stack.
+             */
+            font_family?: string | null;
+            font_size?: components["schemas"]["FontSize"];
+            /**
+             * Format: int32
+             * @description Corner radius for the form and its controls, in pixels (0–32). `None`
+             *     keeps the built-in 8px.
+             */
+            radius?: number | null;
+        };
+        /**
          * @description Result of a successful `/auth/refresh` rotation: a fresh access token plus
          *     the rotated refresh secret (the presented one is now revoked).
          */
@@ -1985,6 +2118,14 @@ export interface components {
             source_params?: components["schemas"]["SourceParam"][] | null;
             standard_fields?: null | components["schemas"]["StandardFieldsConfig"];
             tags?: string[] | null;
+            /**
+             * Format: int32
+             * @description `None` leaves the theme untouched. `0` clears it back to `NULL`, so the
+             *     form renders with the workspace default theme again — the id-shaped
+             *     counterpart of a blank `display_name` (ids start at 1, so `0` never
+             *     names a real theme).
+             */
+            theme_id?: number | null;
         };
         /**
          * @description Partial update. `None` means "leave the field alone". For `email` /
@@ -2008,6 +2149,16 @@ export interface components {
              *     permission set with this list.
              */
             permissions?: components["schemas"]["Permission"][] | null;
+        };
+        /**
+         * @description Partial update. `None` means "leave the field alone"; `settings` replaces
+         *     the whole settings object. `is_default: true` moves the default here;
+         *     `false` on the current default leaves the workspace with no default theme.
+         */
+        UpdateTheme: {
+            is_default?: boolean | null;
+            name?: string | null;
+            settings?: null | components["schemas"]["ThemeSettings"];
         };
         /**
          * @description Partial update. `None` means "leave the field alone". For `display_name`,
@@ -4451,6 +4602,226 @@ export interface operations {
                 content?: never;
             };
             /** @description Submission not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_themes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Themes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeList"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_theme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewTheme"];
+            };
+        };
+        responses: {
+            /** @description Theme created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_theme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Theme id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Theme */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeDto"];
+                };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Theme not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_theme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Theme id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Theme deleted; forms that used it fall back to the default theme */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Theme not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_theme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Theme id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTheme"];
+            };
+        };
+        responses: {
+            /** @description Theme updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThemeDto"];
+                };
+            };
+            /** @description Validation failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Theme not found */
             404: {
                 headers: {
                     [name: string]: unknown;

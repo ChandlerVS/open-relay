@@ -21,6 +21,7 @@ import { api } from "../../../../lib/api/client";
 import { usePermissions } from "../../../../lib/auth/usePermissions";
 import { useStorageConfig } from "../../../../lib/storage/useStorage";
 import { useForm } from "../../../../lib/forms/useForms";
+import { useResolvedFormTheme } from "../../../../lib/formThemes/useThemes";
 import { useUpdateForm } from "../../../../lib/forms/useFormMutations";
 import { useTheme } from "../../../../lib/theme/useTheme";
 import { Canvas } from "./Canvas";
@@ -107,6 +108,9 @@ export function FormBuilderPage() {
 
   const { resolved: theme } = useTheme();
   const { data: form, isLoading } = useForm(valid ? formId : null);
+  // The saved theme as the live embed resolves it (own, else default). Themes
+  // aren't edited in the builder, so the saved value is the right one.
+  const { data: formTheme } = useResolvedFormTheme(valid ? formId : null);
   const update = useUpdateForm();
   // `forms:read` is enough to reach this page — the route guard asks for no
   // more — so the whole builder degrades to read-only rather than 403ing at
@@ -353,8 +357,9 @@ export function FormBuilderPage() {
       // script small. The admin has no such budget and the layout here is
       // unsaved anyway, so just always hand the preview the whole table.
       regions: PACKED_SUBDIVISIONS,
+      theme: formTheme ?? null,
     };
-  }, [form, items]);
+  }, [form, items, formTheme]);
 
   // The grid's breakpoint moves with the preview toggle, and the panels have to
   // follow it exactly — see SIDE_PANEL.
