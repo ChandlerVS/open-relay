@@ -6,6 +6,7 @@ import {
   HardDrive,
   KeyRound,
   LayoutDashboard,
+  Palette,
   Plug,
   Shield,
   Users,
@@ -28,6 +29,7 @@ const ITEMS: NavItem[] = [
   { to: "/forms", label: "Forms", icon: FileText, perm: "forms:read" },
   { to: "/backends", label: "Backends", icon: Plug, perm: "backends:read" },
   { to: "/reps", label: "Sales reps", icon: Contact, perm: "reps:read" },
+  { to: "/themes", label: "Themes", icon: Palette, perm: "themes:read" },
   {
     to: "/submissions",
     label: "Submissions",

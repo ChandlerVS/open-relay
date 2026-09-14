@@ -700,6 +700,68 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test rating_fields -- --ignored
 ```
 
+### Themes: a third variable tier, and the host page still wins
+
+A `theme` row (`crates/core/src/themes/`) is a reusable look — colours, corner
+radius, font family, text size, spacing density — and `form.theme_id` names
+one. Admins manage them at `/themes` (`themes:read|write|delete`). Five things
+aren't obvious from the code:
+
+1. **The renderer reads a theme *beneath* the public tokens, never over
+   them.** Every engine token in `styles.css` is
+   `var(--or-color-accent, var(--or-theme-accent, #111827))`, and
+   `themeStyle` (`packages/form-renderer/src/theme.ts`) sets only the
+   `--or-theme-*` tier, inline on the form root. The obvious alternative —
+   setting `--or-color-*` inline — would beat the host page's `:root` rules,
+   so every embed a customer had already themed by hand would silently change
+   the moment an admin picked a theme. Radius, font, and the two new scales
+   (`--or-font-scale`, `--or-space-scale`, now public tokens too) take the
+   same host → theme → built-in chain via `--or-r` / `--or-fs` / `--or-sp`.
+   The scales multiply the hard-coded rem sizes, so `1` renders exactly what
+   shipped before.
+
+2. **"Default" is resolved on the server.** `resolve_settings` walks own
+   theme → the `is_default` row (`ORDER BY id`, so a race that flagged two
+   still reads deterministically) → `None`, and `get_public_form` puts the
+   result on `PublicFormDto.theme` — the `uploads_enabled` post-projection
+   step, since it needs a read. The renderer never learns what "default"
+   means, and neither does the builder: its preview reads `.theme` off the
+   public endpoint (`useResolvedFormTheme`) rather than repeating the fallback
+   — the opposite of the `display_name` situation, where the admin DTO is
+   enough to rebuild it. One default is kept by the service (`clear_default`
+   inside the write's transaction); MySQL can't express "unique among `true`".
+
+3. **Every member is optional, and one palette covers both modes.** An unset
+   colour falls through to the built-in value for the embed's `data-theme`, so
+   a theme that sets only `accent` still looks right on a dark embed; a theme
+   that sets `text` does not adapt. Defaults are skipped on serialisation (the
+   empty theme is `{}`), and the editor's `canonicalSettings` rebuilds objects
+   in server key order — its dirty check is a `JSON.stringify` comparison.
+   A stored row that fails to parse reads as `{}` with a warning: a theme
+   must never be able to 500 a public form.
+
+4. **Validation is a CSS-injection boundary on both sides, containment-style.**
+   Colours are hex only, a font family is `[A-Za-z0-9 ,'"_-]` with balanced
+   quotes, radius is 0–32. That excludes `url()` (a request from someone
+   else's page), `var()` and `;`. `themes::service::validate_settings` 400s;
+   `themeStyle` re-checks and *drops*. Like rich-text links, only one
+   direction of drift is a bug and the server's set is never the wider one.
+
+5. **`theme_id: 0` is how an update clears it**, the id-shaped version of a
+   blank `display_name` (ids start at 1) — deliberately not `Option<Option<_>>`.
+   Deleting a theme sets its forms back to `NULL` in application code (the
+   `reps::service::delete` pattern; there are no DB foreign keys), so they
+   fall back to the default rather than blocking the delete. An embed bundle
+   cached before themes ignores `theme` and draws the built-in look — the
+   gentlest degradation in this file.
+
+```bash
+pnpm --filter @open-relay/form-renderer test
+
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test themes -- --ignored
+```
+
 ### Builder clipboard: the paste is repaired on the client, because a `layout` write isn't
 
 The builder canvas is multi-select (shift-click for a range, Cmd/Ctrl-click to

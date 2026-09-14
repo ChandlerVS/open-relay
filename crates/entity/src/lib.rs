@@ -39,5 +39,6 @@ pub mod sales_rep;
 pub mod storage_provider;
 pub mod submission;
 pub mod submission_delivery;
+pub mod theme;
 pub mod user;
 pub mod user_role;

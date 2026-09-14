@@ -72,6 +72,7 @@ fn new_form(slug: &str, layout: Vec<FormElement>) -> NewForm {
         source_params: vec![],
         post_submission_action: Default::default(),
         progress_indicator: Default::default(),
+        theme_id: None,
         metadata: None,
     }
 }

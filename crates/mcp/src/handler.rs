@@ -21,6 +21,8 @@
 //!
 //! Permissions are the same `forms:read` / `forms:write` / `forms:delete` the
 //! REST handlers require, resolved live from the owner's roles on every call.
+//! `list_themes` is the one read outside `forms`, and needs `themes:read`: an
+//! agent can't set a form's `theme_id` without a way to discover valid ids.
 
 use open_relay_core::api_keys::ApiActor;
 use open_relay_core::backend::BackendRegistry;
@@ -673,6 +675,25 @@ impl OpenRelayMcp {
     }
 
     #[tool(
+        description = "List the themes a form can be given, with their settings. Give a form a \
+                       theme by passing its `id` as `theme_id` to `update_form`; `theme_id: 0` \
+                       returns the form to the workspace default (the theme with \
+                       `is_default: true`, or the built-in look when there is none).",
+        input_schema = schema::object(vec![], &[])
+    )]
+    async fn list_themes(
+        &self,
+        Parameters(_): Parameters<NoParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        self.authorize(&ctx, Permission::ThemesRead)?;
+        let list = open_relay_core::themes::service::list(&self.db)
+            .await
+            .map_err(to_mcp_error)?;
+        ok_json(&list)
+    }
+
+    #[tool(
         description = "The JSON Schema for every layout element type, plus the form create/update \
                        shapes. Read this before building a layout.",
         input_schema = schema::object(vec![], &[])
@@ -797,6 +818,7 @@ mod tests {
                 "describe_form_schema",
                 "get_form",
                 "list_forms",
+                "list_themes",
                 "move_element",
                 "remove_element",
                 "set_post_submission_action",

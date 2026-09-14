@@ -989,6 +989,10 @@ pub struct NewForm {
     /// percentage. Ignored by single-page forms.
     #[serde(default)]
     pub progress_indicator: ProgressIndicator,
+    /// The theme this form renders with, by [`crate::themes`] id. Omitted or
+    /// `0` means the workspace default theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_id: Option<i32>,
     /// Per-form metadata toggles (e.g. email deduplication). Each entry is
     /// upserted on create; omit (or send an empty list) to leave metadata
     /// unset. See [`crate::metadata`].
@@ -1023,6 +1027,9 @@ pub struct FormDto {
     pub post_submission_action: PostSubmissionAction,
     /// How a multi-step form shows progress.
     pub progress_indicator: ProgressIndicator,
+    /// The theme this form names, as stored. `None` means it renders with the
+    /// workspace default theme (or the built-in look when there is none).
+    pub theme_id: Option<i32>,
     /// Per-form metadata toggles (e.g. email deduplication). See
     /// [`crate::metadata`].
     pub metadata: Vec<MetadataEntry>,
@@ -1072,6 +1079,12 @@ pub struct UpdateForm {
     /// (a bar with its percentage) resets the column to `NULL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_indicator: Option<ProgressIndicator>,
+    /// `None` leaves the theme untouched. `0` clears it back to `NULL`, so the
+    /// form renders with the workspace default theme again — the id-shaped
+    /// counterpart of a blank `display_name` (ids start at 1, so `0` never
+    /// names a real theme).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_id: Option<i32>,
     /// `None` leaves metadata untouched. `Some` upserts each entry (so an
     /// explicit `email_deduplication = false` turns the toggle off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1145,6 +1158,13 @@ pub struct PublicFormDto {
     /// majority of forms, and absent for a bundle talking to an older server.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub uploads_enabled: bool,
+    /// The look to render with: the form's own theme, else the workspace
+    /// default, else absent (the built-in look). Resolved on the server so the
+    /// renderer never has to know what "default" means; like `uploads_enabled`
+    /// it needs a database read, so the caller fills it in. A bundle too old to
+    /// know the field ignores it and draws the built-in look.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<crate::themes::ThemeSettings>,
 }
 
 /// A ready-to-paste embed snippet for a form, returned to admins so they can

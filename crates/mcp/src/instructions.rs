@@ -57,6 +57,12 @@ EDITING
   `update_form` with a `layout` REPLACES the layout entirely. Read the form
   first if you mean to preserve what is there.
 
+THEMES
+  A form's look (colours, corner radius, font, density) comes from a theme.
+  Call `list_themes` for the ids, then `update_form` with `theme_id`. Send
+  `theme_id: 0` to return a form to the workspace default. Themes themselves
+  are managed in the admin UI, not over MCP.
+
 COMPATIBILITY
   Forms are embedded on third-party pages by a cached script that may predate
   a feature. An old bundle renders `rich_text` and `file` fields as NOTHING,

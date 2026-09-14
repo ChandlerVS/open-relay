@@ -102,6 +102,7 @@ async fn saving_a_layout_keeps_the_legacy_columns_in_step() {
             source_params: vec![],
             post_submission_action: Default::default(),
             progress_indicator: Default::default(),
+            theme_id: None,
             metadata: None,
         },
     )

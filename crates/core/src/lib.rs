@@ -31,4 +31,5 @@ pub mod setup;
 pub mod storage;
 pub mod storage_config;
 pub mod submissions;
+pub mod themes;
 pub mod users;

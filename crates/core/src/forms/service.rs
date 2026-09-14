@@ -557,6 +557,19 @@ pub fn progress_indicator_from_model(m: &entity::form::Model) -> CoreResult<Prog
 /// or instance ids that don't resolve to a `backend_instance` row of the
 /// matching kind. Configurable kinds *must* carry an `instance_id`; static
 /// kinds *must not*.
+/// `None` and `0` both mean "the workspace default" and store `NULL`; any other
+/// id must name an existing theme.
+async fn validate_theme_id<C: ConnectionTrait>(
+    conn: &C,
+    theme_id: Option<i32>,
+) -> CoreResult<Option<i32>> {
+    match theme_id {
+        None | Some(0) => Ok(None),
+        Some(id) if id > 0 && crate::themes::service::exists(conn, id).await? => Ok(Some(id)),
+        Some(id) => Err(CoreError::BadRequest(format!("theme {id} not found"))),
+    }
+}
+
 pub async fn validate_backends<C: ConnectionTrait>(
     conn: &C,
     bindings: &[BackendBinding],
@@ -1474,6 +1487,7 @@ pub async fn dto_from_model<C: ConnectionTrait>(
         source_params,
         post_submission_action,
         progress_indicator,
+        theme_id: m.theme_id,
         metadata,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -1481,6 +1495,9 @@ pub async fn dto_from_model<C: ConnectionTrait>(
 }
 
 /// Build the public schema an embedded form renders from.
+///
+/// `theme` is left `None` here and resolved by the caller with
+/// [`crate::themes::service::resolve_settings`], for the same reason as below.
 ///
 /// `uploads_enabled` is left `false` here and set by the caller: it depends on
 /// deployment-wide state (is a storage provider configured?) that this pure
@@ -1510,6 +1527,7 @@ pub fn public_dto_from_model(m: entity::form::Model) -> CoreResult<PublicFormDto
         progress_indicator,
         regions,
         uploads_enabled: false,
+        theme: None,
     })
 }
 
@@ -1603,6 +1621,7 @@ pub async fn create_form<C: ConnectionTrait>(
     let reps = validate_reps(conn, &input.reps).await?;
     let source_params = validate_source_params(&input.source_params)?;
     let post_submission_action = validate_post_submission_action(&input.post_submission_action)?;
+    let theme_id = validate_theme_id(conn, input.theme_id).await?;
 
     let model = entity::form::ActiveModel {
         owner_id: ActiveValue::Set(owner_id),
@@ -1640,6 +1659,7 @@ pub async fn create_form<C: ConnectionTrait>(
                 Some(json_or_internal(&input.progress_indicator)?)
             },
         ),
+        theme_id: ActiveValue::Set(theme_id),
         ..Default::default()
     };
     let inserted = model.insert(conn).await?;
@@ -1812,6 +1832,10 @@ pub async fn update_form<C: ConnectionTrait>(
         } else {
             Some(json_or_internal(&p)?)
         });
+    }
+
+    if let Some(theme_id) = input.theme_id {
+        active.theme_id = ActiveValue::Set(validate_theme_id(conn, Some(theme_id)).await?);
     }
 
     let updated = active.update(conn).await?;
