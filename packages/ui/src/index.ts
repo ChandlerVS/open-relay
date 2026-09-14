@@ -54,3 +54,19 @@ export {
 export { ConfirmDialog } from "./components/confirm-dialog";
 export type { ConfirmDialogProps } from "./components/confirm-dialog";
 export { cn } from "./lib/cn";
+export {
+  Sheet,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetBody,
+  SheetFooter,
+  SheetTitle,
+  SheetDescription,
+} from "./components/sheet";
+export type { SheetContentProps } from "./components/sheet";
+export { Checkbox } from "./components/checkbox";
+export type { CheckboxProps } from "./components/checkbox";
+export { NativeSelect } from "./components/native-select";
+export type { NativeSelectProps } from "./components/native-select";

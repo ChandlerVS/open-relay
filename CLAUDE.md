@@ -820,6 +820,47 @@ Positions are renumbered on every block write (`renumberPositions`), mirroring
 `position` values, the dirty check never re-converges with what the server sends
 back, and the form reads as edited forever after a successful save.
 
+### Submissions list: one filter builder, and CSV cells are defused
+
+The admin list (`GET /submissions`) and the CSV export (`GET /submissions/export`)
+take the same filters — `q`, `form_id`, `status`, `sales_rep_id`, `duplicate`,
+`from`, `to`, `sort` — and four things aren't obvious from the code:
+
+1. **Both lower into one `SubmissionFilter` and one `filtered_select`.** The query
+   structs repeat the filter fields rather than sharing them through
+   `serde(flatten)`, because flatten buffers query values as strings and breaks
+   every numeric field under `serde_urlencoded`. Duplicating the *declarations* is
+   fine; duplicating the *query* is not — an export must return exactly the rows
+   the table showed. The export pages by keyset, not offset, so a submission
+   arriving mid-export can't duplicate a row.
+2. **Search is AND-of-terms, OR-of-columns.** Each whitespace term must match one
+   of the typed columns, `LOWER(CAST(custom_data AS CHAR))`, or (numeric, `#` optional)
+   the id — which is how "jane acme" finds Jane at Acme. `escape_like` is load-bearing:
+   without it `50%` matches `500 off`. The `LOWER` is too: a JSON cast carries a
+   binary collation, so it is case-sensitive where the typed columns aren't.
+   Every search is a full scan; fine at admin scale, and the reason for the caps
+   (`MAX_SEARCH_LEN`, `MAX_SEARCH_TERMS`).
+3. **`status` means "has *any* delivery in the set"**, so a submission that failed
+   on one backend and succeeded on another shows under both Failed and Delivered.
+   `to` is exclusive and the admin computes both bounds from local calendar dates
+   in the *browser's* timezone (`lib/submissions/filters.ts`) — the server only
+   ever sees instants.
+4. **`csv_field`'s formula guard is a security boundary.** Submission values are
+   written by anonymous visitors and the file is opened in a spreadsheet, so a
+   cell starting `=`, `+`, `-`, `@`, tab or CR gets a leading `'`. That means a
+   phone number like `+1 555…` exports as `'+1 555…`; don't narrow the guard to
+   "looks like a formula". The export is built in memory and refused past
+   `MAX_EXPORT_ROWS` (50 000) with a 400 telling the admin to narrow the filters.
+
+The admin keeps every piece of view state in the URL, including the open detail
+sheet (`?submission=ID`), so a filtered view survives a reload and can be shared.
+`form_id` predates the rest and is what the dashboard links to — keep the name.
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test submission_filters -- --ignored
+```
+
 ### GoHighLevel custom fields are matched by id, not by the key you configured
 
 The admin sets an OpenRelay custom field's `key` to name the GHL field it

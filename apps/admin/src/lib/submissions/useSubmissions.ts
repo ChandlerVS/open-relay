@@ -1,33 +1,29 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { components } from "@open-relay/api-client";
 import { api } from "../api/client";
 import { throwApiError } from "../api/errors";
+import type { ListApiQuery } from "./filters";
 
 export type SubmissionDto = components["schemas"]["SubmissionDto"];
 export type SubmissionList = components["schemas"]["SubmissionList"];
 export type SubmissionDeliveryDto = components["schemas"]["SubmissionDeliveryDto"];
 
-export interface SubmissionsListParams {
-  formId?: number;
-  limit?: number;
-  offset?: number;
-}
-
-export function useSubmissionsList(params: SubmissionsListParams = {}) {
-  const { formId, limit, offset } = params;
+/**
+ * One page of submissions for `query` (build it with `toListQuery`). The
+ * previous page stays on screen while the next loads, so paging and typing in
+ * the search box dim the table instead of flashing skeleton rows.
+ */
+export function useSubmissionsList(query: ListApiQuery) {
   return useQuery<SubmissionList>({
-    queryKey: ["submissions", "list", { formId, limit, offset }],
+    queryKey: ["submissions", "list", query],
     queryFn: async () => {
-      const query: Record<string, number> = {};
-      if (typeof formId === "number") query.form_id = formId;
-      if (typeof limit === "number") query.limit = limit;
-      if (typeof offset === "number") query.offset = offset;
       const { data, error, response } = await api.client.GET("/submissions", {
         params: { query },
       });
       if (data) return data;
       throwApiError(error, response, "Failed to load submissions.");
     },
+    placeholderData: keepPreviousData,
     staleTime: 10_000,
   });
 }

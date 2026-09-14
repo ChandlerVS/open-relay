@@ -641,6 +641,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/submissions/bulk-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["bulk_delete_submissions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/submissions/deliveries/retry": {
         parameters: {
             query?: never;
@@ -651,6 +667,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["retry_deliveries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/submissions/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["export_submissions"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -880,6 +912,17 @@ export interface components {
              */
             configurable: boolean;
             kind: string;
+        };
+        /** @description Request body for deleting several submissions at once. */
+        BulkDeleteRequest: {
+            ids: number[];
+        };
+        BulkDeleteResponse: {
+            /**
+             * Format: int64
+             * @description Submissions actually removed. Ids that no longer exist aren't counted.
+             */
+            deleted: number;
         };
         /**
          * @description Self-service password change. Requires proof of the current password and
@@ -4451,7 +4494,26 @@ export interface operations {
     list_submissions: {
         parameters: {
             query?: {
+                /**
+                 * @description Free-text search. Whitespace-separated terms must all match; each term
+                 *     matches the name, email, phone, company, job title, city and message
+                 *     columns, any custom field value, or (when numeric) the submission id.
+                 */
+                q?: string;
                 form_id?: number;
+                /**
+                 * @description Comma-separated delivery statuses. Matches a submission with *any*
+                 *     delivery in the set.
+                 */
+                status?: string;
+                sales_rep_id?: number;
+                /** @description `true` returns only duplicates, `false` excludes them. */
+                duplicate?: boolean;
+                /** @description Inclusive lower bound on `created_at`. */
+                from?: string;
+                /** @description Exclusive upper bound on `created_at`. */
+                to?: string;
+                sort?: "newest" | "oldest";
                 limit?: number;
                 offset?: number;
             };
@@ -4469,6 +4531,51 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SubmissionList"];
                 };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    bulk_delete_submissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Submissions deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteResponse"];
+                };
+            };
+            /** @description Too many ids */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or invalid token */
             401: {
@@ -4507,6 +4614,56 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RetryDeliveriesResponse"];
                 };
+            };
+            /** @description Missing or invalid token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Insufficient permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    export_submissions: {
+        parameters: {
+            query?: {
+                q?: string;
+                form_id?: number;
+                status?: string;
+                sales_rep_id?: number;
+                duplicate?: boolean;
+                from?: string;
+                to?: string;
+                sort?: "newest" | "oldest";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matching submissions as CSV */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description Invalid filter, or too many matching submissions */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or invalid token */
             401: {

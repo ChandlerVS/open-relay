@@ -2115,12 +2115,81 @@
         "operationId": "list_submissions",
         "parameters": [
           {
+            "name": "q",
+            "in": "query",
+            "description": "Free-text search. Whitespace-separated terms must all match; each term\nmatches the name, email, phone, company, job title, city and message\ncolumns, any custom field value, or (when numeric) the submission id.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "form_id",
             "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
               "format": "int32"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Comma-separated delivery statuses. Matches a submission with *any*\ndelivery in the set.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sales_rep_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "duplicate",
+            "in": "query",
+            "description": "`true` returns only duplicates, `false` excludes them.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive lower bound on `created_at`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive upper bound on `created_at`.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Result ordering for the admin list and CSV export. Ids are monotonic with\n`created_at`, so both orders sort on the primary key.",
+              "enum": [
+                "newest",
+                "oldest"
+              ]
             }
           },
           {
@@ -2169,6 +2238,50 @@
         ]
       }
     },
+    "/submissions/bulk-delete": {
+      "post": {
+        "tags": [
+          "submissions"
+        ],
+        "operationId": "bulk_delete_submissions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Submissions deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Too many ids"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/submissions/deliveries/retry": {
       "post": {
         "tags": [
@@ -2195,6 +2308,115 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/submissions/export": {
+      "get": {
+        "tags": [
+          "submissions"
+        ],
+        "operationId": "export_submissions",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "form_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sales_rep_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "duplicate",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Result ordering for the admin list and CSV export. Ids are monotonic with\n`created_at`, so both orders sort on the primary key.",
+              "enum": [
+                "newest",
+                "oldest"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching submissions as CSV",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter, or too many matching submissions"
           },
           "401": {
             "description": "Missing or invalid token"
@@ -3040,6 +3262,36 @@
           },
           "kind": {
             "type": "string"
+          }
+        }
+      },
+      "BulkDeleteRequest": {
+        "type": "object",
+        "description": "Request body for deleting several submissions at once.",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        }
+      },
+      "BulkDeleteResponse": {
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Submissions actually removed. Ids that no longer exist aren't counted.",
+            "minimum": 0
           }
         }
       },

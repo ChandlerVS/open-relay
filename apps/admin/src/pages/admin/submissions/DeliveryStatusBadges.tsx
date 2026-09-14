@@ -41,6 +41,21 @@ export function DuplicateBadge() {
   );
 }
 
+/// A single delivery's status, without the backend-name prefix — for places
+/// that already print the backend beside it.
+export function DeliveryStatusChip({ status }: { status: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+        STATUS_CLASS[status] ?? "bg-muted text-muted-foreground",
+      )}
+    >
+      {STATUS_LABEL[status] ?? status}
+    </span>
+  );
+}
+
 interface Props {
   deliveries: SubmissionDeliveryDto[];
   /// When true, retryable chips become selection toggles.
