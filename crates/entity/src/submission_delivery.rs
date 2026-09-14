@@ -38,6 +38,8 @@ pub struct Model {
     /// and dispatches to the built instance.
     pub backend_instance_id: Option<i32>,
     /// One of: `pending`, `in_progress`, `succeeded`, `permanent_failure`, `exhausted`.
+    /// Indexed for the admin list's delivery-status filter.
+    #[sea_orm(indexed)]
     pub status: String,
     pub attempts: i32,
     #[sea_orm(indexed)]

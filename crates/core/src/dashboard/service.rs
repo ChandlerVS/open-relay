@@ -147,7 +147,7 @@ async fn recent_submissions<C: ConnectionTrait>(conn: &C) -> CoreResult<Vec<Rece
 
 /// Batch-fetch `id → name` for the given form ids. Tolerates duplicate/empty
 /// input; missing ids simply don't appear in the map.
-async fn form_names<C: ConnectionTrait>(
+pub(crate) async fn form_names<C: ConnectionTrait>(
     conn: &C,
     form_ids: &[i32],
 ) -> CoreResult<HashMap<i32, String>> {
