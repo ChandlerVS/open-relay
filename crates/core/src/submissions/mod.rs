@@ -102,15 +102,135 @@ pub struct SubmissionDto {
     pub deliveries: Vec<SubmissionDeliveryDto>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
+/// Result ordering for the admin list and CSV export. Ids are monotonic with
+/// `created_at`, so both orders sort on the primary key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionSort {
+    #[default]
+    Newest,
+    Oldest,
+}
+
+/// Admin list query. The filter fields are repeated verbatim on
+/// [`ExportQuery`] rather than shared through `serde(flatten)`: flatten
+/// buffers query values as strings, which breaks every numeric field under
+/// `serde_urlencoded`. Both lower into one [`SubmissionFilter`], which is the
+/// only thing the query builder sees — so a list and an export over the same
+/// params can never disagree.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListQuery {
+    /// Free-text search. Whitespace-separated terms must all match; each term
+    /// matches the name, email, phone, company, job title, city and message
+    /// columns, any custom field value, or (when numeric) the submission id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub form_id: Option<i32>,
+    /// Comma-separated delivery statuses. Matches a submission with *any*
+    /// delivery in the set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sales_rep_id: Option<i32>,
+    /// `true` returns only duplicates, `false` excludes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate: Option<bool>,
+    /// Inclusive lower bound on `created_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    /// Exclusive upper bound on `created_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(inline)]
+    pub sort: Option<SubmissionSort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
+}
+
+/// CSV export query — [`ListQuery`]'s filters, without paging.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ExportQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form_id: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sales_rep_id: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(inline)]
+    pub sort: Option<SubmissionSort>,
+}
+
+/// Validated, framework-free filter both [`ListQuery`] and [`ExportQuery`]
+/// lower into. Build one with [`ListQuery::filter`] / [`ExportQuery::filter`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SubmissionFilter {
+    /// Search terms, already split and bounded.
+    pub terms: Vec<String>,
+    pub form_id: Option<i32>,
+    /// Validated delivery statuses; empty means "any".
+    pub statuses: Vec<&'static str>,
+    pub sales_rep_id: Option<i32>,
+    pub duplicate: Option<bool>,
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+    pub sort: SubmissionSort,
+}
+
+impl ListQuery {
+    pub fn filter(&self) -> crate::error::CoreResult<SubmissionFilter> {
+        service::build_filter(service::RawFilter {
+            q: self.q.as_deref(),
+            form_id: self.form_id,
+            status: self.status.as_deref(),
+            sales_rep_id: self.sales_rep_id,
+            duplicate: self.duplicate,
+            from: self.from,
+            to: self.to,
+            sort: self.sort,
+        })
+    }
+}
+
+impl ExportQuery {
+    pub fn filter(&self) -> crate::error::CoreResult<SubmissionFilter> {
+        service::build_filter(service::RawFilter {
+            q: self.q.as_deref(),
+            form_id: self.form_id,
+            status: self.status.as_deref(),
+            sales_rep_id: self.sales_rep_id,
+            duplicate: self.duplicate,
+            from: self.from,
+            to: self.to,
+            sort: self.sort,
+        })
+    }
+}
+
+/// Request body for deleting several submissions at once.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct BulkDeleteRequest {
+    pub ids: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BulkDeleteResponse {
+    /// Submissions actually removed. Ids that no longer exist aren't counted.
+    pub deleted: u64,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

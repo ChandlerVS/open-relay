@@ -10,16 +10,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use chrono::Utc;
+use chrono::{DateTime, SecondsFormat, Utc};
+use sea_orm::sea_query::{Expr, Query};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Select,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::{
     ListQuery, NewSubmissionPayload, RetryDeliveriesRequest, RetryDeliveriesResponse,
-    SubmissionDeliveryDto, SubmissionDto, SubmissionList,
+    SubmissionDeliveryDto, SubmissionDto, SubmissionFilter, SubmissionList, SubmissionSort,
 };
 use crate::error::{CoreError, CoreResult};
 use crate::forms::{
@@ -34,6 +35,13 @@ use crate::storage_config;
 
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const MAX_LIST_LIMIT: u32 = 200;
+const MAX_SEARCH_LEN: usize = 200;
+const MAX_SEARCH_TERMS: usize = 5;
+const MAX_BULK_DELETE: usize = 500;
+/// Hard ceiling on one CSV export. The file is built in memory, so this bounds
+/// the server's peak allocation; past it the admin narrows the filters.
+pub const MAX_EXPORT_ROWS: u64 = 50_000;
+const EXPORT_BATCH: u64 = 1_000;
 /// Hidden anti-bot field the renderer includes off-screen. A real user never
 /// fills it; a non-empty value means a bot, so we reject. Kept generic in the
 /// error so a bot can't learn the field name from the response.
@@ -783,18 +791,184 @@ pub async fn find_by_id<C: ConnectionTrait>(
     Ok(entity::submission::Entity::find_by_id(id).one(conn).await?)
 }
 
+/// Borrowed, unvalidated filter params — what [`ListQuery`] and
+/// [`ExportQuery`](super::ExportQuery) hand to [`build_filter`].
+pub struct RawFilter<'a> {
+    pub q: Option<&'a str>,
+    pub form_id: Option<i32>,
+    pub status: Option<&'a str>,
+    pub sales_rep_id: Option<i32>,
+    pub duplicate: Option<bool>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub sort: Option<SubmissionSort>,
+}
+
+const ALL_STATUSES: [&str; 5] = [
+    STATUS_PENDING,
+    STATUS_IN_PROGRESS,
+    STATUS_SUCCEEDED,
+    STATUS_PERMANENT_FAILURE,
+    STATUS_EXHAUSTED,
+];
+
+pub fn build_filter(raw: RawFilter<'_>) -> CoreResult<SubmissionFilter> {
+    let q = raw.q.unwrap_or("").trim();
+    if q.chars().count() > MAX_SEARCH_LEN {
+        return Err(CoreError::BadRequest(format!(
+            "search must be at most {MAX_SEARCH_LEN} characters"
+        )));
+    }
+    if let (Some(from), Some(to)) = (raw.from, raw.to)
+        && from > to
+    {
+        return Err(CoreError::BadRequest("`from` must not be after `to`".into()));
+    }
+    Ok(SubmissionFilter {
+        terms: search_terms(q),
+        form_id: raw.form_id,
+        statuses: parse_statuses(raw.status.unwrap_or(""))?,
+        sales_rep_id: raw.sales_rep_id,
+        duplicate: raw.duplicate,
+        from: raw.from,
+        to: raw.to,
+        sort: raw.sort.unwrap_or_default(),
+    })
+}
+
+/// Split a search string into at most [`MAX_SEARCH_TERMS`] distinct terms.
+/// Every term must match (somewhere), which is what lets "jane acme" find
+/// Jane at Acme even though the two words live in different columns.
+fn search_terms(q: &str) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+    for term in q.split_whitespace() {
+        if terms.len() == MAX_SEARCH_TERMS {
+            break;
+        }
+        let term = term.to_string();
+        if !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+    terms
+}
+
+fn parse_statuses(raw: &str) -> CoreResult<Vec<&'static str>> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for part in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let Some(status) = ALL_STATUSES.iter().find(|s| **s == part) else {
+            return Err(CoreError::BadRequest(format!(
+                "unknown delivery status `{part}`"
+            )));
+        };
+        if !out.contains(status) {
+            out.push(status);
+        }
+    }
+    Ok(out)
+}
+
+/// Escape `LIKE` metacharacters so a search for `50%` is literal. MySQL's
+/// default `LIKE` escape character is the backslash, so it escapes itself too.
+fn escape_like(term: &str) -> String {
+    let mut out = String::with_capacity(term.len());
+    for c in term.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The one query builder behind both the list and the CSV export. Ordering is
+/// applied here too, so an export comes out in the order the table showed.
+fn filtered_select(f: &SubmissionFilter) -> Select<entity::submission::Entity> {
+    use entity::submission::Column as C;
+
+    let mut select = entity::submission::Entity::find();
+    for term in &f.terms {
+        let pattern = format!("%{}%", escape_like(term));
+        let mut any = Condition::any();
+        for col in [
+            C::FirstName,
+            C::LastName,
+            C::Email,
+            C::Phone,
+            C::Company,
+            C::JobTitle,
+            C::City,
+            C::Message,
+        ] {
+            any = any.add(col.like(pattern.clone()));
+        }
+        // `CAST(json AS CHAR)` carries the JSON's binary collation, so it is
+        // case-sensitive where the typed columns aren't; fold both sides.
+        any = any.add(Expr::cust_with_values(
+            "LOWER(CAST(`submission`.`custom_data` AS CHAR)) LIKE ?",
+            [pattern.to_lowercase()],
+        ));
+        if let Ok(id) = term.trim_start_matches('#').parse::<i32>() {
+            any = any.add(C::Id.eq(id));
+        }
+        select = select.filter(any);
+    }
+    if let Some(form_id) = f.form_id {
+        select = select.filter(C::FormId.eq(form_id));
+    }
+    if !f.statuses.is_empty() {
+        let delivered = Query::select()
+            .column(entity::submission_delivery::Column::SubmissionId)
+            .from(entity::submission_delivery::Entity)
+            .and_where(
+                entity::submission_delivery::Column::Status
+                    .is_in(f.statuses.iter().copied()),
+            )
+            .to_owned();
+        select = select.filter(C::Id.in_subquery(delivered));
+    }
+    if let Some(rep) = f.sales_rep_id {
+        select = select.filter(C::SalesRepId.eq(rep));
+    }
+    match f.duplicate {
+        Some(true) => select = select.filter(C::IsDuplicate.eq(true)),
+        // `NULL` means "not a duplicate" on rows written before the column.
+        Some(false) => {
+            select = select.filter(
+                Condition::any()
+                    .add(C::IsDuplicate.is_null())
+                    .add(C::IsDuplicate.eq(false)),
+            )
+        }
+        None => {}
+    }
+    if let Some(from) = f.from {
+        select = select.filter(C::CreatedAt.gte(from));
+    }
+    if let Some(to) = f.to {
+        select = select.filter(C::CreatedAt.lt(to));
+    }
+    select
+}
+
+fn apply_sort(
+    select: Select<entity::submission::Entity>,
+    sort: SubmissionSort,
+) -> Select<entity::submission::Entity> {
+    match sort {
+        SubmissionSort::Newest => select.order_by_desc(entity::submission::Column::Id),
+        SubmissionSort::Oldest => select.order_by_asc(entity::submission::Column::Id),
+    }
+}
+
 pub async fn list<C: ConnectionTrait>(conn: &C, q: &ListQuery) -> CoreResult<SubmissionList> {
     let limit = q.limit.unwrap_or(DEFAULT_LIST_LIMIT).clamp(1, MAX_LIST_LIMIT);
     let offset = q.offset.unwrap_or(0);
+    let filter = q.filter()?;
 
-    let mut select = entity::submission::Entity::find();
-    if let Some(form_id) = q.form_id {
-        select = select.filter(entity::submission::Column::FormId.eq(form_id));
-    }
+    let select = filtered_select(&filter);
 
-    let rows = select
-        .clone()
-        .order_by_desc(entity::submission::Column::Id)
+    let rows = apply_sort(select.clone(), filter.sort)
         .limit(limit as u64)
         .offset(offset as u64)
         .all(conn)
@@ -980,6 +1154,215 @@ pub async fn delete_submission<C: ConnectionTrait>(conn: &C, id: i32) -> CoreRes
         return Err(CoreError::NotFound("submission not found".into()));
     }
     Ok(())
+}
+
+/// Delete several submissions and their delivery rows. Returns how many
+/// submissions were removed — ids that no longer exist are simply not
+/// counted, so a double-submitted bulk delete isn't an error. MUST be called
+/// inside a transaction so the delivery rows can't outlive a failed delete.
+pub async fn delete_submissions<C: ConnectionTrait>(conn: &C, ids: &[i32]) -> CoreResult<u64> {
+    if ids.len() > MAX_BULK_DELETE {
+        return Err(CoreError::BadRequest(format!(
+            "at most {MAX_BULK_DELETE} submissions can be deleted at once"
+        )));
+    }
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    entity::submission_delivery::Entity::delete_many()
+        .filter(entity::submission_delivery::Column::SubmissionId.is_in(ids.to_vec()))
+        .exec(conn)
+        .await?;
+    let res = entity::submission::Entity::delete_many()
+        .filter(entity::submission::Column::Id.is_in(ids.to_vec()))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected)
+}
+
+/// Render every submission matching `f` as CSV, in the filter's sort order.
+///
+/// Columns: fixed metadata, the standard fields in [`STANDARD_FIELD_KEYS`]
+/// order, attribution + delivery summary, then one column per `custom_data`
+/// key in first-seen order. Every cell goes through [`csv_field`], whose
+/// formula guard is a security boundary: submission values are written by
+/// anonymous visitors and this file is opened in a spreadsheet.
+pub async fn export_csv<C: ConnectionTrait>(conn: &C, f: &SubmissionFilter) -> CoreResult<String> {
+    let total = filtered_select(f).count(conn).await?;
+    if total > MAX_EXPORT_ROWS {
+        return Err(CoreError::BadRequest(format!(
+            "{total} submissions match; an export is limited to {MAX_EXPORT_ROWS}. Narrow the filters and try again."
+        )));
+    }
+
+    // Keyset rather than offset paging: a submission accepted mid-export would
+    // otherwise shift every later page by one and duplicate a row.
+    let mut rows: Vec<entity::submission::Model> = Vec::with_capacity(total as usize);
+    let mut delivery_summary: HashMap<i32, String> = HashMap::new();
+    let mut cursor: Option<i32> = None;
+    loop {
+        let mut select = filtered_select(f);
+        if let Some(last) = cursor {
+            select = select.filter(match f.sort {
+                SubmissionSort::Newest => entity::submission::Column::Id.lt(last),
+                SubmissionSort::Oldest => entity::submission::Column::Id.gt(last),
+            });
+        }
+        let batch = apply_sort(select, f.sort)
+            .limit(EXPORT_BATCH)
+            .all(conn)
+            .await?;
+        let Some(last) = batch.last() else { break };
+        cursor = Some(last.id);
+        let ids: Vec<i32> = batch.iter().map(|r| r.id).collect();
+        for (id, deliveries) in load_deliveries_for(conn, &ids).await? {
+            let summary = deliveries
+                .iter()
+                .map(|d| format!("{}: {}", d.backend_name, d.status))
+                .collect::<Vec<_>>()
+                .join("; ");
+            delivery_summary.insert(id, summary);
+        }
+        let short = (batch.len() as u64) < EXPORT_BATCH;
+        rows.extend(batch);
+        if short || rows.len() as u64 >= MAX_EXPORT_ROWS {
+            break;
+        }
+    }
+    rows.truncate(MAX_EXPORT_ROWS as usize);
+
+    let mut form_ids: Vec<i32> = rows.iter().map(|r| r.form_id).collect();
+    form_ids.sort_unstable();
+    form_ids.dedup();
+    let form_names = crate::dashboard::service::form_names(conn, &form_ids).await?;
+
+    let mut rep_ids: Vec<i32> = rows.iter().filter_map(|r| r.sales_rep_id).collect();
+    rep_ids.sort_unstable();
+    rep_ids.dedup();
+    let rep_names: HashMap<i32, String> = reps_service::list_by_ids(conn, &rep_ids)
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.name))
+        .collect();
+
+    let mut custom_keys: Vec<String> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for r in &rows {
+        if let JsonValue::Object(custom) = &r.custom_data {
+            for k in custom.keys() {
+                if seen.insert(k.as_str()) {
+                    custom_keys.push(k.clone());
+                }
+            }
+        }
+    }
+
+    // A BOM so Excel reads the file as UTF-8 rather than the system codepage.
+    let mut out = String::from("\u{feff}");
+    let header = ["id", "received_at", "form_id", "form_name"]
+        .into_iter()
+        .chain(STANDARD_FIELD_KEYS.iter().copied())
+        .chain(["sales_rep", "is_duplicate", "delivery_status", "source_params"])
+        .chain(custom_keys.iter().map(String::as_str));
+    write_csv_row(&mut out, header);
+
+    for r in &rows {
+        let mut cells: Vec<String> = Vec::with_capacity(8 + STANDARD_FIELD_KEYS.len() + custom_keys.len());
+        cells.push(r.id.to_string());
+        cells.push(r.created_at.to_rfc3339_opts(SecondsFormat::Secs, true));
+        cells.push(r.form_id.to_string());
+        cells.push(form_names.get(&r.form_id).cloned().unwrap_or_default());
+        for key in STANDARD_FIELD_KEYS {
+            cells.push(standard_value(r, key).unwrap_or_default().to_string());
+        }
+        cells.push(
+            r.sales_rep_id
+                .and_then(|id| rep_names.get(&id).cloned())
+                .unwrap_or_default(),
+        );
+        cells.push(r.is_duplicate.unwrap_or(false).to_string());
+        cells.push(delivery_summary.remove(&r.id).unwrap_or_default());
+        cells.push(r.source_params.as_ref().map(JsonValue::to_string).unwrap_or_default());
+        let custom = r.custom_data.as_object();
+        for key in &custom_keys {
+            cells.push(match custom.and_then(|c| c.get(key)) {
+                None | Some(JsonValue::Null) => String::new(),
+                Some(JsonValue::String(s)) => s.clone(),
+                Some(other) => other.to_string(),
+            });
+        }
+        write_csv_row(&mut out, cells.iter().map(String::as_str));
+    }
+    Ok(out)
+}
+
+/// Download name for [`export_csv`]'s output, dated in UTC.
+pub fn export_filename() -> String {
+    format!("submissions-{}.csv", Utc::now().format("%Y%m%d"))
+}
+
+fn standard_value<'a>(m: &'a entity::submission::Model, key: &str) -> Option<&'a str> {
+    let v = match key {
+        "first_name" => &m.first_name,
+        "last_name" => &m.last_name,
+        "email" => &m.email,
+        "phone" => &m.phone,
+        "company" => &m.company,
+        "job_title" => &m.job_title,
+        "website" => &m.website,
+        "message" => &m.message,
+        "address_line_1" => &m.address_line_1,
+        "address_line_2" => &m.address_line_2,
+        "city" => &m.city,
+        "state" => &m.state,
+        "postal_code" => &m.postal_code,
+        "country" => &m.country,
+        _ => return None,
+    };
+    v.as_deref()
+}
+
+fn write_csv_row<'a>(out: &mut String, cells: impl Iterator<Item = &'a str>) {
+    for (i, cell) in cells.enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&csv_field(cell));
+    }
+    out.push_str("\r\n");
+}
+
+/// One RFC 4180 cell, defused against spreadsheet formula injection.
+///
+/// A cell starting with `=`, `+`, `-`, `@`, tab or CR is evaluated as a formula
+/// by Excel, Sheets and LibreOffice — `=HYPERLINK(...)` in a "company" field is
+/// a phishing link inside an admin's spreadsheet. Such cells get a leading `'`
+/// (OWASP's recommendation), which does mean a phone number like `+1 555…`
+/// exports as `'+1 555…`. That is the accepted cost; don't narrow the guard to
+/// "looks like a formula".
+fn csv_field(value: &str) -> String {
+    let guarded = matches!(
+        value.chars().next(),
+        Some('=' | '+' | '-' | '@' | '\t' | '\r')
+    );
+    let quoted = value.contains([',', '"', '\r', '\n']);
+    let mut s = String::with_capacity(value.len() + 3);
+    if quoted {
+        s.push('"');
+    }
+    if guarded {
+        s.push('\'');
+    }
+    for c in value.chars() {
+        if c == '"' {
+            s.push('"');
+        }
+        s.push(c);
+    }
+    if quoted {
+        s.push('"');
+    }
+    s
 }
 
 /// Cascade hook for form deletion. Drops every submission tied to `form_id`
@@ -1576,5 +1959,94 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, CoreError::BadRequest(_)));
+    }
+}
+
+#[cfg(test)]
+mod list_filter_tests {
+    use super::*;
+
+    fn raw() -> RawFilter<'static> {
+        RawFilter {
+            q: None,
+            form_id: None,
+            status: None,
+            sales_rep_id: None,
+            duplicate: None,
+            from: None,
+            to: None,
+            sort: None,
+        }
+    }
+
+    #[test]
+    fn like_metacharacters_are_escaped() {
+        assert_eq!(escape_like("50%_off\\"), "50\\%\\_off\\\\");
+        assert_eq!(escape_like("plain"), "plain");
+    }
+
+    #[test]
+    fn search_is_split_deduplicated_and_bounded() {
+        assert_eq!(search_terms("  jane   acme jane "), vec!["jane", "acme"]);
+        assert_eq!(search_terms("a b c d e f g").len(), MAX_SEARCH_TERMS);
+        assert!(search_terms("   ").is_empty());
+    }
+
+    #[test]
+    fn statuses_are_validated() {
+        assert_eq!(
+            parse_statuses("permanent_failure, exhausted,,exhausted").unwrap(),
+            vec![STATUS_PERMANENT_FAILURE, STATUS_EXHAUSTED]
+        );
+        assert!(parse_statuses("").unwrap().is_empty());
+        assert!(matches!(
+            parse_statuses("failed"),
+            Err(CoreError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn filter_rejects_inverted_range_and_long_search() {
+        let now = Utc::now();
+        let inverted = RawFilter {
+            from: Some(now),
+            to: Some(now - chrono::Duration::days(1)),
+            ..raw()
+        };
+        assert!(matches!(build_filter(inverted), Err(CoreError::BadRequest(_))));
+
+        let long = "x".repeat(MAX_SEARCH_LEN + 1);
+        let too_long = RawFilter {
+            q: Some(long.as_str()),
+            ..raw()
+        };
+        assert!(matches!(build_filter(too_long), Err(CoreError::BadRequest(_))));
+
+        let defaults = build_filter(raw()).unwrap();
+        assert_eq!(defaults, SubmissionFilter::default());
+    }
+
+    #[test]
+    fn csv_cells_are_quoted_per_rfc_4180() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field(""), "");
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_field("line\nbreak"), "\"line\nbreak\"");
+    }
+
+    #[test]
+    fn csv_formula_cells_are_defused() {
+        assert_eq!(csv_field("=1+1"), "'=1+1");
+        assert_eq!(csv_field("+1 555 0100"), "'+1 555 0100");
+        assert_eq!(csv_field("-2"), "'-2");
+        assert_eq!(csv_field("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(csv_field("\tx"), "'\tx");
+        assert_eq!(
+            csv_field("=HYPERLINK(\"http://x\",\"y\")"),
+            "\"'=HYPERLINK(\"\"http://x\"\",\"\"y\"\")\""
+        );
+        // Only the first character matters.
+        assert_eq!(csv_field("a=b"), "a=b");
     }
 }

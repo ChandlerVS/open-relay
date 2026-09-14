@@ -61,6 +61,8 @@ pub struct Model {
     /// to populated tables); `NULL` is equivalent to `false`.
     #[sea_orm(nullable)]
     pub is_duplicate: Option<bool>,
+    /// Indexed for the admin list's date-range filter.
+    #[sea_orm(indexed)]
     pub created_at: DateTime<Utc>,
 }
 
