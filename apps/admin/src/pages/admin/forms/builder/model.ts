@@ -144,6 +144,7 @@ export const CUSTOM_FIELD_TYPES = [
   { type: "select", label: "Dropdown" },
   { type: "radio", label: "Radio group" },
   { type: "checkbox", label: "Checkbox" },
+  { type: "checkboxes", label: "Checkboxes" },
   { type: "country", label: "Country" },
   { type: "state", label: "State / province" },
   { type: "file", label: "File upload" },
@@ -163,14 +164,14 @@ export function ratingOptions(max: number | undefined): string[] {
 export type CustomTypeName = (typeof CUSTOM_FIELD_TYPES)[number]["type"];
 
 /**
- * The two types that offer an **author-declared** set of choices.
+ * The types that offer an **author-declared** set of choices.
  *
  * `country` and `state` render dropdowns too, but their choices come from the
  * ISO catalogue, so they have no options editor and no "needs at least one
  * option" rule. Mirrors `CustomFieldType::options` on the server.
  */
 export function hasOptions(type: CustomTypeName): boolean {
-  return type === "select" || type === "radio";
+  return type === "select" || type === "radio" || type === "checkboxes";
 }
 
 /**
@@ -223,6 +224,11 @@ export function retypeCustomField(field: CustomField, type: CustomTypeName): Cus
     default_value,
     visible_when,
   };
+  if (type === "checkboxes") {
+    // Its answer is an array, so a string default has nowhere to go.
+    const { default_value: _drop, ...rest } = base;
+    return { ...rest, type, options: "options" in field ? (field.options ?? []) : [] };
+  }
   if (hasOptions(type)) {
     return { ...base, type, options: "options" in field ? (field.options ?? []) : [] };
   }

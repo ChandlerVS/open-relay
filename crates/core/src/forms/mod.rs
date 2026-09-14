@@ -159,7 +159,7 @@ impl Default for StandardFieldsConfig {
 ///
 /// `Select` and `Radio` carry their options on the variant so the renderer
 /// can't see an option-typed field without options. `Checkbox` is a single
-/// boolean checkbox (multi-select uses `Select`).
+/// boolean checkbox; `Checkboxes` is the multi-select, whose answer is an array.
 ///
 /// `Country` and `State` are option-valued too, but their choices come from
 /// the ISO catalogue in [`super::regions`] rather than from the author, which
@@ -186,6 +186,15 @@ pub enum CustomFieldType {
         options: Vec<String>,
     },
     Checkbox,
+    /// A group of checkboxes, any number of which may be ticked. Same option
+    /// semantics as `Select`, but the answer is a JSON **array** of the ticked
+    /// options — stored in the author's option order — which makes it the one
+    /// non-scalar answer in `custom_data`. See `forms::visibility` for how a
+    /// rule reads an array.
+    Checkboxes {
+        #[serde(default)]
+        options: Vec<String>,
+    },
     /// An ISO 3166-1 country picker. Submits the alpha-2 code.
     ///
     /// Unlike the standard `country` field this is not a singleton, which is
@@ -276,9 +285,9 @@ impl CustomFieldType {
     /// Membership for those two is checked against [`super::regions`] instead.
     pub fn options(&self) -> Option<&Vec<String>> {
         match self {
-            CustomFieldType::Select { options } | CustomFieldType::Radio { options } => {
-                Some(options)
-            }
+            CustomFieldType::Select { options }
+            | CustomFieldType::Radio { options }
+            | CustomFieldType::Checkboxes { options } => Some(options),
             _ => None,
         }
     }
@@ -286,9 +295,9 @@ impl CustomFieldType {
     /// See [`CustomFieldType::options`].
     pub fn options_mut(&mut self) -> Option<&mut Vec<String>> {
         match self {
-            CustomFieldType::Select { options } | CustomFieldType::Radio { options } => {
-                Some(options)
-            }
+            CustomFieldType::Select { options }
+            | CustomFieldType::Radio { options }
+            | CustomFieldType::Checkboxes { options } => Some(options),
             _ => None,
         }
     }

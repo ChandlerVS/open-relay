@@ -26,6 +26,7 @@ export {
   computeVisibility,
   visibleElements,
   canonical,
+  type FieldValue,
   type Values,
   type Visibility,
 } from "./visibility";

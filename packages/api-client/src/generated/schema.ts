@@ -1003,7 +1003,7 @@ export interface components {
          *
          *     `Select` and `Radio` carry their options on the variant so the renderer
          *     can't see an option-typed field without options. `Checkbox` is a single
-         *     boolean checkbox (multi-select uses `Select`).
+         *     boolean checkbox; `Checkboxes` is the multi-select, whose answer is an array.
          *
          *     `Country` and `State` are option-valued too, but their choices come from
          *     the ISO catalogue in [`super::regions`] rather than from the author, which
@@ -1039,6 +1039,10 @@ export interface components {
         } | {
             /** @enum {string} */
             type: "checkbox";
+        } | {
+            options?: string[];
+            /** @enum {string} */
+            type: "checkboxes";
         } | {
             /** @enum {string} */
             type: "country";

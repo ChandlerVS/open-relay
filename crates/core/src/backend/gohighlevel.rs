@@ -710,6 +710,22 @@ mod tests {
     }
 
     #[test]
+    fn a_checkbox_group_answer_ships_as_an_array() {
+        // GHL's checkbox and multi-option fields take a list for field_value,
+        // so the stored array must pass through rather than be flattened.
+        let idx = index(&[("contact.equipment", "fld_gear")]);
+        let body = backend().build_body(
+            &payload(json!({ "equipment": ["Mobile Computers", "Label Printers"] })),
+            &idx,
+        );
+        let custom = body.as_object().unwrap()["customFields"]
+            .as_array()
+            .unwrap();
+        assert_eq!(custom[0]["id"], "fld_gear");
+        assert_eq!(custom[0]["field_value"], json!(["Mobile Computers", "Label Printers"]));
+    }
+
+    #[test]
     fn catalog_indexes_field_key_over_name_and_skips_opportunities() {
         let catalog: CatalogResponse = serde_json::from_value(json!({
             "customFields": [

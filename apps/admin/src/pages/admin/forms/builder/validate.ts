@@ -185,13 +185,17 @@ export function validateLayout(items: BuilderElement[]): LayoutErrors {
       } else if (seenKeys.has(key)) {
         errors[item.id] = `Duplicate key "${key}".`;
       } else if (
-        (el.config.type === "select" || el.config.type === "radio") &&
+        (el.config.type === "select" ||
+          el.config.type === "radio" ||
+          el.config.type === "checkboxes") &&
         (el.config.options ?? []).length === 0
       ) {
         errors[item.id] =
           el.config.type === "radio"
             ? "A radio group needs at least one option."
-            : "A dropdown needs at least one option.";
+            : el.config.type === "checkboxes"
+              ? "A checkbox group needs at least one option."
+              : "A dropdown needs at least one option.";
       } else if (
         el.config.type === "file" &&
         !withinUploadLimit(el.config.max_size_mb)

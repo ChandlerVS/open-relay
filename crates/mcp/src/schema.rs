@@ -303,7 +303,7 @@ mod catalogue_tests {
             .collect();
         for expected in [
             "text", "email", "number", "tel", "url", "textarea", "select", "radio", "checkbox",
-            "country", "state", "file", "rating",
+            "checkboxes", "country", "state", "file", "rating",
         ] {
             assert!(types.contains(&expected), "custom type {expected} is not described");
         }

@@ -3577,6 +3577,27 @@
           },
           {
             "type": "object",
+            "description": "A group of checkboxes, any number of which may be ticked. Same option\nsemantics as `Select`, but the answer is a JSON **array** of the ticked\noptions — stored in the author's option order — which makes it the one\nnon-scalar answer in `custom_data`. See `forms::visibility` for how a\nrule reads an array.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "checkboxes"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "An ISO 3166-1 country picker. Submits the alpha-2 code.\n\nUnlike the standard `country` field this is not a singleton, which is\nthe reason it exists: an advanced form may need a billing country and a\nshipping country on the same page.",
             "required": [
               "type"
@@ -3662,7 +3683,7 @@
             }
           }
         ],
-        "description": "HTML input types we expose for custom fields.\n\n`Select` and `Radio` carry their options on the variant so the renderer\ncan't see an option-typed field without options. `Checkbox` is a single\nboolean checkbox (multi-select uses `Select`).\n\n`Country` and `State` are option-valued too, but their choices come from\nthe ISO catalogue in [`super::regions`] rather than from the author, which\nis the whole point of them — see [`CustomFieldType::options`] for why they\ndeliberately do *not* report those choices as `options`."
+        "description": "HTML input types we expose for custom fields.\n\n`Select` and `Radio` carry their options on the variant so the renderer\ncan't see an option-typed field without options. `Checkbox` is a single\nboolean checkbox; `Checkboxes` is the multi-select, whose answer is an array.\n\n`Country` and `State` are option-valued too, but their choices come from\nthe ISO catalogue in [`super::regions`] rather than from the author, which\nis the whole point of them — see [`CustomFieldType::options`] for why they\ndeliberately do *not* report those choices as `options`."
       },
       "DashboardOverview": {
         "type": "object",

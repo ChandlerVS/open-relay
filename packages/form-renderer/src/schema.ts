@@ -77,6 +77,11 @@ export type CustomField =
   | (CustomFieldBase & { type: "select"; options: string[] })
   | (CustomFieldBase & { type: "radio"; options: string[] })
   | (CustomFieldBase & { type: "checkbox" })
+  /**
+   * A group of checkboxes, any number of which may be ticked. The value held in
+   * form state is the ticked options as a `string[]`, in `options` order.
+   */
+  | (CustomFieldBase & { type: "checkboxes"; options: string[] })
   /** ISO 3166-1 country picker. Submits the alpha-2 code. */
   | (CustomFieldBase & { type: "country" })
   /**

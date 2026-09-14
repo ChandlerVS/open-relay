@@ -33,8 +33,26 @@ export function opTakesValue(op: ConditionOp): boolean {
   return OPS.find((o) => o.op === op)?.takesValue ?? false;
 }
 
+/**
+ * A checkbox group's answer is a set, so the evaluators read `equals` as "has
+ * ticked" (see `visibility.ts`). Worded that way here, and `contains` is left
+ * out — a substring match over a fixed option list only invites surprises.
+ */
+const GROUP_LABELS: Partial<Record<ConditionOp, string>> = {
+  equals: "has ticked",
+  not_equals: "hasn't ticked",
+  is_not_empty: "has anything ticked",
+  is_empty: "has nothing ticked",
+};
+
 function opsFor(candidate: ControllerCandidate | undefined) {
   const isCheckbox = candidate?.type === "checkbox";
+  if (candidate?.type === "checkboxes") {
+    return OPS.filter((o) => o.op in GROUP_LABELS).map((o) => ({
+      ...o,
+      label: GROUP_LABELS[o.op] ?? o.label,
+    }));
+  }
   return OPS.filter((o) => (o.checkboxOnly ? isCheckbox : true));
 }
 

@@ -382,7 +382,8 @@ export function Inspector({
         {cfg.type !== "country" &&
           cfg.type !== "state" &&
           cfg.type !== "file" &&
-          cfg.type !== "rating" && (
+          cfg.type !== "rating" &&
+          cfg.type !== "checkboxes" && (
           <Row label="Placeholder">
             <Input
               className="h-8 text-sm"
@@ -404,6 +405,7 @@ export function Inspector({
           given yet.
         */}
         {cfg.type !== "checkbox" &&
+          cfg.type !== "checkboxes" &&
           cfg.type !== "state" &&
           cfg.type !== "file" &&
           cfg.type !== "rating" && (

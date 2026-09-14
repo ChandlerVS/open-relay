@@ -762,6 +762,47 @@ DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
   cargo test -p open-relay-core --test themes -- --ignored
 ```
 
+### Checkbox groups: the one array answer
+
+`CustomFieldType::Checkboxes { options }` is a multi-select, and its answer is a
+JSON **array** of the ticked options. It is the only non-scalar value in
+`custom_data`, and `backend::gohighlevel` forwards it as-is, since GHL's
+checkbox and multi-option fields take a list for `field_value`. Four things
+aren't obvious:
+
+1. **`coerce_custom` stores the answer in the author's option order.** It walks
+   `options` rather than the input, which de-duplicates and makes the stored
+   value independent of click order. An empty selection coerces to `Null`, so
+   `required` means "at least one". A bare **string** that exactly matches an
+   option is accepted as a one-element array. That covers a bundle predating
+   `layout`, which has no `checkboxes` case and draws `<input type="checkboxes">`
+   as a text box.
+2. **A rule reads an array as a set, in both evaluators.** `equals` means
+   "has ticked", `not_equals` "hasn't ticked", `contains` matches inside any
+   element, and `is_empty`/`is_not_empty` ask whether anything is ticked.
+   `canonical` still handles scalars only; the array branch runs before it in
+   `visibility.rs` and `visibility.ts`. `visibility.test.ts` repeats the Rust
+   cases so the two copies stay in lockstep. The builder words those operators
+   accordingly and hides `contains`.
+3. **`required` is a custom validity, never the attribute.** On a checkbox,
+   `required` demands *that* box. `CheckboxesInput` instead calls
+   `setCustomValidity` on the first box while nothing is ticked. That keeps it a
+   native constraint, so per-step gating sees it, and unmounting a hidden group
+   removes it.
+4. **There is no default value.** The Inspector hides the row,
+   `retypeCustomField` drops `default_value`, and the renderer's `defaultValues`
+   skips the type. A string default must never land in array state. Renderer
+   state widened to `FieldValue = string | boolean | string[]` for this.
+
+Old cached bundles degrade the way `file`/`rating` do. A bundle that knows
+`layout` draws nothing, so a **required** group makes the form uncompletable
+there.
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test checkbox_group_fields -- --ignored
+```
+
 ### Builder clipboard: the paste is repaired on the client, because a `layout` write isn't
 
 The builder canvas is multi-select (shift-click for a range, Cmd/Ctrl-click to

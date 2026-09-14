@@ -18,6 +18,9 @@ import type { FormPage, LayoutEntry } from "./layout";
  *   coercion accepts (`true`/`on`/`yes`/`1`); `is_not_checked` is its negation,
  *   deliberately not "equals false" — an unanswered checkbox is empty, never
  *   `false`.
+ * - An array (a `checkboxes` answer) is a set: `equals` is "has ticked",
+ *   `not_equals` "hasn't", `contains` matches inside any element, and
+ *   `is_empty`/`is_not_empty` ask whether anything is ticked.
  * - One forward pass: a condition naming a controller that is *itself hidden*
  *   is false, which is what makes hiding transitive and what stops a hidden
  *   field's prefilled `default_value` from steering a later element.
@@ -25,9 +28,13 @@ import type { FormPage, LayoutEntry } from "./layout";
  * Dependency-free on purpose: this ships inside the embed bundle.
  */
 
-export type Values = Record<string, string | boolean>;
+/** One answer in form state. An array is a `checkboxes` group's ticked options. */
+export type FieldValue = string | boolean | string[];
 
-export function canonical(value: string | boolean | undefined): string {
+export type Values = Record<string, FieldValue>;
+
+/** Scalars only — an array is a set of answers, compared element-wise instead. */
+export function canonical(value: FieldValue | undefined): string {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "string") return value.trim();
   return "";
@@ -44,8 +51,29 @@ function evalCondition(
   visibleKeys: Map<string, boolean>,
 ): boolean {
   if (!visibleKeys.get(cond.field)) return false;
-  const actual = canonical(values[cond.field]);
   const operand = cond.value ?? "";
+  const raw = values[cond.field];
+  if (Array.isArray(raw)) {
+    const items = raw.map((v) => canonical(v).toLowerCase());
+    const needle = operand.toLowerCase();
+    switch (cond.op) {
+      case "equals":
+        return items.includes(needle);
+      case "not_equals":
+        return !items.includes(needle);
+      case "contains":
+        return items.some((i) => i.includes(needle));
+      case "is_empty":
+        return items.length === 0;
+      case "is_not_empty":
+        return items.length > 0;
+      case "is_checked":
+        return items.some(isTruthy);
+      case "is_not_checked":
+        return !items.some(isTruthy);
+    }
+  }
+  const actual = canonical(raw);
   switch (cond.op) {
     case "equals":
       return actual.toLowerCase() === operand.toLowerCase();

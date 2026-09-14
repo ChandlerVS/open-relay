@@ -17,6 +17,13 @@
 //! | `Number(n)`     | `n.to_string()`      |
 //! | `Null`/absent   | `""`                 |
 //!
+//! An `Array` — a `checkboxes` answer, the one non-scalar value — is instead a
+//! *set* of answers, each canonicalised as above. `equals` means some element
+//! equals the operand ("has ticked X"), `not_equals` that none does, `contains`
+//! that some element contains it, `is_empty`/`is_not_empty` that the set is
+//! empty or not, and `is_checked` that some element is truthy (only reachable
+//! by a non-renderer caller; `validate_layout` confines it to checkboxes).
+//!
 //! `equals`/`not_equals`/`contains` compare ASCII-case-insensitively: a
 //! select's options are exact, but free-text controllers aren't, and MySQL's
 //! own collation is case-insensitive too, so this is the least surprising rule.
@@ -80,8 +87,21 @@ fn eval_condition(cond: &Condition, values: &ValueMap, visible: &HashMap<String,
     if !visible.get(&cond.field).copied().unwrap_or(false) {
         return false;
     }
-    let actual = canonical(values.get(&cond.field));
     let operand = cond.value.as_deref().unwrap_or_default();
+    if let Some(JsonValue::Array(items)) = values.get(&cond.field) {
+        let items: Vec<String> = items.iter().map(|v| canonical(Some(v))).collect();
+        let needle = operand.to_ascii_lowercase();
+        return match cond.op {
+            ConditionOp::Equals => items.iter().any(|i| eq_ignore_case(i, operand)),
+            ConditionOp::NotEquals => !items.iter().any(|i| eq_ignore_case(i, operand)),
+            ConditionOp::Contains => items.iter().any(|i| i.to_ascii_lowercase().contains(&needle)),
+            ConditionOp::IsEmpty => items.is_empty(),
+            ConditionOp::IsNotEmpty => !items.is_empty(),
+            ConditionOp::IsChecked => items.iter().any(|i| is_truthy(i)),
+            ConditionOp::IsNotChecked => !items.iter().any(|i| is_truthy(i)),
+        };
+    }
+    let actual = canonical(values.get(&cond.field));
     match cond.op {
         ConditionOp::Equals => eq_ignore_case(&actual, operand),
         ConditionOp::NotEquals => !eq_ignore_case(&actual, operand),
@@ -300,6 +320,35 @@ mod tests {
         let v = values(&[("same", JsonValue::String("yes".into()))]);
         let hidden = hidden_field_keys(&layout, &v);
         assert_eq!(hidden, HashSet::from(["city".to_string()]));
+    }
+
+    #[test]
+    fn an_array_answer_is_read_as_a_set() {
+        let layout = |op, value: Option<&str>| {
+            vec![
+                custom(
+                    "gear",
+                    CustomFieldType::Checkboxes { options: vec!["Label Printers".into()] },
+                    None,
+                ),
+                standard("city", Some(rule(MatchMode::All, &[("gear", op, value)]))),
+            ]
+        };
+        let shown = |op, value, v: &ValueMap| element_visibility(&layout(op, value), v)[1];
+        let ticked = values(&[("gear", serde_json::json!(["Mobile Computers", " Label Printers "]))]);
+        let none = values(&[("gear", serde_json::json!([]))]);
+
+        assert!(shown(ConditionOp::Equals, Some("label printers"), &ticked));
+        assert!(!shown(ConditionOp::Equals, Some("Barcode Scanners"), &ticked));
+        assert!(!shown(ConditionOp::NotEquals, Some("Label Printers"), &ticked));
+        assert!(shown(ConditionOp::NotEquals, Some("Barcode Scanners"), &ticked));
+        assert!(shown(ConditionOp::Contains, Some("printer"), &ticked));
+        assert!(shown(ConditionOp::IsNotEmpty, None, &ticked));
+        assert!(!shown(ConditionOp::IsEmpty, None, &ticked));
+        assert!(shown(ConditionOp::IsEmpty, None, &none));
+        assert!(!shown(ConditionOp::Equals, Some("Label Printers"), &none));
+        // Unanswered and an empty set read the same way.
+        assert!(shown(ConditionOp::IsEmpty, None, &values(&[])));
     }
 
     #[test]

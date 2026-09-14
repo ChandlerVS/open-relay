@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { STANDARD_FIELDS } from "./standardFields";
 import { COUNTRIES, subdivisionsFor, type RegionOption } from "./regions";
 import { UploadError, localRejection, uploadFile } from "./uploads";
 import { groupRows, resolveLayout, splitIntoPages, stateBindings } from "./layout";
 import type { LayoutEntry } from "./layout";
-import { computeVisibility, visibleElements } from "./visibility";
+import { computeVisibility, visibleElements, type FieldValue } from "./visibility";
 import { Markdown, richTextClass } from "./RichText";
 import { isHttpUrl } from "./url";
 import { themeStyle } from "./theme";
@@ -112,7 +112,7 @@ export function Form({
   const [fetched, setFetched] = useState<PublicFormDto | null>(null);
   const [status, setStatus] = useState<Status>(schemaProp ? "ready" : "loading");
   const [error, setError] = useState<string | null>(null);
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [values, setValues] = useState<Record<string, FieldValue>>({});
   const [pageIndex, setPageIndex] = useState(0);
 
   const schema = schemaProp ?? fetched;
@@ -164,6 +164,9 @@ export function Form({
     if (!schema) return defaults;
     for (const el of resolveLayout(schema)) {
       if (el.element !== "standard" && el.element !== "custom") continue;
+      // A group's answer is an array; a stale string default (left by a
+      // retype, say) must never land in its state.
+      if (el.element === "custom" && el.config.type === "checkboxes") continue;
       const dv = el.config.default_value;
       if (dv) defaults[el.config.key] = dv;
     }
@@ -230,9 +233,9 @@ export function Form({
 
 
   // Upload progress lives *beside* `values`, not in it. The value of a file
-  // field is the receipt string the server sealed, so `values` keeps its
-  // `string | boolean` shape and every consumer of it — visibility rules,
-  // `hiddenKeys`, the subtractive payload build — is untouched.
+  // field is the receipt string the server sealed, so `values` holds nothing
+  // but answers and every consumer of it — visibility rules, `hiddenKeys`, the
+  // subtractive payload build — never has to skip over progress state.
   const [uploads, setUploads] = useState<Record<string, UploadState>>({});
 
   // A layout can shrink between renders (the builder preview edits live), so
@@ -327,7 +330,7 @@ export function Form({
     }
   };
 
-  const set = (key: string, val: string | boolean) =>
+  const set = (key: string, val: FieldValue) =>
     setValues((v) => {
       const next = { ...v, [key]: val };
       // See `stateBindings`: a stale subdivision under a new country is a
@@ -363,7 +366,7 @@ export function Form({
     // Subtractive, never a whitelist: `values` also carries the honeypot `_hp`,
     // which the server reads to reject bots. Rebuilding from the visible layout
     // keys would drop it silently and every bot would sail through.
-    const answers: Record<string, string | boolean> = { ...values };
+    const answers: Record<string, FieldValue> = { ...values };
     for (const key of hiddenKeys) delete answers[key];
     const body =
       source && Object.keys(source).length > 0
@@ -639,7 +642,7 @@ function elementKey(el: FormElement, index: number): string {
  */
 function resolveCountry(
   key: string | null | undefined,
-  values: Record<string, string | boolean>,
+  values: Record<string, FieldValue>,
   hiddenKeys: ReadonlySet<string>,
 ): string | undefined {
   if (!key || hiddenKeys.has(key)) return undefined;
@@ -670,13 +673,13 @@ function LayoutElement({
   element: FormElement;
   scope: number;
   /** Raw state — what each control displays. */
-  values: Record<string, string | boolean>;
+  values: Record<string, FieldValue>;
   /** State with defaults merged in — what one field reads *about another*. */
-  resolved: Record<string, string | boolean>;
+  resolved: Record<string, FieldValue>;
   bindings: ReturnType<typeof stateBindings>;
   hiddenKeys: ReadonlySet<string>;
   regions: string | null | undefined;
-  onChange: (key: string, value: string | boolean) => void;
+  onChange: (key: string, value: FieldValue) => void;
   /** Upload progress for file fields, keyed by field key. */
   uploads: Record<string, UploadState>;
   uploadsEnabled: boolean;
@@ -754,7 +757,7 @@ function StandardFieldInput({
   subdivisions,
 }: {
   field: StandardElement;
-  value: string | boolean | undefined;
+  value: FieldValue | undefined;
   onChange: (next: string) => void;
   scope: number;
   /** Set for a `state` field whose country is chosen and has subdivisions. */
@@ -862,7 +865,7 @@ function RatingInput({
   scope,
 }: {
   field: CustomField & { type: "rating" };
-  value: string | boolean | undefined;
+  value: FieldValue | undefined;
   onChange: (next: string) => void;
   scope: number;
 }) {
@@ -916,6 +919,66 @@ function RatingInput({
   );
 }
 
+/**
+ * A group of checkboxes, any number of which may be ticked. The answer is the
+ * ticked options as an array, always in the author's order.
+ *
+ * `required` can't go on the inputs: on a checkbox it demands *that* box. So
+ * "at least one" is a custom validity on the first box instead — still a native
+ * constraint, so per-step gating sees it, and an unmounted (hidden) group takes
+ * it away with it.
+ */
+function CheckboxesInput({
+  field,
+  value,
+  onChange,
+  scope,
+}: {
+  field: CustomField & { type: "checkboxes" };
+  value: FieldValue | undefined;
+  onChange: (next: string[]) => void;
+  scope: number;
+}) {
+  const first = useRef<HTMLInputElement>(null);
+  const required = field.required ?? false;
+  const group = `or-${scope}-${field.key}`;
+  const ticked = Array.isArray(value) ? value : [];
+  const missing = required && ticked.length === 0;
+
+  useEffect(() => {
+    first.current?.setCustomValidity(missing ? "Please select at least one option." : "");
+  }, [missing]);
+
+  const toggle = (opt: string, on: boolean) =>
+    onChange(field.options.filter((o) => (o === opt ? on : ticked.includes(o))));
+
+  return (
+    <div className={fieldClass(field.width, "or-field--checkboxes")}>
+      <fieldset className="or-radio-group">
+        <legend className="or-field__label">
+          {field.label}
+          {required && <span className="or-field__required"> *</span>}
+        </legend>
+        {field.options.map((opt, i) => (
+          <label key={opt} className="or-radio-option" htmlFor={`${group}-${i}`}>
+            <input
+              ref={i === 0 ? first : undefined}
+              id={`${group}-${i}`}
+              name={group}
+              type="checkbox"
+              value={opt}
+              checked={ticked.includes(opt)}
+              onChange={(e) => toggle(opt, e.target.checked)}
+            />{" "}
+            {opt}
+          </label>
+        ))}
+      </fieldset>
+      {field.help_text && <p className="or-field__help">{field.help_text}</p>}
+    </div>
+  );
+}
+
 function CustomFieldInput({
   field,
   value,
@@ -927,8 +990,8 @@ function CustomFieldInput({
   onPickFile,
 }: {
   field: CustomField;
-  value: string | boolean | undefined;
-  onChange: (next: string | boolean) => void;
+  value: FieldValue | undefined;
+  onChange: (next: FieldValue) => void;
   scope: number;
   /** Set for a `state` field whose country is chosen and has subdivisions. */
   subdivisions?: readonly RegionOption[] | undefined;
@@ -1013,6 +1076,10 @@ function CustomFieldInput({
 
   if (field.type === "rating") {
     return <RatingInput field={field} value={value} onChange={onChange} scope={scope} />;
+  }
+
+  if (field.type === "checkboxes") {
+    return <CheckboxesInput field={field} value={value} onChange={onChange} scope={scope} />;
   }
 
   if (field.type === "radio") {

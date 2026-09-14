@@ -336,6 +336,8 @@ function DeliveryRow({ delivery: d }: { delivery: SubmissionDeliveryDto }) {
  * and the value ultimately came from a form submission.
  */
 function CustomValue({ value }: { value: unknown }) {
+  // A checkbox group stores the ticked options as an array.
+  if (Array.isArray(value)) return <>{value.map(String).join(", ")}</>;
   const text = typeof value === "string" ? value : JSON.stringify(value);
   if (typeof value === "string" && isHttpUrl(value)) {
     return (

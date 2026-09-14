@@ -293,6 +293,51 @@ fn coerce_custom(
                 json_kind(&other)
             ))),
         },
+        CustomFieldType::Checkboxes { options } => {
+            let picked: Vec<String> = match raw {
+                JsonValue::Array(items) => items
+                    .into_iter()
+                    .map(|item| match item {
+                        JsonValue::String(s) => Ok(s.trim().to_string()),
+                        other => Err(CoreError::BadRequest(format!(
+                            "custom field '{}' must be a list of strings, got a list holding {}",
+                            field.key,
+                            json_kind(&other)
+                        ))),
+                    })
+                    .collect::<CoreResult<_>>()?,
+                // A bundle cached before `layout` existed has no `checkboxes`
+                // case and draws a text box, so one exact option still counts.
+                JsonValue::String(s) => vec![s.trim().to_string()],
+                other => {
+                    return Err(CoreError::BadRequest(format!(
+                        "custom field '{}' must be a list of strings, got {}",
+                        field.key,
+                        json_kind(&other)
+                    )));
+                }
+            };
+            let picked: Vec<&str> = picked.iter().map(String::as_str).filter(|s| !s.is_empty()).collect();
+            if let Some(bad) = picked.iter().find(|p| !options.iter().any(|opt| opt == *p)) {
+                return Err(CoreError::BadRequest(format!(
+                    "custom field '{}' value '{bad}' is not one of the configured options",
+                    field.key
+                )));
+            }
+            // Walking the options rather than the input de-duplicates and puts
+            // the answer in the author's order, so it doesn't depend on click order.
+            let ordered: Vec<JsonValue> = options
+                .iter()
+                .filter(|opt| picked.contains(&opt.as_str()))
+                .map(|opt| JsonValue::String(opt.clone()))
+                .collect();
+            // Empty reads as unanswered, so `required` catches a bare `[]`.
+            if ordered.is_empty() {
+                Ok(JsonValue::Null)
+            } else {
+                Ok(JsonValue::Array(ordered))
+            }
+        }
         CustomFieldType::Country => match raw {
             JsonValue::String(s) => {
                 let code = s.trim().to_ascii_uppercase();
@@ -1285,15 +1330,27 @@ pub async fn export_csv<C: ConnectionTrait>(conn: &C, f: &SubmissionFilter) -> C
         cells.push(r.source_params.as_ref().map(JsonValue::to_string).unwrap_or_default());
         let custom = r.custom_data.as_object();
         for key in &custom_keys {
-            cells.push(match custom.and_then(|c| c.get(key)) {
-                None | Some(JsonValue::Null) => String::new(),
-                Some(JsonValue::String(s)) => s.clone(),
-                Some(other) => other.to_string(),
-            });
+            cells.push(custom_cell(custom.and_then(|c| c.get(key))));
         }
         write_csv_row(&mut out, cells.iter().map(String::as_str));
     }
     Ok(out)
+}
+
+/// One `custom_data` answer as CSV cell text. A checkbox group's array is the
+/// ticked options joined with `, ` — what the admin detail view shows — rather
+/// than a JSON literal nobody wants in a spreadsheet.
+fn custom_cell(value: Option<&JsonValue>) -> String {
+    match value {
+        None | Some(JsonValue::Null) => String::new(),
+        Some(JsonValue::String(s)) => s.clone(),
+        Some(JsonValue::Array(items)) => items
+            .iter()
+            .map(|i| i.as_str().map_or_else(|| i.to_string(), str::to_string))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Some(other) => other.to_string(),
+    }
 }
 
 /// Download name for [`export_csv`]'s output, dated in UTC.
@@ -1775,6 +1832,34 @@ mod tests {
     }
 
     #[test]
+    fn coerces_checkboxes_to_an_array_in_option_order() {
+        let field = region_field(
+            "gear",
+            CustomFieldType::Checkboxes {
+                options: vec!["Scanners".into(), "Printers".into(), "Rewinders".into()],
+            },
+        );
+        let raw = |v: JsonValue| coerce_custom(&field, Some(v), &JsonMap::new(), &no_files());
+
+        assert_eq!(
+            raw(serde_json::json!(["Rewinders", " Scanners ", "Rewinders", ""])).unwrap(),
+            serde_json::json!(["Scanners", "Rewinders"]),
+            "trimmed, de-duplicated and in the author's order"
+        );
+        assert_eq!(raw(serde_json::json!([])).unwrap(), JsonValue::Null);
+        assert_eq!(raw(serde_json::json!(["  "])).unwrap(), JsonValue::Null);
+        // A pre-`layout` bundle draws a text box and posts one string.
+        assert_eq!(coerce(&field, "Printers").unwrap(), serde_json::json!(["Printers"]));
+        assert_eq!(coerce(&field, " ").unwrap(), JsonValue::Null);
+
+        assert!(raw(serde_json::json!(["Scanners", "Lasers"])).is_err());
+        assert!(raw(serde_json::json!(["scanners"])).is_err(), "options match exactly");
+        assert!(coerce(&field, "Scanners, Printers").is_err());
+        assert!(raw(serde_json::json!([1])).is_err());
+        assert!(raw(serde_json::json!(true)).is_err());
+    }
+
+    #[test]
     fn coerces_a_rating_to_an_integer_within_its_scale() {
         let field = region_field("score", CustomFieldType::Rating { max: 10 });
         let raw = |v: JsonValue| coerce_custom(&field, Some(v), &JsonMap::new(), &no_files());
@@ -2024,6 +2109,18 @@ mod list_filter_tests {
 
         let defaults = build_filter(raw()).unwrap();
         assert_eq!(defaults, SubmissionFilter::default());
+    }
+
+    #[test]
+    fn csv_custom_cells_flatten_a_checkbox_group() {
+        assert_eq!(custom_cell(None), "");
+        assert_eq!(custom_cell(Some(&JsonValue::Null)), "");
+        assert_eq!(custom_cell(Some(&serde_json::json!("plain"))), "plain");
+        assert_eq!(custom_cell(Some(&serde_json::json!(7))), "7");
+        assert_eq!(
+            custom_cell(Some(&serde_json::json!(["Mobile Computers", "Label Printers"]))),
+            "Mobile Computers, Label Printers"
+        );
     }
 
     #[test]
