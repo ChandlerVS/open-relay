@@ -739,6 +739,14 @@ pub async fn create_submission<C: ConnectionTrait>(
     .await?;
     if !is_duplicate {
         insert_deliveries(conn, inserted.id, &backends).await?;
+        // A duplicate never notifies, for the same reason it's never
+        // dispatched: the earlier submission already did.
+        if metadata_service::get_text(conn, form.id, MetadataKey::NotificationEmail)
+            .await?
+            .is_some()
+        {
+            insert_notification_delivery(conn, inserted.id).await?;
+        }
     }
     Ok(inserted)
 }
@@ -827,6 +835,24 @@ async fn insert_deliveries<C: ConnectionTrait>(
         model.insert(conn).await?;
     }
     Ok(())
+}
+
+/// Queue the form's notification email as one more delivery row, so it gets
+/// the worker's retries and shows up beside the backends in the admin. The
+/// recipient is not stored here — the backend re-reads it at send time.
+async fn insert_notification_delivery<C: ConnectionTrait>(
+    conn: &C,
+    submission_id: i32,
+) -> CoreResult<()> {
+    insert_deliveries(
+        conn,
+        submission_id,
+        &[BackendBinding {
+            kind: crate::backend::email_notification::NAME.to_string(),
+            instance_id: None,
+        }],
+    )
+    .await
 }
 
 pub async fn find_by_id<C: ConnectionTrait>(

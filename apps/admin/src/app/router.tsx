@@ -18,6 +18,7 @@ import { ThemeEditorPage } from "../pages/admin/themes/ThemeEditorPage";
 import { SubmissionsPage } from "../pages/admin/submissions/SubmissionsPage";
 import { AuthSettingsPage } from "../pages/admin/settings/AuthSettingsPage";
 import { StorageSettingsPage } from "../pages/admin/settings/StorageSettingsPage";
+import { EmailSettingsPage } from "../pages/admin/settings/EmailSettingsPage";
 import { ProfilePage } from "../pages/admin/profile/ProfilePage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 
@@ -115,6 +116,18 @@ export const router = createBrowserRouter([
             ),
             children: [
               { path: "settings/storage", element: <StorageSettingsPage /> },
+            ],
+          },
+          {
+            // No `email_config:read` either — write is the read gate.
+            element: (
+              <RequirePermissionRoute
+                perm="email_config:write"
+                action="manage email settings"
+              />
+            ),
+            children: [
+              { path: "settings/email", element: <EmailSettingsPage /> },
             ],
           },
         ],

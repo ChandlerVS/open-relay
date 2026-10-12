@@ -14,7 +14,9 @@
 //! The signing implementation is pinned by the published AWS SigV4 test
 //! vectors in the tests below. That matters more than usual here: a wrong
 //! signature fails only at runtime, against a real bucket, as an opaque
-//! `SignatureDoesNotMatch`.
+//! `SignatureDoesNotMatch`. The primitives (HMAC, encodings, key derivation)
+//! live in [`crate::sigv4`], shared with the SES email sender; the
+//! query-string canonicalisation is this module's own.
 //!
 //! # Two things about the configuration that aren't obvious
 //!
@@ -39,27 +41,25 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use super::{
     FileStore, FileStoreFactory, PresignedUpload, StorageBuildError, StorageError,
     UPLOAD_URL_TTL_SECS,
 };
+#[cfg(test)]
+use crate::sigv4::hmac_sha256;
+use crate::sigv4::{self, ALGORITHM, hex, hex_sha256, uri_encode};
 
 pub const KIND: &str = "s3";
 
-const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 const SERVICE: &str = "s3";
 /// Presigned URLs carry no body hash — S3 accepts this sentinel in its place.
 const UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 /// SigV4's hard ceiling on `X-Amz-Expires`.
 const MAX_EXPIRES_SECS: u64 = 7 * 24 * 60 * 60;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-
-type HmacSha256 = Hmac<Sha256>;
 
 /// Where the stored URL points, and therefore who can open it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -480,25 +480,6 @@ fn split_origin(base: &str) -> (String, String) {
     }
 }
 
-/// RFC 3986 percent-encoding as SigV4 defines it: unreserved characters pass,
-/// everything else becomes uppercase `%XX`. `keep_slash` is set for path
-/// segments (where `/` is a separator) and clear for query components.
-///
-/// Hand-rolled because the `url`/`percent-encoding` crates aren't dependencies
-/// and neither offers exactly this set without configuration anyway.
-fn uri_encode(input: &str, keep_slash: bool) -> String {
-    let mut out = String::with_capacity(input.len());
-    for byte in input.as_bytes() {
-        let c = *byte as char;
-        match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => out.push(c),
-            '/' if keep_slash => out.push('/'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
 /// Assemble a SigV4 canonical request. Split out from [`S3Store::presign`] so
 /// the tests can pin it against AWS's published example verbatim —
 /// canonicalisation is the half of SigV4 that is easy to get subtly wrong, and
@@ -515,29 +496,9 @@ fn canonical_request(
     )
 }
 
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(data);
-    mac.finalize().into_bytes().to_vec()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn hex_sha256(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hex(&hasher.finalize())
-}
-
-/// The SigV4 four-step key derivation, then the final signature.
+/// The SigV4 key derivation for this service, then the final signature.
 fn sign_v4(secret: &str, date_stamp: &str, region: &str, string_to_sign: &[u8]) -> Vec<u8> {
-    let k_date = hmac_sha256(format!("AWS4{secret}").as_bytes(), date_stamp.as_bytes());
-    let k_region = hmac_sha256(&k_date, region.as_bytes());
-    let k_service = hmac_sha256(&k_region, SERVICE.as_bytes());
-    let k_signing = hmac_sha256(&k_service, b"aws4_request");
-    hmac_sha256(&k_signing, string_to_sign)
+    sigv4::sign(secret, date_stamp, region, SERVICE, string_to_sign)
 }
 
 #[cfg(test)]

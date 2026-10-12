@@ -50,6 +50,7 @@ pub(crate) const ADMIN_BODY_LIMIT: usize = 1024 * 1024;
         (name = "reps", description = "Sales rep directory for QR-code attribution."),
         (name = "themes", description = "Reusable form themes: colours, radius, typography, density."),
         (name = "storage", description = "Object storage backing file-upload form fields."),
+        (name = "email", description = "Outbound email provider for submission notifications."),
         (name = "submissions", description = "Form submissions and their per-backend delivery state."),
         (name = "api-keys", description = "Self-service long-lived credentials for agents and scripts."),
         (name = "public", description = "Unauthenticated endpoints consumed by embedded forms."),
@@ -109,6 +110,7 @@ pub fn build(state: AppState) -> Router {
         .nest("/reps", routes::reps::router())
         .nest("/themes", routes::themes::router())
         .nest("/storage", routes::storage::router())
+        .nest("/email", routes::email::router())
         .nest("/submissions", routes::submissions::router())
         .nest("/api-keys", routes::api_keys::router())
         .split_for_parts();

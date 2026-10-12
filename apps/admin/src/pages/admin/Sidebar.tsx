@@ -6,6 +6,7 @@ import {
   HardDrive,
   KeyRound,
   LayoutDashboard,
+  Mail,
   Palette,
   Plug,
   Shield,
@@ -49,6 +50,12 @@ const ITEMS: NavItem[] = [
     label: "File storage",
     icon: HardDrive,
     perm: "storage_config:write",
+  },
+  {
+    to: "/settings/email",
+    label: "Email",
+    icon: Mail,
+    perm: "email_config:write",
   },
 ];
 

@@ -28,6 +28,7 @@
 // Resource modules — add as they are implemented:
 pub mod api_key;
 pub mod backend_instance;
+pub mod email_provider;
 pub mod external_identity;
 pub mod form;
 pub mod form_metadata;

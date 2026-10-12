@@ -26,7 +26,7 @@ pub async fn set<C: ConnectionTrait>(
             key.value_type()
         )));
     }
-    let encoded = value.to_storage();
+    let encoded = validate_value(key, value)?.to_storage();
     let existing = entity::form_metadata::Entity::find_by_id((form_id, key.slug().to_string()))
         .one(conn)
         .await?;
@@ -47,6 +47,18 @@ pub async fn set<C: ConnectionTrait>(
         }
     }
     Ok(())
+}
+
+/// Per-key checks beyond the value type, returning the normalised value.
+fn validate_value(key: MetadataKey, value: MetadataValue) -> CoreResult<MetadataValue> {
+    match (key, value) {
+        (MetadataKey::NotificationEmail, MetadataValue::Text(raw)) => {
+            crate::email::validate_address(&raw)
+                .map(MetadataValue::Text)
+                .map_err(|e| CoreError::BadRequest(format!("notification_email: {e}")))
+        }
+        (_, value) => Ok(value),
+    }
 }
 
 /// Read a single metadata value, decoded per the key's type. `None` if unset.
@@ -72,6 +84,17 @@ pub async fn get_bool<C: ConnectionTrait>(
     key: MetadataKey,
 ) -> CoreResult<Option<bool>> {
     Ok(get(conn, form_id, key).await?.and_then(|v| v.as_bool()))
+}
+
+/// Convenience accessor for text keys. `None` if unset.
+pub async fn get_text<C: ConnectionTrait>(
+    conn: &C,
+    form_id: i32,
+    key: MetadataKey,
+) -> CoreResult<Option<String>> {
+    Ok(get(conn, form_id, key)
+        .await?
+        .and_then(|v| v.as_text().map(str::to_string)))
 }
 
 /// All known metadata for a form. Rows whose key no longer maps via
@@ -113,4 +136,44 @@ pub async fn delete_for_form<C: ConnectionTrait>(conn: &C, form_id: i32) -> Core
         .exec(conn)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_email_is_trimmed_and_validated() {
+        assert_eq!(
+            validate_value(
+                MetadataKey::NotificationEmail,
+                MetadataValue::Text("  ops@example.com ".into())
+            )
+            .unwrap(),
+            MetadataValue::Text("ops@example.com".into())
+        );
+        for bad in [
+            "",
+            "not-an-address",
+            "a@example.com,b@example.com",
+            "a@example.com\nBcc: x@y.z",
+        ] {
+            assert!(
+                validate_value(
+                    MetadataKey::NotificationEmail,
+                    MetadataValue::Text(bad.into())
+                )
+                .is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn other_keys_pass_through() {
+        assert_eq!(
+            validate_value(MetadataKey::EmailDeduplication, MetadataValue::Bool(true)).unwrap(),
+            MetadataValue::Bool(true)
+        );
+    }
 }

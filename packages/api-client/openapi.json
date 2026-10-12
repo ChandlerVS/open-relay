@@ -897,6 +897,190 @@
         ]
       }
     },
+    "/email": {
+      "get": {
+        "tags": [
+          "email"
+        ],
+        "operationId": "get_email_config",
+        "responses": {
+          "200": {
+            "description": "Active email provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailConfigDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing email_config:write"
+          },
+          "404": {
+            "description": "No email provider configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "email"
+        ],
+        "operationId": "upsert_email_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertEmailConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Email provider saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailConfigDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Config rejected by the provider"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing email_config:write"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "email"
+        ],
+        "operationId": "delete_email_config",
+        "responses": {
+          "204": {
+            "description": "Email provider removed"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing email_config:write"
+          },
+          "404": {
+            "description": "No email provider configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/email/kinds": {
+      "get": {
+        "tags": [
+          "email"
+        ],
+        "operationId": "list_email_kinds",
+        "responses": {
+          "200": {
+            "description": "Supported email provider kinds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailKindInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing email_config:write"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/email/test": {
+      "post": {
+        "tags": [
+          "email"
+        ],
+        "summary": "Send a real test message through the saved provider.",
+        "description": "Always 200 when a provider is configured — a rejection (typically an\nunverified recipient in the SES sandbox) is the *answer* to this request,\ncarried in `EmailTestResult::error`.",
+        "operationId": "test_email_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Send result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Recipient is not a valid address"
+          },
+          "401": {
+            "description": "Unauthenticated"
+          },
+          "403": {
+            "description": "Missing email_config:write"
+          },
+          "404": {
+            "description": "No email provider configured"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/forms": {
       "get": {
         "tags": [
@@ -3830,6 +4014,109 @@
           }
         }
       },
+      "EmailConfigDto": {
+        "type": "object",
+        "description": "Admin-facing config. Secret-bearing keys (declared per kind via\n[`crate::email::EmailSenderFactory::secret_keys`]) are **stripped** from\n`config` and surfaced as presence booleans in `secret_fields`. Mirrors\n`StorageConfigDto`.",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "config",
+          "secret_fields",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {
+            "description": "Non-secret config keys, verbatim. Secret keys are removed."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "secret_fields": {
+            "type": "object",
+            "description": "For each secret key this kind declares: `true` if a non-empty value is\non record.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "EmailKindInfo": {
+        "type": "object",
+        "description": "Catalog entry returned by [`EmailRegistry::kinds`] — drives the admin's\nprovider picker.",
+        "required": [
+          "kind",
+          "label",
+          "secret_keys"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "Human label, so the admin UI doesn't keep its own kind → name mapping."
+          },
+          "secret_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Secret-bearing config keys, so the UI knows which inputs to render as\nwrite-only password fields without hardcoding them per kind."
+          }
+        }
+      },
+      "EmailTestRequest": {
+        "type": "object",
+        "description": "Body of the admin's \"Send test email\" action.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Where to send the test message."
+          }
+        }
+      },
+      "EmailTestResult": {
+        "type": "object",
+        "description": "Result of the admin's \"Send test email\" action.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only on failure, and phrased for an admin to act on."
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "EmbedSnippetDto": {
         "type": "object",
         "description": "A ready-to-paste embed snippet for a form, returned to admins so they can\ninstall the form on their own site. Everything in `snippet` derives from\ntrusted server config plus the form id — there's no caller-supplied input —\nso it's safe to render verbatim.",
@@ -4445,16 +4732,20 @@
         "type": "string",
         "description": "The catalogue of metadata keys. Wire/serialized form is the slug.",
         "enum": [
-          "email_deduplication"
+          "email_deduplication",
+          "notification_email"
         ]
       },
       "MetadataValue": {
         "oneOf": [
           {
             "type": "boolean"
+          },
+          {
+            "type": "string"
           }
         ],
-        "description": "A typed metadata value. The variant must match its key's\n[`MetadataKey::value_type`]; the service layer enforces this on write."
+        "description": "A typed metadata value. The variant must match its key's\n[`MetadataKey::value_type`]; the service layer enforces this on write.\n\nUntagged, so the wire value is the bare JSON scalar: `true` decodes as\n`Bool`, `\"ops@example.com\"` as `Text`. Order matters — `Bool` is tried\nfirst, and a JSON string can never decode as a bool."
       },
       "NewApiKey": {
         "type": "object",
@@ -4878,7 +5169,8 @@
           "themes:write",
           "themes:delete",
           "auth_config:write",
-          "storage_config:write"
+          "storage_config:write",
+          "email_config:write"
         ]
       },
       "PermissionInfo": {
@@ -6378,6 +6670,24 @@
           }
         }
       },
+      "UpsertEmailConfig": {
+        "type": "object",
+        "description": "Upsert input. A secret key omitted from `config` (or sent empty) means\n\"keep the existing value\". Creating a config with no secret fails in the\nfactory instead.",
+        "required": [
+          "kind",
+          "name",
+          "config"
+        ],
+        "properties": {
+          "config": {},
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "UpsertOAuthConfig": {
         "type": "object",
         "description": "Upsert input. `client_secret: None` means \"keep the existing value\";\n`Some(non_empty)` replaces. The service rejects creating a new config\nwithout a client_secret.",
@@ -6621,6 +6931,10 @@
     {
       "name": "storage",
       "description": "Object storage backing file-upload form fields."
+    },
+    {
+      "name": "email",
+      "description": "Outbound email provider for submission notifications."
     },
     {
       "name": "submissions",
