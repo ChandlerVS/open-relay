@@ -17,6 +17,16 @@ const STATUS_LABEL: Record<string, string> = {
   exhausted: "exhausted",
 };
 
+/// Display names for delivery kinds whose wire name reads poorly. Anything
+/// absent shows its `backend_name` verbatim, as before.
+const BACKEND_LABEL: Record<string, string> = {
+  "email-notification": "Email notification",
+};
+
+export function backendLabel(backendName: string): string {
+  return BACKEND_LABEL[backendName] ?? backendName;
+}
+
 /// A delivery can be manually re-synced only from a terminal state — a
 /// `pending`/`in_progress` row is already queued, so re-syncing it is a no-op.
 function isRetryable(status: string): boolean {
@@ -80,7 +90,7 @@ export function DeliveryStatusBadges({
           "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
           STATUS_CLASS[d.status] ?? "bg-muted text-muted-foreground",
         );
-        const label = `${d.backend_name}: ${STATUS_LABEL[d.status] ?? d.status}`;
+        const label = `${backendLabel(d.backend_name)}: ${STATUS_LABEL[d.status] ?? d.status}`;
 
         if (selectable && isRetryable(d.status)) {
           const selected = selectedIds?.has(d.id) ?? false;

@@ -932,9 +932,60 @@ on the wire is *not* that key. Three things about it aren't obvious:
 Note `field_value` (snake) is correct despite the docs *site* rendering
 `fieldValue`; GHL's published OpenAPI for `/contacts/upsert` says `field_value`.
 
+### Submission notifications: a delivery row, not a side effect
+
+A form can name one address that is emailed a plain-text summary of each
+submission. Sending goes through an email abstraction
+(`crates/core/src/email/`) that mirrors `storage/` exactly: an `EmailSender`
+trait, an `EmailSenderFactory` whose `secret_keys()` drives redaction /
+preservation / encryption at rest, and an `EmailRegistry` registered in
+`AppState::new`. AWS SES (v2 `SendEmail`) is the only kind today. Config is a
+**single active row** in `email_provider`, edited at Settings → Email under
+`email_config:write` — deployment-wide, like storage. Five things aren't
+obvious from the code:
+
+1. **The recipient is form metadata, not a column and not a binding.**
+   `MetadataKey::NotificationEmail` holds a `MetadataValue::Text` (the enum is
+   untagged, so `true` still decodes as `Bool`). It deliberately isn't a
+   `BackendBinding`: `backends` is serialised onto the unauthenticated
+   `PublicFormDto`, which would publish the address on every host page.
+   `validate_address` allows exactly one bare `local@domain` — no commas,
+   semicolons, angle brackets or CR/LF — and a blank value deletes the row, the
+   `display_name` idiom.
+2. **It rides the delivery worker as the static `email-notification` backend.**
+   `create_submission` queues one extra `submission_delivery` row inside the
+   `!is_duplicate` block, so retries, stale-lease recovery and per-submission
+   status come for free, and a missing provider is a visible *permanent*
+   failure rather than a silent drop. That also means a failed email marks the
+   submission Failed in the list — agreed, not accidental. `validate_backends`
+   refuses it as a binding (it would send twice); the admin's destination
+   picker never offers it.
+3. **Delivery is at-least-once.** No provider takes an idempotency key, so a
+   worker crash after SES accepted the message (or a lost response retried as
+   transient) sends it again. Duplicates — with email dedup on — never notify,
+   since they create no delivery rows at all.
+4. **The recipient is re-read at send time.** Clearing it turns already-queued
+   notifications into successful no-ops; changing it redirects them.
+5. **Plain text only, and visitor data never reaches a header.** The subject is
+   `New submission: {display_name or name}`; every answer goes in the body.
+   There is no HTML part, so there is nothing to inject into.
+
+SigV4 is still hand-rolled: the primitives moved from `storage/s3.rs` into
+`crates/core/src/sigv4.rs` (parameterised by service), S3 keeps its
+query-string canonicalisation, and `email/ses.rs` adds header signing pinned to
+AWS's `post-x-www-form-urlencoded` test vector. Run the MinIO `file_uploads`
+test after touching `sigv4.rs`. SES sandbox accounts can only send *to*
+verified addresses; that surfaces as `MessageRejected`, a permanent failure,
+and the settings page's "Send test" button exists to catch it early.
+
+```bash
+DATABASE_URL=mysql://root:openrelay@127.0.0.1:3306/openrelay \
+  cargo test -p open-relay-core --test email_notification -- --ignored
+```
+
 ### Backend delivery is a registry of trait objects
 
-`open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.
+`open_relay_core::backend::Backend` is the integration surface (GoHighLevel, OpenRelay's own store, etc.). Implementations register against the `BackendRegistry` held in `AppState`, constructed in `AppState::new` (`apps/server/src/state.rs`) — it registers `OpenRelayBackend` and `EmailNotificationBackend` (static) and `GoHighLevelFactory` at boot today. New backends register there: `register_static` for config-less backends, `register_factory` for ones built per `backend_instance` row.
 
 Secret-bearing keys inside a `config` JSON column — for backends and for
 storage alike — are handled by `crates/core/src/secrets.rs`, which owns the

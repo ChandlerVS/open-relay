@@ -21,7 +21,11 @@ import {
   useSubmission,
 } from "../../../lib/submissions/useSubmissions";
 import { useRetryDeliveries } from "../../../lib/submissions/useSubmissionMutations";
-import { DeliveryStatusChip, DuplicateBadge } from "./DeliveryStatusBadges";
+import {
+  DeliveryStatusChip,
+  DuplicateBadge,
+  backendLabel,
+} from "./DeliveryStatusBadges";
 
 interface Props {
   /** The open submission, or `null` for a closed sheet. */
@@ -313,7 +317,7 @@ function DeliveryRow({ delivery: d }: { delivery: SubmissionDeliveryDto }) {
   return (
     <li className="rounded-md border border-border px-3 py-2">
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span className="truncate font-medium">{d.backend_name}</span>
+        <span className="truncate font-medium">{backendLabel(d.backend_name)}</span>
         <DeliveryStatusChip status={d.status} />
       </div>
       <p className="mt-0.5 text-xs text-muted-foreground">

@@ -38,12 +38,32 @@ type SourceParam = components["schemas"]["SourceParam"];
 type PostSubmissionAction = components["schemas"]["PostSubmissionAction"];
 type ProgressIndicator = components["schemas"]["ProgressIndicator"];
 
-const EMAIL_DEDUP_KEY = "email_deduplication";
+const EMAIL_DEDUP_KEY = "email_deduplication" as const;
 
 /// Read the email-deduplication toggle off a form's metadata list. Defaults to
 /// off when the key is absent.
 function emailDedupFromMetadata(metadata: MetadataEntry[]): boolean {
   return metadata.some((m) => m.key === EMAIL_DEDUP_KEY && m.value === true);
+}
+
+const NOTIFICATION_EMAIL_KEY = "notification_email" as const;
+
+/// Read the notification recipient off a form's metadata list. "" when unset.
+function notificationEmailFromMetadata(metadata: MetadataEntry[]): string {
+  const entry = metadata.find((m) => m.key === NOTIFICATION_EMAIL_KEY);
+  return typeof entry?.value === "string" ? entry.value : "";
+}
+
+/// Returns an error message, or null when the address is blank or plausible.
+/// The server's check is stricter and authoritative; this only catches typos
+/// and the comma-separated list that would otherwise read as a server error.
+function validateNotificationEmail(value: string): string | null {
+  const v = value.trim();
+  if (!v) return null;
+  if (/[\s,;<>]/.test(v) || !/^[^@]+@[^@]+\.[^@]+$/.test(v)) {
+    return "Notification email must be a single address, like ops@example.com.";
+  }
+  return null;
 }
 
 const OPEN_RELAY_KIND = "open-relay";
@@ -164,6 +184,7 @@ function CreateForm({
   );
   const [themeId, setThemeId] = useState<number | null>(null);
   const [emailDedup, setEmailDedup] = useState(false);
+  const [notificationEmail, setNotificationEmail] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
   return (
@@ -185,6 +206,11 @@ function CreateForm({
           setFormError(psErr);
           return;
         }
+        const neErr = validateNotificationEmail(notificationEmail);
+        if (neErr) {
+          setFormError(neErr);
+          return;
+        }
         setFormError(null);
         create.mutate(
           {
@@ -200,7 +226,13 @@ function CreateForm({
             post_submission_action: cleanPostSubmission(postSubmission),
             progress_indicator: progress,
             theme_id: themeId,
-            metadata: [{ key: EMAIL_DEDUP_KEY, value: emailDedup }],
+            metadata: [
+              { key: EMAIL_DEDUP_KEY, value: emailDedup },
+              // Omitted when blank: a new form has no recipient to clear.
+              ...(notificationEmail.trim()
+                ? [{ key: NOTIFICATION_EMAIL_KEY, value: notificationEmail.trim() }]
+                : []),
+            ],
           },
           {
             onSuccess: (f) => onSaved(f),
@@ -280,6 +312,15 @@ function CreateForm({
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
       </Section>
+      <Section
+        title="Notification email"
+        hint="Emailed a plain-text summary of every submission. Leave blank to send none."
+      >
+        <NotificationEmailInput
+          value={notificationEmail}
+          onChange={setNotificationEmail}
+        />
+      </Section>
       <DialogFooter>
         <Button
           type="button"
@@ -326,6 +367,9 @@ function EditForm({
   const [emailDedup, setEmailDedup] = useState(
     emailDedupFromMetadata(form.metadata),
   );
+  const [notificationEmail, setNotificationEmail] = useState(
+    notificationEmailFromMetadata(form.metadata),
+  );
   const [formError, setFormError] = useState<string | null>(null);
 
   return (
@@ -345,6 +389,11 @@ function EditForm({
         const psErr = validatePostSubmission(postSubmission);
         if (psErr) {
           setFormError(psErr);
+          return;
+        }
+        const neErr = validateNotificationEmail(notificationEmail);
+        if (neErr) {
+          setFormError(neErr);
           return;
         }
         setFormError(null);
@@ -367,6 +416,16 @@ function EditForm({
         const progressChanged =
           JSON.stringify(progress) !== JSON.stringify(form.progress_indicator);
         const dedupChanged = emailDedup !== emailDedupFromMetadata(form.metadata);
+        const notificationChanged =
+          notificationEmail.trim() !== notificationEmailFromMetadata(form.metadata);
+        // Only the changed keys are sent; a blank recipient is how the server
+        // is told to clear it.
+        const metadata: MetadataEntry[] = [
+          ...(dedupChanged ? [{ key: EMAIL_DEDUP_KEY, value: emailDedup }] : []),
+          ...(notificationChanged
+            ? [{ key: NOTIFICATION_EMAIL_KEY, value: notificationEmail.trim() }]
+            : []),
+        ];
         update.mutate(
           {
             id: form.id,
@@ -393,9 +452,7 @@ function EditForm({
               // absent would mean "leave it alone".
               theme_id:
                 themeId !== (form.theme_id ?? null) ? (themeId ?? 0) : undefined,
-              metadata: dedupChanged
-                ? [{ key: EMAIL_DEDUP_KEY, value: emailDedup }]
-                : undefined,
+              metadata: metadata.length > 0 ? metadata : undefined,
             },
           },
           {
@@ -471,6 +528,15 @@ function EditForm({
       </Section>
       <Section title="Deduplication">
         <DeduplicationToggle value={emailDedup} onChange={setEmailDedup} />
+      </Section>
+      <Section
+        title="Notification email"
+        hint="Emailed a plain-text summary of every submission. Leave blank to send none."
+      >
+        <NotificationEmailInput
+          value={notificationEmail}
+          onChange={setNotificationEmail}
+        />
       </Section>
       <DialogFooter>
         <Button
@@ -759,6 +825,39 @@ function DeduplicationToggle({
           </div>
         </div>
       </label>
+    </div>
+  );
+}
+
+function NotificationEmailInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const canConfigureEmail = usePermissions().has("email_config:write");
+  return (
+    <div className="space-y-1">
+      <Input
+        type="email"
+        aria-label="Notification email"
+        value={value}
+        placeholder="ops@example.com"
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <p className="text-xs text-muted-foreground">
+        Sent through the email provider in{" "}
+        {canConfigureEmail ? (
+          <Link to="/settings/email" className="underline">
+            Settings → Email
+          </Link>
+        ) : (
+          "Settings → Email"
+        )}
+        . Shows as a delivery on each submission, so a failed send is visible
+        there. Duplicates (with deduplication on) don't notify.
+      </p>
     </div>
   );
 }

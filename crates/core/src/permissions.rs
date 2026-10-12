@@ -71,6 +71,11 @@ pub enum Permission {
     /// exposes deployment credentials' presence.
     #[serde(rename = "storage_config:write")]
     StorageConfigWrite,
+    /// Manage the outbound-email provider that sends submission
+    /// notifications. Gates reads too, for the same reason as
+    /// `storage_config:write`.
+    #[serde(rename = "email_config:write")]
+    EmailConfigWrite,
 }
 
 impl Permission {
@@ -104,6 +109,7 @@ impl Permission {
             Self::ThemesDelete => "themes:delete",
             Self::AuthConfigWrite => "auth_config:write",
             Self::StorageConfigWrite => "storage_config:write",
+            Self::EmailConfigWrite => "email_config:write",
         }
     }
 
@@ -133,6 +139,7 @@ impl Permission {
             "themes:delete" => Some(Self::ThemesDelete),
             "auth_config:write" => Some(Self::AuthConfigWrite),
             "storage_config:write" => Some(Self::StorageConfigWrite),
+            "email_config:write" => Some(Self::EmailConfigWrite),
             _ => None,
         }
     }

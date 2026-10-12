@@ -4,7 +4,8 @@ use open_relay_core::auth::AuthKeys;
 use open_relay_core::auth::provider::ProviderRegistry;
 use open_relay_core::crypto::SecretCipher;
 use open_relay_core::backend::registry::BackendRegistry;
-use open_relay_core::backend::{GoHighLevelFactory, OpenRelayBackend};
+use open_relay_core::backend::{EmailNotificationBackend, GoHighLevelFactory, OpenRelayBackend};
+use open_relay_core::email::{EmailRegistry, SesFactory};
 use open_relay_core::storage::{S3Factory, StorageRegistry};
 use open_relay_core::submissions::service::UploadContext;
 use sea_orm::DatabaseConnection;
@@ -23,6 +24,9 @@ pub struct AppState {
     /// like `backends` — it is `Clone` and cheap (a `HashMap` of `Arc`s), so
     /// an extra `Arc` around it would buy nothing.
     pub storage: StorageRegistry,
+    /// Known outbound-email kinds, for submission notifications. Held by
+    /// value for the same reason as `storage`.
+    pub email: EmailRegistry,
     /// Id of the auto-managed `Superadmin` role. Cached at boot via
     /// `rbac::service::ensure_superadmin` so handlers don't need to look it
     /// up — and so the lockout guards (which reference it) can't accidentally
@@ -54,13 +58,22 @@ impl AppState {
         let auth_keys = Arc::new(AuthKeys::from_secret(config.jwt_secret.as_bytes()));
         let cipher = Arc::new(SecretCipher::from_base64_key(&config.encryption_key)?);
         let providers = Arc::new(ProviderRegistry::new());
-        let mut backends = BackendRegistry::new();
-        backends.register_static(Arc::new(OpenRelayBackend));
-        backends.register_factory(Arc::new(GoHighLevelFactory::new()));
-        // Single place to add a storage kind, mirroring the backend registry
-        // two lines up.
+        // Single place to add a storage / email kind, mirroring the backend
+        // registry below.
         let mut storage = StorageRegistry::new();
         storage.register_factory(Arc::new(S3Factory::new()));
+        let mut email = EmailRegistry::new();
+        email.register_factory(Arc::new(SesFactory::new()));
+        let admin_url = config.admin_url.trim_end_matches('/').to_string();
+        let mut backends = BackendRegistry::new();
+        backends.register_static(Arc::new(OpenRelayBackend));
+        backends.register_static(Arc::new(EmailNotificationBackend::new(
+            db.clone(),
+            email.clone(),
+            cipher.clone(),
+            admin_url.clone(),
+        )));
+        backends.register_factory(Arc::new(GoHighLevelFactory::new()));
         let public_api_url = config.public_api_url.trim_end_matches('/').to_string();
         // Fall back to a same-origin path under the API when EMBED_SDK_URL is
         // unset, so the snippet is still well-formed in dev/local setups.
@@ -75,12 +88,13 @@ impl AppState {
             providers,
             backends,
             storage,
+            email,
             superadmin_role_id,
             public_api_url,
             embed_sdk_url,
             embed_sdk_path: config.embed_sdk_path.clone(),
             admin_dist_path: config.admin_dist_path.clone(),
-            admin_url: config.admin_url.trim_end_matches('/').to_string(),
+            admin_url,
             cookie_secure: config.cookie_secure,
             environment: config.environment,
         })

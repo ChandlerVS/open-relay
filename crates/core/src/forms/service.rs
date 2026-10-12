@@ -598,6 +598,15 @@ pub async fn validate_backends<C: ConnectionTrait>(
         if !registry.knows(kind) {
             return Err(CoreError::BadRequest(format!("unknown backend: {kind}")));
         }
+        // Registered so the worker can dispatch it, but queued only from the
+        // form's `notification_email` metadata — binding it as well would
+        // send every notification twice.
+        if kind == crate::backend::email_notification::NAME {
+            return Err(CoreError::BadRequest(format!(
+                "backend '{kind}' is configured through the form's notification email, \
+                 not as a binding"
+            )));
+        }
         let configurable = registry.is_configurable(kind);
         match (configurable, b.instance_id) {
             (true, None) => {
@@ -1679,6 +1688,14 @@ async fn apply_metadata<C: ConnectionTrait>(
     entries: &[crate::metadata::MetadataEntry],
 ) -> CoreResult<()> {
     for entry in entries {
+        // "Blank means clear" for text keys — the `display_name` idiom — so
+        // an admin can remove a notification address without a new verb.
+        if let crate::metadata::MetadataValue::Text(t) = &entry.value
+            && t.trim().is_empty()
+        {
+            metadata_service::delete(conn, form_id, entry.key).await?;
+            continue;
+        }
         metadata_service::set(conn, form_id, entry.key, entry.value.clone()).await?;
     }
     Ok(())

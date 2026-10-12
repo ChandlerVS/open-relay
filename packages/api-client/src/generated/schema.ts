@@ -308,6 +308,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_email_config"];
+        put?: never;
+        post: operations["upsert_email_config"];
+        delete: operations["delete_email_config"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/email/kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_email_kinds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/email/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a real test message through the saved provider.
+         * @description Always 200 when a provider is configured — a rejection (typically an
+         *     unverified recipient in the SES sandbox) is the *answer* to this request,
+         *     carried in `EmailTestResult::error`.
+         */
+        post: operations["test_email_config"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/forms": {
         parameters: {
             query?: never;
@@ -1131,6 +1185,56 @@ export interface components {
             discovery_url: string;
         };
         /**
+         * @description Admin-facing config. Secret-bearing keys (declared per kind via
+         *     [`crate::email::EmailSenderFactory::secret_keys`]) are **stripped** from
+         *     `config` and surfaced as presence booleans in `secret_fields`. Mirrors
+         *     `StorageConfigDto`.
+         */
+        EmailConfigDto: {
+            /** @description Non-secret config keys, verbatim. Secret keys are removed. */
+            config: unknown;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            id: number;
+            kind: string;
+            name: string;
+            /**
+             * @description For each secret key this kind declares: `true` if a non-empty value is
+             *     on record.
+             */
+            secret_fields: {
+                [key: string]: boolean;
+            };
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description Catalog entry returned by [`EmailRegistry::kinds`] — drives the admin's
+         *     provider picker.
+         */
+        EmailKindInfo: {
+            kind: string;
+            /** @description Human label, so the admin UI doesn't keep its own kind → name mapping. */
+            label: string;
+            /**
+             * @description Secret-bearing config keys, so the UI knows which inputs to render as
+             *     write-only password fields without hardcoding them per kind.
+             */
+            secret_keys: string[];
+        };
+        /** @description Body of the admin's "Send test email" action. */
+        EmailTestRequest: {
+            /** @description Where to send the test message. */
+            to: string;
+        };
+        /** @description Result of the admin's "Send test email" action. */
+        EmailTestResult: {
+            /** @description Present only on failure, and phrased for an admin to act on. */
+            error?: string | null;
+            ok: boolean;
+        };
+        /**
          * @description A ready-to-paste embed snippet for a form, returned to admins so they can
          *     install the form on their own site. Everything in `snippet` derives from
          *     trusted server config plus the form id — there's no caller-supplied input —
@@ -1379,12 +1483,16 @@ export interface components {
          * @description The catalogue of metadata keys. Wire/serialized form is the slug.
          * @enum {string}
          */
-        MetadataKey: "email_deduplication";
+        MetadataKey: "email_deduplication" | "notification_email";
         /**
          * @description A typed metadata value. The variant must match its key's
          *     [`MetadataKey::value_type`]; the service layer enforces this on write.
+         *
+         *     Untagged, so the wire value is the bare JSON scalar: `true` decodes as
+         *     `Bool`, `"ops@example.com"` as `Text`. Order matters — `Bool` is tried
+         *     first, and a JSON string can never decode as a bool.
          */
-        MetadataValue: boolean;
+        MetadataValue: boolean | string;
         NewApiKey: {
             /**
              * Format: int32
@@ -1551,7 +1659,7 @@ export interface components {
             visible_when?: null | components["schemas"]["VisibilityRule"];
         };
         /** @enum {string} */
-        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "themes:read" | "themes:write" | "themes:delete" | "auth_config:write" | "storage_config:write";
+        Permission: "users:read" | "users:write" | "users:delete" | "roles:read" | "roles:write" | "roles:delete" | "roles:assign" | "forms:read" | "forms:write" | "forms:delete" | "submissions:read" | "submissions:retry" | "submissions:delete" | "backends:read" | "backends:write" | "backends:delete" | "reps:read" | "reps:write" | "reps:delete" | "themes:read" | "themes:write" | "themes:delete" | "auth_config:write" | "storage_config:write" | "email_config:write";
         PermissionInfo: {
             action: string;
             key: components["schemas"]["Permission"];
@@ -2251,6 +2359,16 @@ export interface components {
              * @description Exact byte length. Signed into the URL, so it has to be honest.
              */
             size: number;
+        };
+        /**
+         * @description Upsert input. A secret key omitted from `config` (or sent empty) means
+         *     "keep the existing value". Creating a config with no secret fails in the
+         *     factory instead.
+         */
+        UpsertEmailConfig: {
+            config: unknown;
+            kind: string;
+            name: string;
         };
         /**
          * @description Upsert input. `client_secret: None` means "keep the existing value";
@@ -3247,6 +3365,217 @@ export interface operations {
             };
             /** @description Missing or invalid token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_email_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active email provider */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailConfigDto"];
+                };
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing email_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No email provider configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    upsert_email_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertEmailConfig"];
+            };
+        };
+        responses: {
+            /** @description Email provider saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailConfigDto"];
+                };
+            };
+            /** @description Config rejected by the provider */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing email_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_email_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Email provider removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing email_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No email provider configured */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_email_kinds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Supported email provider kinds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailKindInfo"][];
+                };
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing email_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    test_email_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Send result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailTestResult"];
+                };
+            };
+            /** @description Recipient is not a valid address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unauthenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing email_config:write */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No email provider configured */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

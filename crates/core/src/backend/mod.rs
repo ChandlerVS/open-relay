@@ -11,7 +11,12 @@
 //!   Registered via [`BackendRegistry::register_factory`]; the worker
 //!   instantiates a fresh `Backend` per delivery by feeding the row's
 //!   `config` JSON to [`BackendFactory::build`].
+//!
+//! One static, `email-notification`, is never bound to a form: it is queued
+//! from the form's `notification_email` metadata instead, and
+//! `forms::service` refuses it as a binding. See [`email_notification`].
 
+pub mod email_notification;
 pub mod gohighlevel;
 pub mod openrelay;
 pub mod registry;
@@ -21,6 +26,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use thiserror::Error;
 
+pub use email_notification::EmailNotificationBackend;
 pub use gohighlevel::{GoHighLevelBackend, GoHighLevelConfig, GoHighLevelFactory};
 pub use openrelay::OpenRelayBackend;
 pub use registry::{BackendKindInfo, BackendRegistry};
