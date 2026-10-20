@@ -20,26 +20,20 @@
 //! 3. **The body is plain text and visitor data never reaches a header.** The
 //!    subject names the form (admin-chosen); every answer goes in the body.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use sea_orm::{DatabaseConnection, EntityTrait};
-use serde_json::Value;
-
+use super::summary::render_answers;
 use super::{Backend, DeliveryError, DeliveryPayload};
 use crate::crypto::SecretCipher;
 use crate::email::{EmailError, EmailRegistry, OutgoingEmail};
 use crate::email_config::service as email_config_service;
 use crate::error::CoreError;
-use crate::forms::{CustomField, STANDARD_FIELD_KEYS, service as forms_service};
+use crate::forms::{CustomField, service as forms_service};
 use crate::metadata::{MetadataKey, service as metadata_service};
 
 pub const NAME: &str = "email-notification";
-
-/// Cap on one rendered answer, so a 10 000-character message field can't
-/// turn a notification into a wall of text. The full value is in the admin.
-const MAX_VALUE_CHARS: usize = 2_000;
 
 pub struct EmailNotificationBackend {
     db: DatabaseConnection,
@@ -127,9 +121,8 @@ impl Backend for EmailNotificationBackend {
     }
 }
 
-/// The plain-text notification body: standard fields in catalogue order, then
-/// custom fields in layout order under their labels, then anything else the
-/// payload carries (a field since removed from the form), sorted by key.
+/// The plain-text notification body: a header naming the form, the answers
+/// (see [`render_answers`] for the order), then tags and a link to the admin.
 fn render_body(
     form_name: &str,
     payload: &DeliveryPayload,
@@ -141,53 +134,11 @@ fn render_body(
         payload.submission_id
     );
 
-    let data = payload.data.as_object();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut lines: Vec<(String, String)> = Vec::new();
-    let mut push = |label: String, key: &str| {
-        let Some(value) = data.and_then(|d| d.get(key)) else {
-            return;
-        };
-        if !seen.insert(key.to_string()) {
-            return;
-        }
-        if let Some(text) = render_value(value) {
-            lines.push((label, text));
-        }
-    };
-    for key in STANDARD_FIELD_KEYS {
-        push(humanize(key), key);
-    }
-    for field in custom_fields {
-        let label = match field.label.trim() {
-            "" => field.key.clone(),
-            l => l.to_string(),
-        };
-        push(label, &field.key);
-    }
-    if let Some(d) = data {
-        let mut rest: Vec<&String> = d.keys().collect();
-        rest.sort();
-        for key in rest {
-            push(key.clone(), key);
-        }
-    }
-
-    if lines.is_empty() {
-        out.push_str("(no answers)\n");
-    }
-    for (label, value) in lines {
-        if value.contains('\n') {
-            // Indent continuation lines so a multi-line answer can't pass
-            // itself off as another field.
-            out.push_str(&format!("{label}:\n"));
-            for line in value.lines() {
-                out.push_str(&format!("    {line}\n"));
-            }
-        } else {
-            out.push_str(&format!("{label}: {value}\n"));
-        }
-    }
+    let labels: Vec<(String, String)> = custom_fields
+        .iter()
+        .map(|f| (f.key.clone(), f.label.clone()))
+        .collect();
+    out.push_str(&render_answers(&payload.data, &labels));
 
     if !payload.tags.is_empty() {
         out.push_str(&format!("\nTags: {}\n", payload.tags.join(", ")));
@@ -201,60 +152,18 @@ fn render_body(
     out
 }
 
-/// One answer as text; `None` for an empty one.
-fn render_value(value: &Value) -> Option<String> {
-    let text = match value {
-        Value::Null => return None,
-        Value::String(s) => s.clone(),
-        Value::Bool(b) => if *b { "Yes" } else { "No" }.to_string(),
-        Value::Number(n) => n.to_string(),
-        // Checkbox groups: the ticked options.
-        Value::Array(items) => items
-            .iter()
-            .filter_map(render_value)
-            .collect::<Vec<_>>()
-            .join(", "),
-        Value::Object(_) => value.to_string(),
-    };
-    // Control characters other than newline/tab have no business in a
-    // plain-text body (a bare CR could overwrite a line in some clients).
-    let text: String = text
-        .replace("\r\n", "\n")
-        .chars()
-        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
-        .collect();
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    Some(if text.chars().count() > MAX_VALUE_CHARS {
-        let mut cut: String = text.chars().take(MAX_VALUE_CHARS).collect();
-        cut.push('…');
-        cut
-    } else {
-        text.to_string()
-    })
-}
-
-/// `address_line_1` → `Address line 1`.
-fn humanize(key: &str) -> String {
-    let spaced = key.replace('_', " ");
-    let mut chars = spaced.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn payload(data: Value, tags: Vec<String>) -> DeliveryPayload {
         DeliveryPayload {
             submission_id: 42,
             form_id: 7,
+            form_name: "Contact us".into(),
+            form_slug: "contact-us".into(),
+            field_labels: Vec::new(),
             data,
             tags,
             assigned_to: None,
@@ -301,40 +210,5 @@ zzz_removed: old\n\
 \nTags: expo, rep:jane\n\
 \nView it in OpenRelay: https://admin.example.com/submissions?submission=42\n"
         );
-    }
-
-    #[test]
-    fn multi_line_answers_are_indented_and_stripped_of_control_chars() {
-        let p = payload(json!({ "message": "line one\r\nline two\u{7}" }), vec![]);
-        let body = render_body("F", &p, &[], "");
-        assert!(
-            body.contains("Message:\n    line one\n    line two\n"),
-            "{body}"
-        );
-        assert!(!body.contains('\r'));
-        assert!(!body.contains("View it"));
-    }
-
-    #[test]
-    fn long_answers_are_truncated() {
-        let p = payload(
-            json!({ "message": "x".repeat(MAX_VALUE_CHARS + 50) }),
-            vec![],
-        );
-        let body = render_body("F", &p, &[], "");
-        assert!(body.contains('…'));
-        assert!(!body.contains(&"x".repeat(MAX_VALUE_CHARS + 1)));
-    }
-
-    #[test]
-    fn empty_submission_says_so() {
-        let body = render_body("F", &payload(json!({}), vec![]), &[], "");
-        assert!(body.contains("(no answers)"));
-    }
-
-    #[test]
-    fn humanize_capitalises_first_word_only() {
-        assert_eq!(humanize("address_line_1"), "Address line 1");
-        assert_eq!(humanize("email"), "Email");
     }
 }

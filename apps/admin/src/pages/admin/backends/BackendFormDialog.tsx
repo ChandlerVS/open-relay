@@ -30,6 +30,7 @@ const createSchema = z.object({
   name: NAME_FIELD,
   location_id: LOCATION_FIELD,
   private_integration_token: z.string().min(1, "Paste the token."),
+  post_notes: z.boolean(),
 });
 
 const editSchema = z.object({
@@ -37,6 +38,7 @@ const editSchema = z.object({
   location_id: LOCATION_FIELD,
   // Empty string means "keep the existing token unchanged".
   private_integration_token: z.string(),
+  post_notes: z.boolean(),
 });
 
 type CreateValues = z.infer<typeof createSchema>;
@@ -112,12 +114,18 @@ function CreateForm({
     reset,
   } = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
-    defaultValues: { kind: onlyKind ?? "" },
+    defaultValues: { kind: onlyKind ?? "", post_notes: true },
   });
 
   useEffect(() => {
     if (onlyKind) {
-      reset({ kind: onlyKind, name: "", location_id: "", private_integration_token: "" });
+      reset({
+        kind: onlyKind,
+        name: "",
+        location_id: "",
+        private_integration_token: "",
+        post_notes: true,
+      });
     }
   }, [onlyKind, reset]);
 
@@ -134,6 +142,7 @@ function CreateForm({
             config: {
               location_id: values.location_id.trim(),
               private_integration_token: values.private_integration_token,
+              post_notes: values.post_notes,
             },
           },
           {
@@ -207,6 +216,10 @@ function EditForm({
     typeof (backend.config as { location_id?: unknown })?.location_id === "string"
       ? ((backend.config as { location_id: string }).location_id)
       : "";
+  // Absent on rows written before the setting existed, which the server
+  // reads as on.
+  const existingPostNotes =
+    (backend.config as { post_notes?: unknown })?.post_notes !== false;
 
   const {
     register,
@@ -218,6 +231,7 @@ function EditForm({
       name: backend.name,
       location_id: existingLocation,
       private_integration_token: "",
+      post_notes: existingPostNotes,
     },
   });
 
@@ -249,6 +263,7 @@ function EditForm({
                 location_id: trimmedLocation,
                 private_integration_token:
                   trimmedToken.length > 0 ? trimmedToken : existingToken,
+                post_notes: values.post_notes,
               },
             },
           },
@@ -342,6 +357,17 @@ function GoHighLevelFields({
           {...register("private_integration_token")}
         />
       </FormField>
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" {...register("post_notes")} />
+          Post a note to the contact for each submission
+        </label>
+        <p className="text-xs text-muted-foreground">
+          The note names the form and lists the answers, with a link back to the
+          submission. Needs the PIT's contacts write scope. If the note fails, the
+          contact is still delivered.
+        </p>
+      </div>
     </>
   );
 }
