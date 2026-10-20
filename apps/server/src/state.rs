@@ -73,7 +73,9 @@ impl AppState {
             cipher.clone(),
             admin_url.clone(),
         )));
-        backends.register_factory(Arc::new(GoHighLevelFactory::new()));
+        backends.register_factory(Arc::new(
+            GoHighLevelFactory::new().with_admin_url(admin_url.clone()),
+        ));
         let public_api_url = config.public_api_url.trim_end_matches('/').to_string();
         // Fall back to a same-origin path under the API when EMBED_SDK_URL is
         // unset, so the snippet is still well-formed in dev/local setups.

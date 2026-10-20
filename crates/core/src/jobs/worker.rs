@@ -34,7 +34,9 @@ use crate::submissions::service::{
     STATUS_EXHAUSTED, STATUS_IN_PROGRESS, STATUS_PENDING, STATUS_PERMANENT_FAILURE,
     STATUS_SUCCEEDED, delivery_data,
 };
-use crate::forms::service::{source_params_from_model, tags_from_model};
+use crate::forms::service::{
+    layout_from_model, legacy_from_layout, source_params_from_model, tags_from_model,
+};
 use crate::reps::service as reps_service;
 
 const IDLE_INTERVAL: Duration = Duration::from_secs(5);
@@ -212,11 +214,11 @@ async fn dispatch_one(
         }
     };
 
-    let (tags, assigned_to) = match entity::form::Entity::find_by_id(submission.form_id)
+    let form = entity::form::Entity::find_by_id(submission.form_id)
         .one(db)
-        .await?
-    {
-        Some(form) => attribution_for(db, &submission, &form).await,
+        .await?;
+    let (tags, assigned_to) = match &form {
+        Some(form) => attribution_for(db, &submission, form).await,
         None => {
             warn!(
                 delivery_id = row.id,
@@ -225,6 +227,24 @@ async fn dispatch_one(
             );
             (Vec::new(), None)
         }
+    };
+    let (form_name, form_slug, field_labels) = match &form {
+        Some(f) => (
+            f.name.clone(),
+            f.slug.clone(),
+            // Labels are a nicety: a form whose layout no longer parses still
+            // delivers, and its answers are rendered by field key.
+            layout_from_model(f)
+                .map(|l| {
+                    legacy_from_layout(&l)
+                        .1
+                        .into_iter()
+                        .map(|c| (c.key, c.label))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        ),
+        None => (format!("form #{}", submission.form_id), String::new(), Vec::new()),
     };
 
     let backend: Arc<dyn Backend> = match row.backend_instance_id {
@@ -315,6 +335,9 @@ async fn dispatch_one(
     let payload = DeliveryPayload {
         submission_id: submission.id,
         form_id: submission.form_id,
+        form_name,
+        form_slug,
+        field_labels,
         data: delivery_data(&submission),
         tags,
         assigned_to,
@@ -377,8 +400,9 @@ fn next_attempt_after(attempts: i32) -> DateTime<Utc> {
     Utc::now() + chrono::Duration::from_std(delay).expect("delay in range")
 }
 
-/// Assemble the delivery tags + owner for a submission: the form's static tags,
-/// plus per-submission tags from captured source params (prefixed per the
+/// Assemble the delivery tags + owner for a submission: the form's static tags
+/// and a `form:<slug>` tag naming the form (see [`form_tags`]), plus
+/// per-submission tags from captured source params (prefixed per the
 /// form's config) and the attributed sales rep (`rep:<key>`). When the rep
 /// carries a GoHighLevel user id, it becomes the contact owner. Parse failures
 /// degrade gracefully to whatever was assembled so far — a malformed config
@@ -388,7 +412,7 @@ async fn attribution_for(
     submission: &entity::submission::Model,
     form: &entity::form::Model,
 ) -> (Vec<String>, Option<String>) {
-    let mut tags = tags_from_model(form).unwrap_or_default();
+    let mut tags = form_tags(tags_from_model(form).unwrap_or_default(), &form.slug);
 
     // Captured source params → tags, applying the configured prefix.
     let prefixes: std::collections::HashMap<String, Option<String>> =
@@ -422,6 +446,21 @@ async fn attribution_for(
     }
 
     (tags, assigned_to)
+}
+
+/// The form's configured tags followed by `form:<slug>`, so a CRM record
+/// says which form produced it — and, since tags accumulate on an upserted
+/// contact, every form that contact has ever submitted. Skipped when the admin
+/// already configured the same tag, or the slug is blank.
+fn form_tags(mut tags: Vec<String>, slug: &str) -> Vec<String> {
+    let slug = slug.trim();
+    if !slug.is_empty() {
+        let tag = format!("form:{slug}");
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags
 }
 
 async fn mark_succeeded(db: &DatabaseConnection, id: i32) -> anyhow::Result<()> {
@@ -486,4 +525,26 @@ fn _typecheck_transaction(_tx: &DatabaseTransaction) {
     // useful when refactoring the helpers above to take a generic conn.
     fn assert_conn<C: ConnectionTrait>(_: &C) {}
     let _ = assert_conn::<DatabaseTransaction>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn form_tag_follows_the_configured_tags() {
+        assert_eq!(
+            form_tags(vec!["expo".into()], "contact-us"),
+            vec!["expo".to_string(), "form:contact-us".to_string()]
+        );
+    }
+
+    #[test]
+    fn form_tag_is_not_duplicated_or_blank() {
+        assert_eq!(
+            form_tags(vec!["form:contact-us".into()], "contact-us"),
+            vec!["form:contact-us".to_string()]
+        );
+        assert!(form_tags(Vec::new(), "  ").is_empty());
+    }
 }

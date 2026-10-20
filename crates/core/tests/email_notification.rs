@@ -179,6 +179,9 @@ fn delivery(submission_id: i32, form_id: i32) -> DeliveryPayload {
     DeliveryPayload {
         submission_id,
         form_id,
+        form_name: "Contact us".into(),
+        form_slug: "contact-us".into(),
+        field_labels: Vec::new(),
         data: json!({ "first_name": "Jane", "email": "jane@acme.test" }),
         tags: vec!["expo".into()],
         assigned_to: None,

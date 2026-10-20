@@ -932,6 +932,32 @@ on the wire is *not* that key. Three things about it aren't obvious:
 Note `field_value` (snake) is correct despite the docs *site* rendering
 `fieldValue`; GHL's published OpenAPI for `/contacts/upsert` says `field_value`.
 
+### A delivered contact says which form it came from
+
+`DeliveryPayload` carries `form_name` (the admin's `form.name`, not the visitor's
+`display_name`), `form_slug` and `field_labels`, filled in by the worker, so a
+backend never needs a DB read to name the form. Three things aren't obvious:
+
+1. **The `form:<slug>` tag is added in the worker, not in a backend.**
+   `form_tags` (`jobs/worker.rs`) appends it after the form's own tags, so every
+   tag-aware backend, including future ones, gets it for free. Tags accumulate on
+   an upserted GHL contact, which makes this the one signal that records *every*
+   form a contact has submitted. The GHL `source` (`OpenRelay: <name>`) holds a
+   single value.
+2. **The GHL contact note is best-effort and never fails a delivery.** After a
+   successful upsert the backend posts `/contacts/{id}/notes`. A failed note is
+   a warning: failing the delivery would retry the upsert *and* post the note
+   again, and a PIT without the notes scope would fail every delivery. A worker
+   crash between the note and `mark_succeeded` still posts a duplicate note.
+   The note's link needs `GoHighLevelFactory::with_admin_url`, which only the
+   server sets. The MCP binary's registry has no link to give.
+3. **`post_notes` defaults to `true` through serde**, so instances saved before
+   the key existed post notes with no backfill. Backend update replaces the whole
+   config, so the admin dialog always sends the key.
+
+Answer rendering for the note and the notification email is shared in
+`backend/summary.rs`.
+
 ### Submission notifications: a delivery row, not a side effect
 
 A form can name one address that is emailed a plain-text summary of each

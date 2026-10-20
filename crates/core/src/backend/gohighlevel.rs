@@ -44,6 +44,21 @@
 //! answering an entry it cannot resolve with a plain `200` and no record of
 //! the value. That silence is why the resolution failure is logged loudly
 //! and reported per key rather than shrugged off.
+//!
+//! Each contact also says which form produced it, three ways:
+//!
+//! - **`source`** is `OpenRelay: <form name>`. One value, so it records a
+//!   single form, not the history.
+//! - **A `form:<slug>` tag**, added by the delivery worker for every backend.
+//!   Tags accumulate across upserts, so a contact carries one per form it has
+//!   ever submitted.
+//! - **A contact note per submission** (`post_notes`, on by default): the
+//!   form name, the answers and a link to the submission in the admin. A note
+//!   is best-effort. Once the upsert has landed, a failed note is warned
+//!   about and the delivery still succeeds, because failing would retry the
+//!   upsert *and* post the note again, and a PIT without the notes scope
+//!   would fail every delivery. Delivery is still at-least-once: a worker
+//!   crash after the note but before the row is marked done posts it twice.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -54,6 +69,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tracing::warn;
 
+use super::summary::render_answers;
 use super::{Backend, BackendBuildError, BackendFactory, DeliveryError, DeliveryPayload};
 
 pub const KIND: &str = "gohighlevel";
@@ -74,6 +90,14 @@ pub const FIELD_CACHE_TTL: Duration = Duration::from_secs(300);
 pub struct GoHighLevelConfig {
     pub location_id: String,
     pub private_integration_token: String,
+    /// Post a note on the contact for each submission. Defaults to `true`,
+    /// so rows written before the key existed get notes with no backfill.
+    #[serde(default = "default_true")]
+    pub post_notes: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Normalizes a user-entered country into the ISO 3166-1 alpha-2 code that
@@ -240,6 +264,9 @@ fn index_catalog(fields: Vec<CatalogField>) -> HashMap<String, String> {
 pub struct GoHighLevelFactory {
     http: reqwest::Client,
     fields: FieldCache,
+    /// Admin SPA origin, no trailing slash, for the link in a contact note.
+    /// Empty means the note carries no link.
+    admin_url: String,
 }
 
 impl GoHighLevelFactory {
@@ -254,7 +281,14 @@ impl GoHighLevelFactory {
         Self {
             http,
             fields: FieldCache::default(),
+            admin_url: String::new(),
         }
+    }
+
+    /// Links each contact note back to the submission in the admin.
+    pub fn with_admin_url(mut self, admin_url: impl Into<String>) -> Self {
+        self.admin_url = admin_url.into().trim_end_matches('/').to_string();
+        self
     }
 }
 
@@ -288,6 +322,7 @@ impl BackendFactory for GoHighLevelFactory {
             http: self.http.clone(),
             config: cfg,
             fields: self.fields.clone(),
+            admin_url: self.admin_url.clone(),
         }))
     }
 }
@@ -296,6 +331,35 @@ pub struct GoHighLevelBackend {
     http: reqwest::Client,
     config: GoHighLevelConfig,
     fields: FieldCache,
+    admin_url: String,
+}
+
+/// The slice of the `/contacts/upsert` response the note needs.
+#[derive(Debug, Deserialize)]
+struct UpsertResponse {
+    contact: Option<UpsertContact>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpsertContact {
+    id: String,
+}
+
+/// The plain-text body of a contact note: which form, the answers, and a link
+/// back to the submission when the admin URL is known.
+fn note_body(payload: &DeliveryPayload, admin_url: &str) -> String {
+    let mut out = format!(
+        "Submitted \"{}\" (OpenRelay submission #{})\n\n",
+        payload.form_name, payload.submission_id
+    );
+    out.push_str(&render_answers(&payload.data, &payload.field_labels));
+    if !admin_url.is_empty() {
+        out.push_str(&format!(
+            "\nView in OpenRelay: {admin_url}/submissions?submission={}\n",
+            payload.submission_id
+        ));
+    }
+    out
 }
 
 impl GoHighLevelBackend {
@@ -361,7 +425,11 @@ impl GoHighLevelBackend {
             "locationId".to_string(),
             Value::String(self.config.location_id.clone()),
         );
-        body.insert("source".to_string(), Value::String("OpenRelay".to_string()));
+        let source = match payload.form_name.trim() {
+            "" => "OpenRelay".to_string(),
+            name => format!("OpenRelay: {name}"),
+        };
+        body.insert("source".to_string(), Value::String(source));
 
         let mut custom_fields: Vec<Value> = Vec::new();
         if let Value::Object(data) = &payload.data {
@@ -429,6 +497,47 @@ impl GoHighLevelBackend {
         }
         Value::Object(body)
     }
+
+    /// Posts the submission note on a contact the upsert just landed. Never
+    /// fails the delivery; see the module docs for why.
+    async fn post_note(&self, contact_id: &str, payload: &DeliveryPayload) {
+        let mut body = json!({ "body": note_body(payload, &self.admin_url) });
+        if let Some(owner) = payload.assigned_to.as_ref().filter(|s| !s.trim().is_empty()) {
+            body["userId"] = Value::String(owner.clone());
+        }
+        let url = format!("{BASE_URL}/contacts/{contact_id}/notes");
+        let result = async {
+            let resp = self
+                .http
+                .post(&url)
+                .bearer_auth(&self.config.private_integration_token)
+                .header("Version", API_VERSION)
+                .header("Accept", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("network error: {e}"))?;
+            let status = resp.status();
+            if status.is_success() {
+                return Ok(());
+            }
+            let text = resp.text().await.unwrap_or_default();
+            let snippet = text.chars().take(300).collect::<String>();
+            Err(format!("status {}: {snippet}", status.as_u16()))
+        }
+        .await;
+        if let Err(err) = result {
+            warn!(
+                submission_id = payload.submission_id,
+                location_id = %self.config.location_id,
+                contact_id,
+                error = %err,
+                "could not post the submission note to the gohighlevel contact; \
+                 the contact itself was delivered (the PIT needs the contacts.write \
+                 scope, or turn notes off on the backend)"
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -456,6 +565,21 @@ impl Backend for GoHighLevelBackend {
 
         let status = resp.status();
         if status.is_success() {
+            if self.config.post_notes {
+                let text = resp.text().await.unwrap_or_default();
+                match serde_json::from_str::<UpsertResponse>(&text)
+                    .ok()
+                    .and_then(|r| r.contact)
+                {
+                    Some(contact) => self.post_note(&contact.id, payload).await,
+                    None => warn!(
+                        submission_id = payload.submission_id,
+                        location_id = %self.config.location_id,
+                        "gohighlevel upsert response carried no contact id; \
+                         skipping the submission note"
+                    ),
+                }
+            }
             return Ok(());
         }
         let body_text = resp
@@ -503,6 +627,9 @@ mod tests {
         DeliveryPayload {
             submission_id: 1,
             form_id: 1,
+            form_name: "Contact us".into(),
+            form_slug: "contact-us".into(),
+            field_labels: Vec::new(),
             data,
             tags: Vec::new(),
             assigned_to: None,
@@ -515,8 +642,10 @@ mod tests {
             config: GoHighLevelConfig {
                 location_id: "loc_abc".to_string(),
                 private_integration_token: "pit_xyz".to_string(),
+                post_notes: true,
             },
             fields: FieldCache::default(),
+            admin_url: String::new(),
         }
     }
 
@@ -551,7 +680,7 @@ mod tests {
         })), &empty_index());
         let obj = body.as_object().unwrap();
         assert_eq!(obj["locationId"], "loc_abc");
-        assert_eq!(obj["source"], "OpenRelay");
+        assert_eq!(obj["source"], "OpenRelay: Contact us");
         assert_eq!(obj["firstName"], "Ada");
         assert_eq!(obj["lastName"], "Lovelace");
         assert_eq!(obj["email"], "ada@example.com");
@@ -772,6 +901,50 @@ mod tests {
             idx.get("purchase order").map(String::as_str),
             Some("fld_po")
         );
+    }
+
+    #[test]
+    fn source_falls_back_when_the_form_has_no_name() {
+        let mut p = payload(json!({ "first_name": "Ada" }));
+        p.form_name = "  ".to_string();
+        let body = backend().build_body(&p, &empty_index());
+        assert_eq!(body.as_object().unwrap()["source"], "OpenRelay");
+    }
+
+    #[test]
+    fn note_names_the_form_lists_answers_and_links_back() {
+        let mut p = payload(json!({ "first_name": "Ada", "budget": "10k" }));
+        p.submission_id = 42;
+        p.field_labels = vec![("budget".to_string(), "Budget".to_string())];
+        assert_eq!(
+            note_body(&p, "https://admin.example.com"),
+            "Submitted \"Contact us\" (OpenRelay submission #42)\n\n\
+First name: Ada\n\
+Budget: 10k\n\
+\nView in OpenRelay: https://admin.example.com/submissions?submission=42\n"
+        );
+        assert!(!note_body(&p, "").contains("View in OpenRelay"));
+    }
+
+    #[test]
+    fn config_without_post_notes_defaults_to_on() {
+        let cfg: GoHighLevelConfig = serde_json::from_value(json!({
+            "location_id": "loc",
+            "private_integration_token": "pit",
+        }))
+        .unwrap();
+        assert!(cfg.post_notes);
+    }
+
+    #[test]
+    fn upsert_response_yields_the_contact_id() {
+        let r: UpsertResponse = serde_json::from_value(json!({
+            "new": true,
+            "contact": { "id": "c_123", "locationId": "loc" },
+            "traceId": "t",
+        }))
+        .unwrap();
+        assert_eq!(r.contact.unwrap().id, "c_123");
     }
 
     #[test]

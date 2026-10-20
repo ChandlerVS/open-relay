@@ -20,6 +20,7 @@ pub mod email_notification;
 pub mod gohighlevel;
 pub mod openrelay;
 pub mod registry;
+pub mod summary;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -36,12 +37,23 @@ pub use registry::{BackendKindInfo, BackendRegistry};
 pub struct DeliveryPayload {
     pub submission_id: i32,
     pub form_id: i32,
+    /// The form's admin label (`form.name`, not the visitor-facing
+    /// `display_name`), so a CRM record can say which form produced it.
+    /// `form #<id>` when the form row has gone.
+    pub form_name: String,
+    /// The form's slug; empty when the form row has gone. The worker already
+    /// tags every delivery `form:<slug>`, so backends rarely need this.
+    pub form_slug: String,
+    /// Custom field key → label, in layout order, so a backend can render
+    /// answers readably without a DB read. See [`summary::render_answers`].
+    pub field_labels: Vec<(String, String)>,
     /// Merged view of the submission: standard field columns + custom_data,
     /// keyed by field key. Backends should consume `data` rather than rely on
     /// any particular column layout.
     pub data: Value,
-    /// Tags configured on the form, plus any per-submission tags derived from
-    /// the QR landing page (rep + captured source params). Included so backends
+    /// Tags configured on the form, a `form:<slug>` tag naming the form, plus
+    /// any per-submission tags derived from the QR landing page (rep +
+    /// captured source params). Included so backends
     /// can attach labels without an extra DB lookup.
     pub tags: Vec<String>,
     /// Owner to assign the delivered record to, when the submission was
